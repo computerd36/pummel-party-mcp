@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "pummelbridge": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["src/PummelBridge.Mcp/dist/index.js"]
+    }
+  }
+}
