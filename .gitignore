@@ -1,0 +1,23 @@
+# Never commit game binaries, decompiled code, or the user's mod files
+decompiled/
+lib/
+*.dll
+*.pdb
+*.exe
+BepInEx/
+PummelBackups/
+backup-*/
+
+# Build output
+bin/
+obj/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+
+# Editor / local
+docs/paths.md
+.vs/
+*.user
+.claude/settings.local.json
