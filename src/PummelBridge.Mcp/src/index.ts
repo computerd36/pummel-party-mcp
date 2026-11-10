@@ -86,10 +86,13 @@ register(
 );
 register(
   "list_assets",
-  `Lists assets available to the open mod (models, textures, audio, prefabs, etc.). Optionally filter by asset type, and choose whether to include the game's built-in assets. Use to find asset names to reference. ${RO}`,
+  `Lists assets available to the open mod (models, textures, audio, prefabs, etc.), paged. Built-in game assets (includeBuiltIn) number over 16,000, so use search and/or type plus limit/offset instead of listing everything. Returns { total, offset, limit, returned, hasMore, typeCounts, assets }; typeCounts shows how many assets of each type match the search (ignoring the type filter), so you can see which types exist. Page with offset while hasMore is true. Use to find asset names to reference. ${RO}`,
   {
-    type: z.string().optional().describe("Asset type filter."),
-    includeBuiltIn: z.boolean().optional().describe("Include built-in game assets, not just the mod's own."),
+    type: z.string().optional().describe("Asset type filter (case-insensitive exact match, e.g. Prop, Material, Texture2D, AudioClip, Shader)."),
+    includeBuiltIn: z.boolean().optional().describe("Include built-in game assets (over 16,000), not just the mod's own."),
+    search: z.string().optional().describe("Case-insensitive substring match on the asset name; whitespace-separated terms must all match."),
+    limit: z.number().int().min(1).max(500).optional().describe("Page size (1..500, default 100)."),
+    offset: z.number().int().min(0).optional().describe("Number of matching assets to skip (default 0)."),
   },
 );
 register(

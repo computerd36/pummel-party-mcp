@@ -33,6 +33,7 @@ namespace PummelBridge.Tests
         {
             Console.WriteLine("PummelBridge core test harness");
             UnitTests();
+            AssetListingTests();
             ServerTests();
             Console.WriteLine();
             Console.WriteLine($"RESULT: {s_passed} passed, {s_failed} failed");
@@ -95,6 +96,75 @@ namespace PummelBridge.Tests
             Check("ring reports dropped entries", q3.Dropped && q3.Entries.First().Id == 4);
             LogQueryResult q4 = ring.Query(10, 8);
             Check("ring sinceId at head returns nothing", q4.Entries.Count == 0 && q4.NextId == 8);
+        }
+
+        // ------------------------------------------------------------------ asset listing
+
+        private static AssetEntry Asset(string guid, string name, string type, string cls = null)
+        {
+            return new AssetEntry
+            {
+                Guid = guid, Name = name, Type = type, TypeAliases = new[] { cls ?? "ModAsset", "" },
+                Row = new JObject { ["guid"] = guid, ["name"] = name, ["type"] = type },
+            };
+        }
+
+        private static bool Throws(Action a)
+        {
+            try { a(); return false; }
+            catch (RpcException e) { return e.Code == ErrorCodes.InvalidParams; }
+        }
+
+        private static void AssetListingTests()
+        {
+            Console.WriteLine("-- unit: asset listing");
+            List<AssetEntry> all = new List<AssetEntry>
+            {
+                Asset("g3", "Wooden Crate", "Prop"),
+                Asset("g1", "wooden barrel", "Prop"),
+                Asset("g2", "Wooden Crate", "Prop"),
+                Asset("g4", "Stone", "Material"),
+                Asset("g5", "Crate Texture", "Texture2D", "PummelTexture"),
+                Asset("g6", "Boom", "AudioClip"),
+            };
+            Func<JObject, string> names = r => string.Join(",", r["assets"].Select(a => (string)a["guid"]));
+
+            JObject r0 = AssetListing.Query(all, null, null, 100, 0);
+            Check("order: type, then name, then guid", names(r0) == "g6,g4,g1,g2,g3,g5");
+            Check("result shape", (int)r0["total"] == 6 && (int)r0["returned"] == 6 && (int)r0["limit"] == 100
+                && (int)r0["offset"] == 0 && !(bool)r0["hasMore"]);
+            Check("typeCounts", (int)r0["typeCounts"]["Prop"] == 3 && (int)r0["typeCounts"]["Material"] == 1 && ((JObject)r0["typeCounts"]).Count == 4);
+
+            JObject rs = AssetListing.Query(all, null, "  CRATE wood ", 100, 0);
+            Check("search: all terms, case-insensitive", names(rs) == "g2,g3" && (int)rs["total"] == 2);
+            Check("search: no match -> empty", (int)AssetListing.Query(all, null, "zzz", 10, 0)["total"] == 0);
+            Check("blank search ignored", (int)AssetListing.Query(all, null, "   ", 10, 0)["total"] == 6);
+
+            JObject rt = AssetListing.Query(all, "prop", "crate", 100, 0);
+            Check("type filter case-insensitive; typeCounts ignore type filter",
+                names(rt) == "g2,g3" && (int)rt["total"] == 2 && (int)rt["typeCounts"]["Texture2D"] == 1 && (int)rt["typeCounts"]["Prop"] == 2);
+            Check("type filter matches class-name alias", names(AssetListing.Query(all, "pummeltexture", null, 10, 0)) == "g5");
+            Check("type filter is exact, not substring", (int)AssetListing.Query(all, "Pro", null, 10, 0)["total"] == 0);
+
+            JObject p1 = AssetListing.Query(all, null, null, 2, 0);
+            Check("paging first page hasMore", names(p1) == "g6,g4" && (bool)p1["hasMore"] && (int)p1["returned"] == 2 && (int)p1["total"] == 6);
+            JObject p3 = AssetListing.Query(all, null, null, 2, 4);
+            Check("paging last page", names(p3) == "g3,g5" && !(bool)p3["hasMore"]);
+            JObject p4 = AssetListing.Query(all, null, null, 4, 4);
+            Check("short last page returned", (int)p4["returned"] == 2 && !(bool)p4["hasMore"]);
+            JObject pe = AssetListing.Query(all, null, null, 2, 6);
+            Check("offset == total -> empty, no more", (int)pe["returned"] == 0 && !(bool)pe["hasMore"] && (int)pe["total"] == 6);
+            JObject pf = AssetListing.Query(all, null, null, 2, 100);
+            Check("offset beyond total -> empty", (int)pf["returned"] == 0 && !(bool)pf["hasMore"]);
+            Check("limit 0 / 501 / offset -1 -> INVALID_PARAMS",
+                Throws(() => AssetListing.Query(all, null, null, 0, 0)) && Throws(() => AssetListing.Query(all, null, null, 501, 0))
+                && Throws(() => AssetListing.Query(all, null, null, 10, -1)));
+            Check("limit 500 accepted", (int)AssetListing.Query(all, null, null, 500, 0)["limit"] == 500);
+
+            ToolContext bad = new ToolContext("list_assets", new JObject { ["limit"] = 501 }, null, TimeSpan.FromSeconds(1));
+            Check("ctx limit 501 -> INVALID_PARAMS", Throws(() => bad.GetInt("limit", 100, 1, AssetListing.MaxLimit)));
+            ToolContext bad2 = new ToolContext("list_assets", new JObject { ["offset"] = -1 }, null, TimeSpan.FromSeconds(1));
+            Check("ctx offset -1 -> INVALID_PARAMS", Throws(() => bad2.GetInt("offset", 0, 0, int.MaxValue)));
         }
 
         // ------------------------------------------------------------------ server tests

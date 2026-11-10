@@ -271,21 +271,28 @@ Result: an **array** with one entry per trigger slot of the object's components 
 
 | Param | Type | Default | |
 |---|---|---|---|
-| `type` | string | - | case-insensitive match on `type`, `className` or the internal asset type string |
-| `includeBuiltIn` | bool | false | also list the game's built-in (internal) assets |
+| `type` | string | - | case-insensitive exact match on `type`, `className` or the internal asset type string |
+| `includeBuiltIn` | bool | false | also list the game's built-in (internal) assets (over 16,000: use `search`/`type` and paging) |
+| `search` | string | - | case-insensitive substring match on the asset name; whitespace-separated terms must all match |
+| `limit` | int | 100 | page size, 1..500 |
+| `offset` | int | 0 | number of matching assets to skip, >= 0 |
 
-Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`.
+Errors: `INVALID_PARAMS` (bad `limit`/`offset`), `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`.
 
-Result: an **array**, mod (external) assets first, then built-in, each sorted by type and name.
+Result: an object. `assets` is sorted by `type`, then `name`, then `guid` (ordinal, ignore case) before paging.
+`total` and `hasMore` describe the filtered set; `typeCounts` counts assets per type after `includeBuiltIn` and
+`search` but ignoring the `type` filter, so a caller can see which types exist. Example for
+`{"search": "crate", "type": "Prop", "includeBuiltIn": true, "limit": 2}`:
 
 ```json
-[
-  {"guid": "4a5b...", "name": "Coin", "type": "Prefab", "className": "PummelPrefab", "location": "external",
-   "relativePath": "Assets/Prefabs/Coin.pfab"},
-  {"guid": "7c8d...", "name": "grass", "type": "Texture", "className": "PummelTexture", "location": "external",
-   "relativePath": "Assets/Textures/grass.png"},
-  {"guid": "1d2e...", "name": "Cube", "type": "Prop", "className": "ModAsset", "location": "internal"}
-]
+{
+  "total": 3, "offset": 0, "limit": 2, "returned": 2, "hasMore": true,
+  "typeCounts": {"Material": 1, "Prop": 3},
+  "assets": [
+    {"guid": "1d2e...", "name": "Crate", "type": "Prop", "className": "ModAsset", "location": "internal"},
+    {"guid": "4a5b...", "name": "Crate Wood", "type": "Prop", "className": "ModAsset", "location": "internal"}
+  ]
+}
 ```
 
 - `type`: external assets use the asset class without the `Pummel` prefix (`Prefab`, `Material`, `Texture`,

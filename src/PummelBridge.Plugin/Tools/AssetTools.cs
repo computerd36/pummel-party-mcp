@@ -17,16 +17,19 @@ namespace PummelBridge.Tools
             {
                 string type = ctx.GetString("type");
                 bool includeBuiltIn = ctx.GetBool("includeBuiltIn", false);
-                return ctx.OnMainThread(() => ListAssets(type, includeBuiltIn));
+                string search = ctx.GetString("search");
+                int limit = ctx.GetInt("limit", AssetListing.DefaultLimit, 1, AssetListing.MaxLimit);
+                int offset = ctx.GetInt("offset", 0, 0, int.MaxValue);
+                return ctx.OnMainThread(() => ListAssets(type, includeBuiltIn, search, limit, offset));
             }));
         }
 
-        private static JArray ListAssets(string typeFilter, bool includeBuiltIn)
+        private static JObject ListAssets(string typeFilter, bool includeBuiltIn, string search, int limit, int offset)
         {
             EditorSystem ed = EditorAccess.RequireEditor();
             PummelMod mod = EditorAccess.RequireLoadedMod(ed);
 
-            List<JObject> rows = new List<JObject>();
+            List<AssetEntry> rows = new List<AssetEntry>();
             string modRoot = SafeFullPath(mod.m_modRootDirectory);
 
             // Mod assets: external files (+ .pmeta). "runtime" entries are scene components registered by
@@ -39,7 +42,7 @@ namespace PummelBridge.Tools
                     {
                         continue;
                     }
-                    AddRow(rows, a, typeFilter, modRoot);
+                    AddRow(rows, a, modRoot);
                 }
             }
 
@@ -56,28 +59,17 @@ namespace PummelBridge.Tools
                     {
                         continue;
                     }
-                    AddRow(rows, a, typeFilter, null);
+                    AddRow(rows, a, null);
                 }
             }
 
-            IEnumerable<JObject> ordered = rows
-                .OrderBy(r => (string)r["location"] == "external" ? 0 : 1)
-                .ThenBy(r => (string)r["type"], StringComparer.OrdinalIgnoreCase)
-                .ThenBy(r => (string)r["name"], StringComparer.OrdinalIgnoreCase);
-            return new JArray(ordered);
+            return AssetListing.Query(rows, typeFilter, search, limit, offset);
         }
 
-        private static void AddRow(List<JObject> rows, ModAsset a, string typeFilter, string modRoot)
+        private static void AddRow(List<AssetEntry> rows, ModAsset a, string modRoot)
         {
             string type = ValueConverter.AssetTypeName(a);
             string className = a.GetType().Name;
-            if (typeFilter != null &&
-                !string.Equals(typeFilter, type, StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(typeFilter, className, StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(typeFilter, a.assetTypeString ?? string.Empty, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
             JObject row = new JObject
             {
                 ["guid"] = a.guid.ToString(),
@@ -94,7 +86,14 @@ namespace PummelBridge.Tools
                     row["relativePath"] = rel;
                 }
             }
-            rows.Add(row);
+            rows.Add(new AssetEntry
+            {
+                Guid = a.guid.ToString(),
+                Name = a.name,
+                Type = type,
+                TypeAliases = new[] { className, a.assetTypeString ?? string.Empty },
+                Row = row,
+            });
         }
 
         private static string SafeFullPath(string path)
