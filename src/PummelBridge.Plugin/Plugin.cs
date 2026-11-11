@@ -115,6 +115,7 @@ namespace PummelBridge
                 ModTools.Register(registry, m_poller, log, m_edit);
                 ObjectEditTools.Register(registry, m_edit);
                 ComponentTools.Register(registry, m_edit);
+                ActionEditTools.Register(registry, m_edit);
 
                 RpcHandler handler = new RpcHandler(registry, m_dispatcher, log, MainThreadTimeout);
                 m_server = new BridgeHttpServer(new BridgeHttpServerOptions { Port = m_config.Port, Token = token }, handler.Handle, log);

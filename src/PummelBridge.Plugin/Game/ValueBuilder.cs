@@ -16,7 +16,7 @@ namespace PummelBridge.Game
     {
         private static readonly ConcurrentDictionary<Type, ValueTypeDesc> s_descs = new ConcurrentDictionary<Type, ValueTypeDesc>();
 
-        public const string TriggerMessage = "trigger/action lists (ModLogicTrigger) are edited with the action tools of the next increment, not with set_property";
+        public const string TriggerMessage = "triggers and action lists (ModLogicTrigger, ModAction) are edited with the action tools (add_action, set_action, remove_action, move_action; add_trigger, set_trigger, remove_trigger), not with set_property";
 
         public static ValueTypeDesc Describe(Type t) => s_descs.GetOrAdd(t, DescribeUncached);
 

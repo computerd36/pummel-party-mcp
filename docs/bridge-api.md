@@ -1,11 +1,12 @@
-# PummelBridge HTTP API (api v2, Phase 2 increment 2, plugin 0.3.0)
+# PummelBridge HTTP API (api v2, Phase 2 increment 3, plugin 0.4.0)
 
 The BepInEx plugin `PummelBridge.Plugin` runs inside Pummel Party and exposes the mod editor's state on a
 local HTTP endpoint. api v2 adds the guard layer, the always-on Workshop publish block and four mod lifecycle
 tools (`list_mods`, `create_test_mod`, `open_test_mod`, `save_mod`). Increment 2 (still api v2, all changes are
-additive) adds object, transform, component and property editing plus `undo`; see [Editing](#editing). Write
-tools only ever act on `PB_TEST_` mods; see [Safety](#safety). Action editing, playtest and batch tools come in
-later increments.
+additive) adds object, transform, component and property editing plus `undo`; see [Editing](#editing). Increment 3
+(still api v2, additive) adds editing of the Action Editor model (triggers and their action lists); see
+[Action editing](#action-editing). Write tools only ever act on `PB_TEST_` mods; see [Safety](#safety). Playtest and
+batch tools come in a later increment.
 
 ## Transport
 
@@ -98,7 +99,7 @@ as strings. Asset or object references are objects (see "References").
 `ping` and `get_log` (without `includeEditor`) are answered on the HTTP thread and work even while the game's
 main thread is busy. Everything else is queued to the plugin's `Update()` (max 16 items / 8 ms per frame) and
 waits up to 10 s (`create_test_mod` / `open_test_mod`: 35 s, with their own 30 s load limit inside; edit tools
-of increment 2: 15 s).
+of increments 2 and 3: 15 s).
 
 Write tools: params are type-checked on the HTTP thread (`INVALID_PARAMS`). On the main thread every write tool
 joins one **write queue**: only one write tool body runs at a time, later calls wait in arrival order. When a
@@ -120,12 +121,13 @@ between frames as before.
 Works with the editor closed. No params.
 
 ```json
-{"pong": true, "pluginVersion": "0.3.0", "gameVersion": "1.15.2", "unityVersion": "2021.3.45f2",
- "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit"]}
+{"pong": true, "pluginVersion": "0.4.0", "gameVersion": "1.15.2", "unityVersion": "2021.3.45f2",
+ "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions"]}
 ```
 
 `readOnlyBuild` was removed in api v2. `capabilities` lists what this build implements (`edit` = the object,
-component, property and undo tools of increment 2); whether writes are currently allowed is in `get_status`
+component, property and undo tools of increment 2; `actions` = the action/trigger tools of increment 3); whether
+writes are currently allowed is in `get_status`
 (`writesEnabled`, `publishBlock.complete`).
 
 `sessionId` is random per game start; a change means the game restarted (log ids restart at 1).
@@ -139,7 +141,7 @@ No params. Never fails because of editor state.
  "modName": "PB_TEST_Arena", "modType": "Minigame", "modLoaded": true, "isDirty": true,
  "hasUnsavedEdits": false, "unsavedEditsSource": "tracker",
  "undoStackLength": 1, "prefabContext": null, "playMode": false,
- "activeScene": "ModEditorScene", "capabilities": ["read", "write", "edit"], "writesEnabled": true,
+ "activeScene": "ModEditorScene", "capabilities": ["read", "write", "edit", "actions"], "writesEnabled": true,
  "publishBlock": {"active": true, "complete": true, "patchedCount": 59, "missing": []}}
 ```
 
@@ -275,14 +277,19 @@ Search order: current context root, then the other root (scene vs. prefab object
 
 | Param | Type | |
 |---|---|---|
-| `guid` | string (GUID), required | object guid |
+| `guid` | string (GUID) | object guid; required unless `scope` is `"playerSettings"` |
 | `component` | string | optional filter: component class name (`ModLogic`), UI name (`Logic`) or component guid |
+| `scope` | `"object"` (default) or `"playerSettings"` | `"playerSettings"`: list the minigame's player-settings triggers instead (no `guid`/`component`) |
 
-Errors: as above + `NOT_FOUND` (object, or no component matches the filter).
+`trigger` and `path` are refused (this tool lists all triggers). Errors: as above + `NOT_FOUND` (object, or no
+component matches the filter), `INVALID_PARAMS` (`scope: "playerSettings"` in a non-Minigame mod).
 
 Result: an **array** with one entry per trigger slot of the object's components (reflected properties of type
 `ModLogicTrigger` / `ModLogicTrigger[]`: `ModLogic.Triggers[i]`, `ModTrigger.OnEnterActions`, `ModItem.OnUseTrigger`,
-`ModBoardSpaceEvent.OnEnterTrigger`, ...). Empty array if the object has no triggers.
+`ModBoardSpaceEvent.OnEnterTrigger`, ...), in component order and then property order. Empty array if the object has
+no triggers. With `scope: "playerSettings"`: six entries, one per trigger the Minigame Settings inspector shows
+(`weaponHitTrigger`, `tickTrigger`, `onDeathTrigger`, `onRespawnTrigger`, `onFirstSpawnTrigger`,
+`onRoundEndTrigger`), each with `"scope": "playerSettings"` and `component`/`componentGuid` null.
 
 ```json
 [
@@ -297,16 +304,31 @@ Result: an **array** with one entry per trigger slot of the object's components 
       "targets": [{"guid": "0b6d...", "name": "Floor", "assetType": "Transform", "location": "runtime",
                    "objectGuid": "0b6d...", "objectName": "Floor"}],
       "parameters": {"m_newState": "Toggle"}}
-   ]}
+   ],
+   "callSite": {"label": "Logic: On Timer", "receiverName": "This Object", "sourceName": "Activator",
+                "hideSource": true, "appendDefaultTargetFlags": null, "boardSpaceOnlyActions": false},
+   "editable": true}
 ]
 ```
 
-- `type`: `ModActionType` name; `targetFlags`: `ModActionTargets` flags (`Source`, `Receiver`, `Advanced`) or null for
-  actions without targets (`Wait`, `SetGravity`).
+- `triggerName`: the address of the slot for the action tools (`trigger` param): the property name, plus `[i]` for
+  array entries (`Triggers[i]`, the index in the Logic component's list).
+- `type`: `ModActionType` name; `targetFlags`: `ModActionTargets` flags (`Source`, `Receiver`, `Advanced`, joined by
+  `", "`; `"0"` when none is set) or null for actions without targets (`Wait`, `SetGravity`).
 - `parameters`: the action's Unity-serialized fields (private `[SerializeField]` included) except `m_type`,
   `m_version`, `m_targetFlags`, `m_targets`. Keys are the field names = the JSON keys in the mod file.
 - `triggerParameters`: the trigger's serialized fields except `m_type`, `m_actions` (e.g. `HitTrigger.m_hitType`).
-- Nested triggers (Display Popup choices) appear inside `parameters` with the same trigger shape.
+- Nested triggers (Display Popup choices) appear inside `parameters` (`m_choices[i].m_onSelectTrigger`) with the
+  trigger shape (`triggerType`, `triggerClass`, `triggerParameters`, `actions`); address them with `path` (see
+  [Action editing](#action-editing)).
+- `callSite` (additive in increment 3): what the inspector passes to the Action Editor for this slot. `label`: where
+  the slot is shown; `receiverName` / `sourceName`: the labels of the Receiver/Source target toggles; `hideSource`:
+  the Source toggle is hidden for every action of this list; `appendDefaultTargetFlags`: target flags the Action
+  Editor gives a target action **appended** to this list (null = the action's own default); `boardSpaceOnlyActions`:
+  the list accepts the board actions (Heal/Damage/Give .../Display Popup).
+- `editable` (additive): the inspector currently shows this slot's "Edit" button. False with a `reason`, e.g. a
+  Trigger component's `OnExitActions` while `TriggerOnExit` is false, `OnUseTrigger` of a Pickup item, or any slot of
+  a component on a prefab instance. The action tools refuse non-editable slots.
 
 ### `list_assets`
 
@@ -810,8 +832,9 @@ Refused with `INVALID_PARAMS`:
 - `guid` (assigned by the editor) and every `SerializableGuid` property (set the matching reference property, e.g.
   `ItemPrefab` instead of `ItemPrefabGUID`);
 - properties marked `hiddenInInspector`;
-- triggers and action lists (`ModLogicTrigger`, `ModLogicTrigger[]`, `ModAction`): use the action tools of the next
-  increment;
+- triggers and action lists (`ModLogicTrigger`, `ModLogicTrigger[]`, `ModAction`): use the action tools
+  (`add_action`, `set_action`, `remove_action`, `move_action`, `add_trigger`, `set_trigger`, `remove_trigger`; see
+  [Action editing](#action-editing));
 - types the bridge cannot write yet: `ModComplexFloat`, `ModWeaponInfo`, `SimpleModHitAction`, `ModSimpleAnimation[]`,
   `BoardNodeConnection[]`, `ParticleSystem.Burst[]`, `byte[]` (e.g. `ModScriptReference.scriptValues`), and any type
   not in the table below;
@@ -907,6 +930,358 @@ Errors: guard codes, `INVALID_STATE`, `TIMEOUT`.
 
 ---
 
+## Action editing
+
+Increment 3. Read tools `list_action_types`, `list_trigger_types` (and `get_action_graph` above); write tools
+`add_action`, `remove_action`, `move_action`, `set_action`, `add_trigger`, `remove_trigger`, `set_trigger` (guard kind
+**OpenMod**; the common rules of [Editing](#editing) apply: edit-ready checks, write queue, 15 s timeout).
+
+### Model (what the tools change)
+
+A **trigger** (`ModLogicTrigger`) holds a flat, ordered **action list** (`Actions`, polymorphic `ModAction[]`).
+Triggers live on components (fixed slots, or the Logic component's user-editable list) and in the minigame's player
+settings. The Action Editor window and the Logic inspector edit this model directly (they assign new arrays and write
+private fields); there is no command layer. The tools do exactly the same writes:
+
+| Tool | What the editor does (and the bridge does the same) |
+|---|---|
+| `add_action` (append) | Action Editor "Drag New Action Here": `Actions = Actions.AddElement(typeof(ModAction))`, a new instance (`Activator.CreateInstance` of the palette entry's class) in the last slot; for target actions, if the call site has default target flags (`callSite.appendDefaultTargetFlags`), `TargetFlags` = those |
+| `add_action` (insert) | a palette entry dropped onto an action: `List<ModAction>.Insert(i, new instance)`, assigned back; **no** call-site default targets (the action keeps its constructor default: Receiver, or Source for the board-player actions) |
+| `remove_action` | the action header's close (X) button: `Actions = Actions.DeleteElement(i, typeof(ModAction))` |
+| `move_action` | dragging an action header over its neighbours (the window swaps it with each hovered action), i.e. remove at `index`, insert at `newIndex` |
+| `set_action` | the action's inspector (`DrawInspector`) writing its private fields; the target toggles (`TargetFlags` setter); the Advanced target list (`Targets` setter, which wraps each component in a new `ModAssetReference<Component>`) |
+| `add_trigger` | Logic inspector "Add Trigger" (`new StartTrigger()` appended, `Triggers = list.ToArray()`), then, for another `type`, the Event dropdown (a new instance of that type) |
+| `remove_trigger` | Logic inspector header close (X): `list.Remove(trigger)`, `Triggers = list.ToArray()` |
+| `set_trigger` `type` | Logic inspector Event dropdown: `trigger.CreateInstance(type)`, **only the actions are copied** (trigger parameters reset to the new type's defaults), written back into a new `Triggers` array |
+| `set_trigger` `parameters` | the trigger's `DrawInspector` (Hit Type flags, Weapon Type flags, Timer interval) |
+
+The Action Editor has no duplicate/copy/paste of actions, so the bridge has none. Action lists are flat; the only
+nesting is the **Display Popup** (board) action, whose choices each have an "On Select" action list.
+
+### Addressing a trigger
+
+Used by all action write tools, `set_trigger`, `remove_trigger` and (optionally) `list_action_types`.
+
+| Param | Type | |
+|---|---|---|
+| `scope` | `"object"` (default) or `"playerSettings"` | case-insensitive |
+| `guid` | string (GUID) | object scope (required): the object's `ModTransform` guid |
+| `component` | string | object scope, optional: component class name, UI name or component guid (as `get_action_graph`'s filter); needed only when several components of the object have a trigger with that name |
+| `trigger` | string, required | object scope: `triggerName` from `get_action_graph`: a trigger property (`OnEnterActions`, `OnUseTrigger`, `WeaponHitTrigger`, `OnEnterTrigger`, ...) or a Logic list entry `Triggers[i]`; exact name first, then case-insensitive. Player-settings scope: one of `weaponHitTrigger`, `tickTrigger`, `onDeathTrigger`, `onRespawnTrigger`, `onFirstSpawnTrigger`, `onRoundEndTrigger` (no index) |
+| `path` | array, optional | nested popup-choice lists: `[{"action": <index of a Display Popup action in the current list>, "choice": <0-based choice index>}, ...]`, at most 8 steps; each step enters that choice's "On Select" list |
+
+- Player-settings scope: Minigame mods only (`INVALID_PARAMS` otherwise); `guid`/`component` must be absent.
+  `hitTrigger` exists in the data but the editor does not show it, so it is not addressable (`NOT_FOUND`).
+- Logic list entries are addressed by index; `remove_trigger` shifts the following entries down by one.
+- Only choices below the popup's `m_choiceCount` are addressable (the inspector shows only those).
+- Errors: `NOT_FOUND` (no such object / component / trigger, the message lists the object's trigger names; a `path`
+  index out of range), `INVALID_PARAMS` (malformed address, ambiguous trigger name, a `path` step that is not a
+  Display Popup action, a slot the inspector does not currently show: see `get_action_graph.editable`),
+  `INVALID_STATE` (an object outside the editing context, a null trigger in the model).
+
+### Call sites and the two palette gates
+
+The Action Editor offers an action only if both gates pass (`ActionEditorWindow.GetAvailableActionTypes`):
+
+1. **Mod type**: `EditorSystem.CanUseItem(meta.ModTypes)` for the open mod (Minigame-only actions in Minigame mods,
+   board actions in Board mods; Item and BoardSpace mods get only the actions available in all mod types).
+2. **Call site**: the board actions (Heal Player, Damage Player, Give Keys, Drop Keys, Give Trophy, Remove Trophy,
+   Give Item, Spawn keys, Move To Space, Set Connection Active, Set Board Space Active, Display Popup) are offered only
+   in the Board Space Event's two lists and in Display Popup choice lists.
+
+Per call site (from the inspectors):
+
+| Trigger | Receiver / Source labels | Source toggle | Default targets on append | Board actions |
+|---|---|---|---|---|
+| Logic `Triggers[i]` | This Object / Activator | hidden unless the trigger type is Hit or WeaponHit | none | no |
+| Trigger `OnHitActions` (shown while `TriggerOnHit` is true or the shape is CustomCollider) | This Trigger / Activator | shown | none | no |
+| Trigger `OnEnterActions` / `OnExitActions` / `OnStayActions` (shown while the matching `TriggerOn...` is true and the trigger is not in hit mode) | This Trigger / Activator | shown | Source | no |
+| Item `OnPickupTrigger` (always), `OnWhileHeldTrigger` and `OnDropTrigger` (not for ItemType Pickup), `OnUseTrigger` (ItemType Carried or Weapon) | Item / Player | shown | none | no |
+| Weapon `WeaponHitTrigger` | Weapon / Hit Object | shown | none | no |
+| Hittable `OnHitActions` | This (Destructible) / Hitter | shown | none | no |
+| Board Space Event `OnEnterTrigger` (On Player Land), `OnPassTrigger` (On Player Passing) | This Board Space / This Player | shown | none | yes |
+| Display Popup choice "On Select" (`path`) | This Board Space / This Player | shown | none | yes |
+| player settings `weaponHitTrigger` | Hit Player / Source Player | shown | none | no |
+| player settings `onDeathTrigger` | Dying Player / Damage Source | shown | none | no |
+| player settings `tickTrigger`, `onRespawnTrigger`, `onFirstSpawnTrigger` (On Round Start), `onRoundEndTrigger` | Player / Source | hidden | Receiver | no |
+| any other component trigger (generic inspector) | Receiver / Source | shown | none | no |
+
+### Target flags and targets
+
+`targetFlags` (target actions only; `INVALID_PARAMS` "has no targets" for Wait and Set Gravity): flag names joined by
+`,` (`"Source, Advanced"`), an array of names, an integer 0-7 (Source=1, Receiver=2, Advanced=4), or `"0"` / `""` /
+`"None"` for none. The Action Editor recomputes the flags from the **visible** toggles every time it draws the action,
+so a hidden flag would be cleared; therefore refused:
+
+- a flag whose toggle is hidden: Source where the call site hides it (table above); the action's own hidden toggles:
+  Advanced for Change Health, Change Score, Change Player Velocity, Modify Player, Give Minigame Item and Drop
+  Minigame Item; Receiver and Advanced for Display Popup;
+- any change when two toggles are hidden: the remaining toggle is drawn disabled, so the flags stay at their current
+  value (e.g. Change Health in a Logic Start list: only Receiver, fixed; Display Popup: only Source, fixed).
+
+`targets`: the explicit (Advanced) target list, replaced as a whole: an array of references (an object guid, a
+component guid, or `{"guid": ...}` as `get_action_graph` returns them; null = an empty entry), max 1024. Accepted only
+while the resulting flags include Advanced (the editor shows the list only then). Each element is resolved like the
+editor's object picker (see the reference rules of `set_property`) to the action's accepted target type: `Transform`
+(Scale, Position, Rotation, Play Tween Animation, Set Active, Spawn Effect, Spawn Prefab, Match Transform),
+`AudioSource` (Play Sound), `BoardNode` (board-player actions, Spawn keys, Set Connection Active, Set Board Space
+Active: a board space object), `Component` (all other target actions; an object guid then gives the object's
+Transform). Components of scene objects may reference only scene objects, components inside a prefab only objects of
+the same prefab, player-settings lists only scene objects. The resolved component must be registered as a mod asset,
+so that its guid is written when the mod is saved (`INVALID_PARAMS` otherwise). Show Message uses its targets only
+while `m_messageTarget` includes `Target`.
+
+### Parameters (add_action, set_action, add_trigger, set_trigger)
+
+`parameters` is an object `{name: value}` (max 64 entries). Names are the serialized field names `get_action_graph`
+reports (`m_seconds`); the name without `m_` is accepted as an alias (`seconds`), then a unique case-insensitive match.
+Unknown names (the message lists the valid ones), a name given twice (also via its alias), wrong value types,
+undefined enum values, enum values the editor's dropdown does not offer, and references to missing assets/objects or
+of the wrong type are refused with `INVALID_PARAMS` and nothing changes: all values are validated before anything is
+selected or changed. Value shapes are those of `set_property` (numbers, bools, strings, enum names or integers, flags
+joined by `,`, `{x, y, z}`, `{r, g, b, a?}`; a flags value with no flag set is the integer `0`, since `get_action_graph`'s
+`"0"` string is not a flag name), plus:
+
+| Field type | JSON accepted |
+|---|---|
+| `ModComplexFloat` / `ModComplexInt` (`m_seconds`, `m_interval`) | a number (= `{"valueType": "Constant", "min": n}`), or `{valueType?, min?, max?}`: given keys only, the others are kept; `valueType` `Constant` or `RandomBetweenTwoValues` (or 0 / 1). With `RandomBetweenTwoValues`, `min > max` is refused unless the field's clamp fixes it. `ModComplexInt` needs integers |
+| `ModAssetReference<T>` (`m_clip`, `m_item`, `m_prefab`, `m_transformToMatch`, `m_speakerImageReference`) | null, a guid or `{"guid": ...}`: a mod or built-in asset (`list_assets`), or an object/component for `Transform`; type-checked against `T`; must be a registered mod asset |
+| `ModAssetReference<T>[]` (`m_prefabs`, `m_spaces`) | an array of such references (replaces the list) |
+| `DamageInstance` (`m_damageInstance`) | an object with any of the drawn fields `damage`, `ragdoll`, `ragdollVel`, `hitAnim`, `removeKeys`, `blood`, `bloodVel`, `bloodAmount`, `sound`, `volume` (others refused); unspecified fields are kept |
+| Display Popup `m_choices` | an array patch: element `i` updates choice `i` (null = unchanged); keys `m_buttonText`, `m_costType`, `m_costAmount`, `m_itemCostType`, `m_choiceIconReference` (Texture reference), the `m_` prefix may be omitted; at most `m_choiceCount` elements |
+
+Fields are written directly, except where the inspector writes through a property: `m_prefabs` (`Prefabs`), `m_item`
+of Give Minigame Item (`ItemPrefab`; the prefab's root object must have an Item component, else refused with the
+editor's message), `m_prefab` of Set Player Visual (`Prefab`), `m_transformToMatch` (`TransformToMatch`), `m_spaces`
+(`Spaces`), `m_speakerImageReference` (`SpeakerImage`), choice icons (`ChoiceIcon`); `m_clip` is set through its
+`Asset` as the inspector does. Give Item and Set Player Visual first run the action's own version upgrade
+(`UpdateVersion`, which the editor runs whenever it draws the action): a version-0 Give Item then has `m_items` reset
+to the single item of its obsolete `m_item` before the given values are applied. Note that a Give Item action added
+without parameters stays at version 0, exactly as one added in the editor, and gets that reset the first time the
+editor draws it. Raising Display Popup `m_choiceCount` adds empty choices, as the inspector does.
+
+Clamps: where the inspector re-applies a limit on every frame it draws the action, the bridge stores the limited
+value and lists the parameter path in `clamped` (e.g. `"m_volume"`, `"m_seconds.max"`, `"m_damageInstance.damage"`,
+`"m_choices[0].m_costAmount"`):
+
+| Action / trigger | Limits (from the classes' `DrawInspector`) |
+|---|---|
+| Wait | `m_seconds.min` 0..3600, `m_seconds.max` min..3600 |
+| Timer trigger | `m_interval.min` >= 0.1 |
+| Play Tween Animation | `m_time` = Clamp(Abs(t), 0, 3600); `m_easeType` not `notUsed`, `punch`, `once`, `clamp`, `pingPong` (refused) |
+| Set Gravity | `m_value` each axis -1000..1000 |
+| Modify Player | `m_movementSpeed` 0..100; `m_gravity` each axis -1000..1000 |
+| Play Sound | `m_volume` 0..1 |
+| Show Message | `m_duration` 0.5..1200 |
+| Stun Player | `m_stunDuration` 0..1000 |
+| Drop Minigame Item | `m_itemSlot` not `DefaultForItemType` (refused) |
+| Heal Player | `m_value` 1..30 |
+| Damage Player | `damage` 1..30, `ragdollVel` 0..20, `bloodVel` 0..20, `bloodAmount` 0..4, `volume` 0..1 |
+| Give Keys / Drop Keys | `m_value` / `m_keys` = Clamp(Abs(n), 1, 200) |
+| Spawn keys | `m_keys` 1..40 |
+| Give Trophy / Remove Trophy | `m_trophiesToGive` / `m_trophiesToRemove` 1..20 |
+| Display Popup | `m_choiceCount` 0..4; choice `m_costAmount`: Health 1..29, other costs 1..1000 (applied when the amount or the cost type is given) |
+
+Other refusals: `GiveItemAction.m_item` (obsolete), `SetConnectionActiveAction.m_connectionMappings` (built by the
+Action Editor from the board connections), `BoardPopupAction.m_isTimed` / `m_timedDuration` and
+`BoardSpaceTrigger.m_hitType` (not shown in the editor); Set Player Visual: `m_recolorPrefabUsingPlayerColor`, and child
+indices other than -1, while no prefab is set; child indices outside -1..childCount-1 of the prefab's root object;
+both child indices equal (and not -1); Display Popup `m_showCloseButton` while every shown choice has a cost (the
+checkbox is disabled). Parameters that the inspector shows only in some modes (e.g. Modify Player `m_gravity` while
+the type is MovementSpeedMultiplier) are accepted; `list_action_types` notes such conditions.
+
+### Common reply fields and undo
+
+Write replies carry the address (`guid`, `component` (class name), `componentGuid`, `trigger`, and `path` when given;
+`scope: "playerSettings"` instead of `guid`/`component`/`componentGuid`), the tool's own fields and the edit fields
+`changed`, `undoable`, `undoPending` (only when true), `note` (only when there is something to explain),
+`undoStackLength`.
+
+- Object scope: one call = **one undo step**, through the edit pipeline of [Editing](#editing) (the object holding the
+  trigger is selected, its snapshot taken, all changes of the call applied in one frame, the editor pushes the step).
+  The editor's undo snapshot of the selected object contains its triggers and actions (the mod-file writer serialises
+  each `ModLogicTrigger` property: trigger type, trigger JSON, then each action's type + JSON), so `undo` restores
+  action lists, parameters, targets and Logic trigger lists. After an undo the Action Editor window may still show the
+  pre-undo trigger object until it is reopened (editor behaviour).
+- Player-settings scope: applied at once; `undoable: false` and a `note`: the editor has no undo for mod settings (its
+  snapshots cover selected objects only), and editing the settings by hand does not set the editor's dirty flag
+  either. The bridge marks the mod as having unsaved edits (`get_status.hasUnsavedEdits`); `save_mod` writes the
+  settings to `Data/ModSettings.json`.
+- Nothing is saved automatically. Target and asset references are stored as live objects and turned into guids when
+  the mod (or an undo snapshot) is serialised, which is why only registered objects are accepted.
+
+Errors (all action write tools): guard codes, `INVALID_PARAMS`, `NOT_FOUND`, `INVALID_STATE` (also: the list or trigger
+changed while the call waited for the editor's snapshot; nothing was changed), `TIMEOUT`, `INTERNAL`.
+
+### `list_action_types` (read)
+
+| Param | Type | |
+|---|---|---|
+| (address) | see [Addressing a trigger](#addressing-a-trigger) | optional: `guid` + `trigger` (+ `component`, `path`), or `scope: "playerSettings"` + `trigger`; then gate 2 and the call-site fields are evaluated for that trigger. Any address key present makes `trigger` required |
+
+Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`, address errors. Works on any open mod.
+
+```json
+{"modType": "Minigame",
+ "trigger": {"component": "ModTrigger", "componentGuid": "aa10...", "triggerName": "OnEnterActions", "...": "a get_action_graph entry"},
+ "actionTypes": [
+  {"type": "ChangeHealth", "value": 96, "className": "ChangeHealthAction", "uiName": "Change Health",
+   "category": "Minigame Logic", "helpText": "Modify a player's health.", "modTypes": ["Minigame"], "boardSpaceOnly": false,
+   "parameters": [
+     {"name": "m_operation", "alias": "operation", "type": "ModActionOperation", "kind": "enum",
+      "enumValues": ["Set", "Add", "Subtract", "Multiply", "Divide"], "default": "Set", "writable": true},
+     {"name": "m_value", "alias": "value", "type": "Int32", "kind": "integer", "default": 0, "writable": true}],
+   "supportsTargets": true, "defaultTargetFlags": "Receiver", "hiddenTargetFlags": ["Advanced"], "targetType": "Component",
+   "availableTargetFlags": ["Source", "Receiver"], "targetFlagsLocked": false, "appendTargetFlags": "Source",
+   "usableHere": true}]}
+```
+
+- `trigger` only with an address. One row per action type of the palette registry (`ModActionMeta`), ordered by
+  `value` (the persisted `ModActionType` number). `type`: the name the action tools take (they also accept `className`
+  or `uiName`). `category`: the palette group (`Utility`, `Visuals`, `Movement`, `Minigame Logic`, `Board Logic`).
+  `modTypes`: gate 1 flags. `boardSpaceOnly`: gate 2 flag.
+- `parameters`: every serialized field (the names `get_action_graph` uses): `name`, `alias` (without `m_`; absent when
+  the name has no prefix), `type` (C# type), `kind` (`bool`, `integer`, `number`, `string`, `enum`, `flags`, `vector2`,
+  `vector3`, `vector4`, `color`, `complexFloat`, `complexInt`, `reference`, `referenceArray`, `object`, `choices`,
+  `unsupported`), `enumValues` (offered values only; enum and flags kinds) and `flags: true` for flag enums,
+  `referenceType` (reference kinds), `default` (value in a new instance, `get_action_graph` shape), `min` / `max` (only
+  when a clamp exists), `writable` (+ `reason` when false), `notes` (conditions, clamps).
+- Target actions: `defaultTargetFlags` (constructor default, also what an insert keeps), `hiddenTargetFlags` (the
+  action's own hidden toggles), `targetType` (accepted type of `targets`); with an address also `availableTargetFlags`,
+  `targetFlagsLocked` (two toggles hidden) and `appendTargetFlags` (the flags `add_action` gives the action when
+  appending there). Other actions: `supportsTargets: false`, `defaultTargetFlags: null`.
+- `usableHere`: gate 1 for the open mod and, with an address, gate 2 for that call site (without an address gate 2 is
+  not evaluated; see `boardSpaceOnly`). `reason` when false. `add_action` refuses exactly these.
+
+### `list_trigger_types` (read)
+
+No params. Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`.
+
+```json
+{"modType": "Minigame", "triggerTypes": [
+  {"type": "Timer", "value": 96, "className": "TimerTrigger",
+   "parameters": [{"name": "m_interval", "alias": "interval", "type": "ModComplexFloat", "kind": "complexFloat",
+                   "default": {"valueType": "Constant", "min": 1.0, "max": 2.0}, "writable": true,
+                   "notes": "min clamped to >= 0.1 (TimerTrigger.DrawInspector)"}],
+   "sourceTargetAvailable": false, "addable": true}]}
+```
+
+One row per `ModTriggerType` in enum order (None, Start, Enable, Update, Hit, WeaponHit, Timer, BoardSpace,
+RoundStart, RoundEnd). `addable`: offered by the Logic component's Event dropdown in this mod type (Minigame and other
+types: all except None and BoardSpace; Board: also not Hit, WeaponHit, RoundStart, RoundEnd); `reason` when false.
+`sourceTargetAvailable`: the Source target toggle is shown in a Logic list of this type (Hit, WeaponHit). Parameters as
+in `list_action_types` (Hit: `m_hitType` flags CollisionEnter, CollisionStay, CollisionExit; WeaponHit: `m_hitType`
+flags Melee, Projectile; Timer: `m_interval`; BoardSpace: `m_hitType`, not writable).
+
+### `add_action` (write)
+
+| Param | Type | Default | |
+|---|---|---|---|
+| (address) | | | the trigger, see [Addressing a trigger](#addressing-a-trigger) |
+| `type` | string, required | | `ModActionType` name (`ChangeHealth`), class name or UI name, case-insensitive |
+| `index` | int 0..100000 | append | position of the new action: omitted or = action count: append; 0..count-1: insert before the action at that index |
+| `parameters` | object | | see [Parameters](#parameters-add_action-set_action-add_trigger-set_trigger) |
+| `targetFlags` | flags | | see [Target flags and targets](#target-flags-and-targets) |
+| `targets` | array | | requires Advanced in the resulting flags |
+
+Refused (`INVALID_PARAMS`): unknown type; the action fails a palette gate (the message gives the reason, e.g. "Heal
+Player is only available in the action lists of Board Space Event triggers and Display Popup choices (not in Logic: On
+Start)"); `index` > count (the message gives the range). Order on the new instance: constructor defaults; on append
+only, the call site's default target flags; then `parameters`, `targetFlags`, `targets`. An insert uses the window's
+insert path, which does not apply the call-site default (the window inserts after the action it is dropped on, so
+index 0 corresponds to inserting and then dragging the action to the top).
+
+```json
+{"guid": "0b6d...", "component": "ModTrigger", "componentGuid": "aa10...", "trigger": "OnEnterActions",
+ "index": 0, "mode": "append", "defaultTargetsApplied": true,
+ "action": {"index": 0, "type": "ChangeHealth", "className": "ChangeHealthAction", "version": 0, "targetFlags": "Source",
+            "targets": [], "parameters": {"m_operation": "Subtract", "m_value": 1}},
+ "clamped": [], "actionCount": 1, "changed": true, "undoable": true, "undoStackLength": 5}
+```
+
+`mode`: `append` or `insert`; `defaultTargetsApplied`: the call-site default was applied; `action`: the new action as
+`get_action_graph` shows it; `actionCount`: length of the list afterwards.
+
+### `remove_action` (write)
+
+Params: (address), `index` (int, required). `parameters`, `targetFlags`, `targets`, `type` are refused.
+
+```json
+{"guid": "0b6d...", "component": "ModLogic", "componentGuid": "aa10...", "trigger": "Triggers[0]", "index": 1,
+ "removed": {"type": "Wait", "className": "WaitAction"}, "actionCount": 2,
+ "changed": true, "undoable": true, "undoStackLength": 6}
+```
+
+Removing a Display Popup action removes its nested choice lists with it.
+
+### `move_action` (write)
+
+Params: (address), `index` (int, required), `newIndex` (int, required: the final position, 0..count-1).
+`parameters`, `targetFlags`, `targets`, `type` are refused. Same index: `changed: false`.
+
+```json
+{"guid": "0b6d...", "component": "ModLogic", "componentGuid": "aa10...", "trigger": "Triggers[0]", "index": 2,
+ "newIndex": 0, "order": ["SetActive", "Wait", "ShowMessage"], "changed": true, "undoable": true, "undoStackLength": 7}
+```
+
+`order`: the action types of the list after the move.
+
+### `set_action` (write)
+
+Params: (address), `index` (int, required), and at least one of `parameters`, `targetFlags`, `targets`. All changes of
+the call are one undo step. Values equal to the current ones give `changed: false`.
+
+```json
+{"guid": "0b6d...", "component": "ModLogic", "componentGuid": "aa10...", "trigger": "Triggers[0]", "index": 0,
+ "action": {"index": 0, "type": "Wait", "className": "WaitAction", "version": 0, "targetFlags": null, "targets": [],
+            "parameters": {"m_seconds": {"valueType": "Constant", "min": 3600.0, "max": 3600.0}}},
+ "clamped": ["m_seconds.min", "m_seconds.max"], "changed": true, "undoable": true, "undoStackLength": 8}
+```
+
+### `add_trigger` (write)
+
+| Param | Type | Default | |
+|---|---|---|---|
+| `guid` | string (GUID), required | | object with a Logic component |
+| `component` | string | | the Logic component (class/UI name or guid) when the object has several |
+| `type` | string | `"Start"` | `ModTriggerType` name or trigger class name; must be `addable` (`list_trigger_types`) |
+| `parameters` | object | | trigger parameters (Hit/WeaponHit `m_hitType`, Timer `m_interval`) |
+
+`trigger`, `scope` and `path` are refused (only Logic components have an editable trigger list). `NOT_FOUND` if the
+object has no Logic component; `INVALID_PARAMS` on a prefab instance or for a type that is not addable. The trigger is
+appended (the inspector has no insert or reorder). Result: the new trigger as a `get_action_graph` entry (its
+`triggerName` is `Triggers[n]`) plus `guid`, `clamped` and the edit fields.
+
+### `remove_trigger` (write)
+
+Params: (address) with `trigger` = `Triggers[i]` of a Logic component (no `path`). Fixed slots cannot be removed
+(`INVALID_PARAMS`; clear them with `remove_action`). `type`, `parameters`, `index` are refused.
+
+```json
+{"guid": "0b6d...", "component": "ModLogic", "componentGuid": "aa10...", "trigger": "Triggers[1]",
+ "removed": {"triggerType": "Timer", "actionCount": 3}, "triggerCount": 1,
+ "indexNote": "the following triggers moved up by one (Triggers[2] is now Triggers[1], ...)",
+ "changed": true, "undoable": true, "undoStackLength": 9}
+```
+
+### `set_trigger` (write)
+
+Params: (address), and `type` and/or `parameters`.
+
+- `type`: only for Logic list entries (`Triggers[i]`) and only `addable` types; a different type replaces the trigger
+  object with a new one of that type, keeps the action list and resets the trigger parameters (`parameters` are then
+  applied to the new trigger). Same type: no change. Fixed slots and popup choices: refused.
+- `parameters`: the trigger's drawn fields: Hit `m_hitType` (Logic Hit triggers and the Hittable `OnHitActions`),
+  WeaponHit `m_hitType` (Logic WeaponHit triggers and player settings `weaponHitTrigger`), Timer `m_interval` (Logic
+  Timer triggers and player settings `tickTrigger`; min >= 0.1). Plain action holders (Trigger, Item and Weapon slots,
+  popup choices, the death/respawn/round player-settings triggers) have no parameters; Board Space Event triggers'
+  `m_hitType` is refused.
+
+Result: the trigger as a `get_action_graph` entry plus `guid` (object scope), `clamped`, `previousTriggerType` and a
+`note` when the type changed, and the edit fields.
+
+---
+
 ## Safety
 
 ### Config switches (`BepInEx\config\com.pummelbridge.plugin.cfg`)
@@ -936,7 +1311,8 @@ body, when the call's turn in the write queue comes (see [Threading](#threading)
 3. editor open → `EDITOR_NOT_OPEN`
 4. not loading → `BUSY_LOADING`
 5. kind **OpenMod** (`save_mod`, `create_object`, `duplicate_object`, `delete_object`, `reparent_object`,
-   `set_object`, `set_transform`, `add_component`, `remove_component`, `set_property`, `set_properties`, `undo`):
+   `set_object`, `set_transform`, `add_component`, `remove_component`, `set_property`, `set_properties`, `undo`,
+   `add_action`, `remove_action`, `move_action`, `set_action`, `add_trigger`, `remove_trigger`, `set_trigger`):
    a mod is open (`NO_MOD_OPEN`) and loaded (`BUSY_LOADING`); its Meta name **and**
    folder name pass the rule (`GUARD_NOT_TEST_MOD`, message names the mod); state is `Editing` (`INVALID_STATE`).
    Kind **Lifecycle** (`create_test_mod`, `open_test_mod`): the `name` param passes the rule; if any mod is open it
@@ -1000,7 +1376,8 @@ Asset/object references (property values, action targets, settings) use one shap
 
 ## Not in this build
 
-No action editing (triggers/actions), playtest or batch tools (later Phase 2 increments); no redo (the editor has
-none); no prefab asset editing context switch (open/close a prefab by hand), no layer/tag or per-component enable
+No playtest or batch tools (later Phase 2 increment); no redo (the editor has none); no copy/paste/duplicate of
+actions (the Action Editor has none); no editing of Set Connection Active connection mappings or of the Display
+Popup's hidden timer fields; no prefab asset editing context switch (open/close a prefab by hand), no layer/tag or per-component enable
 editing, no asset creation, import or removal. No delete, rename or close of mods. No Workshop functionality of any
 kind; publishing is blocked (see [Safety](#safety)).

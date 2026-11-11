@@ -12,7 +12,7 @@ namespace PummelBridge.Tools
     {
         private static EditServices s_services;
 
-        public static readonly string[] Capabilities = { "read", "write", "edit" };
+        public static readonly string[] Capabilities = { "read", "write", "edit", "actions" };
 
         public static void Register(ToolRegistry registry, BridgeRuntimeInfo info, Func<bool> writesEnabled, PublishBlockStatus publishBlock, EditServices services)
         {
