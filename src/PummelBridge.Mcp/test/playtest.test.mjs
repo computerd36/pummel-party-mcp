@@ -209,7 +209,7 @@ test("annotations of the new tools", async () => {
   try {
     const { tools } = await s.client.listTools();
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));
-    assert.equal(tools.length, 39);
+    assert.equal(tools.length, 41);
     assert.equal(by.validate_mod.annotations.readOnlyHint, true);
     assert.deepEqual(by.validate_mod.inputSchema.properties ?? {}, {});
     assert.deepEqual(
@@ -227,6 +227,82 @@ test("annotations of the new tools", async () => {
     assert.match(guide, /PLAYTEST:/);
     assert.match(guide, /BATCH:/);
     assert.match(guide, /MINIMAL VALID MINIGAME/);
+  } finally {
+    await s.close();
+  }
+});
+
+test("get_playtest_state and get_playtest_events: read-only, strict schemas, params pass through, guide mentions them", async () => {
+  const seen = [];
+  const s = await session({
+    handler: (method, params) => {
+      seen.push({ method, params });
+      if (method === "get_playtest_state") return { ok: true, result: { running: true, players: [{ index: 0, name: "Bot 0", alive: true }], useHealth: false, note: "n" } };
+      if (method === "get_playtest_events") return { ok: true, result: { entries: [{ id: 1, type: "player_died", player: 0 }], nextId: 1, dropped: false } };
+      return { ok: true, result: {} };
+    },
+  });
+  try {
+    const { tools } = await s.client.listTools();
+    const by = Object.fromEntries(tools.map((t) => [t.name, t]));
+    for (const n of ["get_playtest_state", "get_playtest_events"]) {
+      assert.equal(by[n].annotations.readOnlyHint, true, n);
+      assert.equal(by[n].annotations.openWorldHint, false, n);
+      assert.equal(by[n].inputSchema.additionalProperties, false, n);
+      assert.equal(by[n].inputSchema.type, "object", n);
+    }
+    assert.deepEqual(by.get_playtest_state.inputSchema.properties ?? {}, {});
+    const ev = by.get_playtest_events.inputSchema.properties;
+    assert.deepEqual([ev.max.minimum, ev.max.maximum, ev.sinceId.minimum], [1, 500, 0]);
+    assert.match(by.get_playtest_events.description, /nextId/);
+    assert.match(by.get_playtest_state.description, /INVALID_STATE/);
+
+    const st = await call(s.client, "get_playtest_state", {});
+    assert.notEqual(st.isError, true);
+    assert.equal(JSON.parse(st.content[0].text).players[0].name, "Bot 0");
+    assert.deepEqual(seen.at(-1), { method: "get_playtest_state", params: {} });
+    const e1 = await call(s.client, "get_playtest_events", { max: 500, sinceId: 12 });
+    assert.equal(JSON.parse(e1.content[0].text).entries[0].type, "player_died");
+    assert.deepEqual(seen.at(-1), { method: "get_playtest_events", params: { max: 500, sinceId: 12 } });
+    await call(s.client, "get_playtest_events", {});
+    assert.deepEqual(seen.at(-1), { method: "get_playtest_events", params: {} });
+
+    // strict: nothing invalid reaches the plugin
+    const n0 = seen.length;
+    for (const [name, args] of [
+      ["get_playtest_events", { max: 0 }], ["get_playtest_events", { max: 501 }], ["get_playtest_events", { sinceId: -1 }],
+      ["get_playtest_events", { max: 1.5 }], ["get_playtest_events", { since: 3 }], ["get_playtest_state", { verbose: true }],
+    ]) {
+      const r = await call(s.client, name, args);
+      assert.equal(r.isError, true, `${name} ${JSON.stringify(args)}`);
+    }
+    assert.equal(seen.length, n0, "invalid calls must not reach the plugin");
+
+    // the shared guide tells the agent to verify mechanics with them, and the 256 sentinel is not a Workshop/minigame id
+    const guide = s.client.getInstructions();
+    assert.match(guide, /get_playtest_state/);
+    assert.match(guide, /get_playtest_events/);
+    assert.match(guide, /stop_playtest first and read afterwards/);
+    assert.match(guide, /useHealth off/);
+    assert.match(guide, /publishedFileId "256"[^.]*never published/);
+    assert.match(guide, /not a Workshop item or a minigame id/);
+  } finally {
+    await s.close();
+  }
+});
+
+test("a plugin INVALID_STATE for get_playtest_state is shown with its message and hint", async () => {
+  const s = await session({
+    handler: (method) =>
+      method === "get_playtest_state"
+        ? { ok: false, error: { code: "INVALID_STATE", message: "no playtest is running (editor state Editing); start one with start_playtest" } }
+        : { ok: true, result: {} },
+  });
+  try {
+    const r = await call(s.client, "get_playtest_state", {});
+    assert.equal(r.isError, true);
+    assert.match(r.content[0].text, /INVALID_STATE/);
+    assert.match(r.content[0].text, /no playtest is running/);
   } finally {
     await s.close();
   }

@@ -12,7 +12,7 @@ namespace PummelBridge.Tools
     {
         private static EditServices s_services;
 
-        public static readonly string[] Capabilities = { "read", "write", "edit", "actions", "playtest", "batch" };
+        public static readonly string[] Capabilities = { "read", "write", "edit", "actions", "playtest", "batch", "playtestState" };
 
         /// <param name="publishBlock">Live publish-block status (re-verifies the required prefixes on every call).</param>
         public static void Register(ToolRegistry registry, BridgeRuntimeInfo info, Func<bool> writesEnabled, Func<PublishBlockStatus> publishBlock, EditServices services)

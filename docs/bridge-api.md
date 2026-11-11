@@ -1,4 +1,4 @@
-# PummelBridge HTTP API (api v2, Phase 2 increment 4, plugin 0.5.0)
+# PummelBridge HTTP API (api v2, Phase 2 increment 4 + playtest visibility, plugin 0.6.0)
 
 The BepInEx plugin `PummelBridge.Plugin` runs inside Pummel Party and exposes the mod editor's state on a
 local HTTP endpoint. api v2 adds the guard layer, the always-on Workshop publish block and four mod lifecycle
@@ -7,7 +7,9 @@ additive) adds object, transform, component and property editing plus `undo`; se
 (still api v2, additive) adds editing of the Action Editor model (triggers and their action lists); see
 [Action editing](#action-editing). Increment 4 (still api v2, additive) adds `validate_mod`, `start_playtest`,
 `stop_playtest` and `run_batch`, structured error details (`error.data`) and play-mode rules for every tool; see
-[Validation, playtest and batch](#validation-playtest-and-batch). Write tools only ever act on `PB_TEST_` mods; see
+[Validation, playtest and batch](#validation-playtest-and-batch). Plugin 0.6.0 (still api v2, additive) adds playtest
+visibility: the read tools `get_playtest_state` and `get_playtest_events`, a small summary in `get_status.playtest`, and the
+capability `"playtestState"`; see [Playtest visibility](#playtest-visibility). Write tools only ever act on `PB_TEST_` mods; see
 [Safety](#safety).
 
 ## Transport
@@ -88,7 +90,7 @@ validator refusal: `{"validation": {...}}`). Clients that ignore `data` still ge
 | `WRITES_DISABLED` | write tool called while `[Safety] EnableWrites = false` |
 | `PUBLISH_BLOCK_INCOMPLETE` | write tool called while the Workshop publish block is not complete (`get_status.publishBlock`) |
 | `GUARD_NOT_TEST_MOD` | the open mod (open-mod tools) or the target / open mod (lifecycle tools) is not a `PB_TEST_` mod; the message names it |
-| `INVALID_STATE` | editor state forbids the call: play mode (also the transitional states `EnteringPlayMode` / `ExitingPlayMode`), a mod that fails the validator (`start_playtest`), unsaved changes, a prefab being edited, an open editor dialog, a broken editor mod list, an object outside the current editing context, the left mouse button held in the game window, the open mod changed while an edit was pending (the message says what to do) |
+| `INVALID_STATE` | editor state forbids the call: play mode (also the transitional states `EnteringPlayMode` / `ExitingPlayMode`), no playtest running (`get_playtest_state`), a mod that fails the validator (`start_playtest`), unsaved changes, a prefab being edited, an open editor dialog, a broken editor mod list, an object outside the current editing context, the left mouse button held in the game window, the open mod changed while an edit was pending (the message says what to do) |
 | `ALREADY_EXISTS` | `create_test_mod`: a folder or a mod (Meta name) with that name exists, case-insensitive |
 
 Edit tools additionally use `NOT_FOUND` (object / component / the edited object was deleted meanwhile),
@@ -102,7 +104,7 @@ as strings. Asset or object references are objects (see "References").
 
 ### Threading
 
-`ping` and `get_log` (without `includeEditor`) are answered on the HTTP thread and work even while the game's
+`ping`, `get_log` (without `includeEditor`) and `get_playtest_events` are answered on the HTTP thread and work even while the game's
 main thread is busy. Everything else is queued to the plugin's `Update()` (max 16 items / 8 ms per frame) and
 waits up to 10 s (`create_test_mod` / `open_test_mod`: 35 s, with their own 30 s load limit inside; edit tools
 of increments 2 and 3: 15 s; `start_playtest` 60 s, `stop_playtest` 30 s, `run_batch` 120 s). A committed write call
@@ -161,13 +163,14 @@ body changes nothing, or the body commits and the caller no longer times out.
 Works with the editor closed. No params.
 
 ```json
-{"pong": true, "pluginVersion": "0.5.0", "gameVersion": "1.15.2", "unityVersion": "2021.3.45f2",
- "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions", "playtest", "batch"]}
+{"pong": true, "pluginVersion": "0.6.0", "gameVersion": "1.15.2", "unityVersion": "2021.3.45f2",
+ "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState"]}
 ```
 
 `readOnlyBuild` was removed in api v2. `capabilities` lists what this build implements (`edit` = the object,
 component, property and undo tools of increment 2; `actions` = the action/trigger tools of increment 3; `playtest` =
-`validate_mod`, `start_playtest`, `stop_playtest`; `batch` = `run_batch`); whether
+`validate_mod`, `start_playtest`, `stop_playtest`; `batch` = `run_batch`; `playtestState` = `get_playtest_state`,
+`get_playtest_events`); whether
 writes are currently allowed is in `get_status`
 (`writesEnabled`, `publishBlock.complete`).
 
@@ -185,8 +188,8 @@ No params. Never fails because of editor state.
  "activeScene": "ModEditorScene",
  "playtest": {"state": "Editing", "running": false, "startedAt": null, "playModeSince": null, "endedAt": null,
               "playSeconds": null, "startedByBridge": false, "players": "4 Players", "playerCount": 4, "teams": null,
-              "aiOnly": false},
- "capabilities": ["read", "write", "edit", "actions", "playtest", "batch"], "writesEnabled": true,
+              "aiOnly": false, "eventCount": 0, "lastEventId": 0, "alivePlayers": null},
+ "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState"], "writesEnabled": true,
  "publishBlock": {"active": true, "complete": true, "patchedCount": 59, "missing": []}}
 ```
 
@@ -210,6 +213,10 @@ No params. Never fails because of editor state.
   While a playtest runs (`running: true`) also: `paused` (`Time.timeScale == 0`, the toolbar's Pause button),
   `minigame` `{state, round, rounds}` (`GameManager.Minigame`: `MinigameControllerState` name, 1-based round as the
   round UI shows it, rounds) and `board` `{state}` (`GameManager.Board.BoardState`) when those controllers exist.
+  Always (also after the playtest, until the next one starts): `eventCount` (entries in the event feed), `lastEventId`
+  (id of the newest entry, 0 = none yet; keeps counting across playtests) and `alivePlayers` (players not dead at the
+  last per-frame sample, null before the first sample of the current playtest); the data itself is in
+  `get_playtest_state` / `get_playtest_events` ([Playtest visibility](#playtest-visibility)).
 - `isDirty`: the editor's own dirty flag of the current undo context (scene, or the open prefab), read from fields.
   It is set by every undo push, including the initial snapshot the editor pushes on the first frame after any load,
   so it is `true` for an untouched mod (confirmed in-game). `null` if the field layout changed or no mod is open.
@@ -243,7 +250,10 @@ running or ending (see [Play-mode behaviour](#play-mode-behaviour-of-every-tool)
 - `metadata` and `settings` are generic JSON trees of the objects' Unity-serialized fields (what `Meta.json` /
   `ModSettings.json` store). Triggers inside settings use the trigger shape of `get_action_graph`.
 - From the workshop item only `publishedFileId` (as a **string**, Steam ids are 64-bit) and `isPublished`
-  (`publishedFileId != 256`) are exposed.
+  (`publishedFileId != 256`) are exposed. **`"256"` is the "never published" sentinel**
+  (`ModWorkshopItem.DefaultWorkshopID`), not a Workshop item: the game also uses it at runtime as the local id of every
+  unpublished mod (`MinigameDefinition.publishedFileId`, the `PummelModCache/256` folder, `GetModWithWorkshopID(256)`).
+  Do not describe it as a Workshop item or as a "minigame id"; every `PB_TEST_` mod has it (the bridge forces it).
 
 ### `get_hierarchy`
 
@@ -504,6 +514,8 @@ call waited in the write queue; refused with `TIMEOUT` before creating anything 
 {"name": "PB_TEST_Arena", "folderName": "PB_TEST_Arena", "type": "Minigame", "publishedFileId": "256"}
 ```
 
+`publishedFileId` `"256"` = never published (the game's local id for unpublished mods; not a Workshop item).
+
 Errors: guard codes, `INVALID_PARAMS`, `ALREADY_EXISTS`, `INVALID_STATE` (also: "the open mod changed while waiting
 for the load", when another mod was opened by hand meanwhile), `BUSY_LOADING` (another create/open is still waiting
 for its load), `TIMEOUT`, `INTERNAL` (load failed; the editor shows its own error popup).
@@ -525,6 +537,8 @@ check `get_status`).
 ```json
 {"name": "PB_TEST_Arena", "folderName": "PB_TEST_Arena", "type": "Minigame", "publishedFileId": "256", "alreadyOpen": false}
 ```
+
+`publishedFileId` `"256"` = never published (the game's local id for unpublished mods; not a Workshop item).
 
 Leaving the open mod (create and open) gives `INVALID_STATE` unless:
 - no editor dialog is open (`EditorPopupManager.CurrentPopup == null`);
@@ -1361,7 +1375,8 @@ Result: the trigger as a `get_action_graph` entry plus `guid` (object scope), `c
 
 ## Validation, playtest and batch
 
-Increment 4. Read tool `validate_mod`; write tools `start_playtest`, `stop_playtest`, `run_batch`.
+Increment 4. Read tool `validate_mod`; write tools `start_playtest`, `stop_playtest`, `run_batch`. Plugin 0.6.0 adds the read tools
+`get_playtest_state` and `get_playtest_events` ([Playtest visibility](#playtest-visibility)).
 
 ### `validate_mod` (read)
 
@@ -1525,6 +1540,193 @@ sent ..."). An open editor dialog does not block stopping.
 Nothing is saved when stopping; the edit-time scene is exactly as before Play (the playtest ran on the separate copy;
 undo stacks and the dirty flag are untouched). Errors: guard codes, `INVALID_STATE`, `EDITOR_NOT_OPEN`, `TIMEOUT`.
 
+### Playtest visibility
+
+Plugin 0.6.0, read-only. `get_playtest_state` answers "what is the situation right now", `get_playtest_events` answers
+"what happened" without having to poll at the right moment. Both work when the human started the playtest by hand
+and when the mod being played is one of the author's real mods: they only read runtime state (every member read was checked
+in the game source to be a plain getter or a private field, never a getter with side effects) and never modify or save anything.
+The per-frame sampling behind the event feed runs only while the editor is in `PlayMode`; with no playtest it costs one
+comparison per frame.
+
+#### `get_playtest_state` (read)
+
+No params. Runs on the main thread. **Only while a playtest is running** (`PlayMode`); otherwise `INVALID_STATE` with a
+message that says why: `Editing` (start one; `get_playtest_events` still has the last playtest), `EnteringPlayMode` (still
+starting, retry), `ExitingPlayMode` (ending; read `get_playtest_events`), editor closed.
+
+```json
+{"running": true, "mod": "PB_TEST_Arena", "modType": "Minigame", "playtest": 1, "paused": false,
+ "useHealth": false, "note": "useHealth is off in the Minigame Settings (player settings): ... ANY Change Health whose result is 0 or less ... kills the player at once ...",
+ "respawn": {"enabled": true, "time": 3, "invulnerableTime": 1},
+ "minigame": {"type": "simple", "state": "Playing", "round": 1, "rounds": 2, "endCondition": "Timer", "placement": "MostPoints",
+              "playerType": "TopDown", "roundLength": 60, "timeRemaining": 41.3, "timeElapsed": 18.6, "finished": false},
+ "players": [
+   {"index": 0, "name": "Bot 1", "isAI": true, "alive": true, "score": 0, "position": {"x": 1.2, "y": 0.1, "z": -3.4}, "deaths": 0},
+   {"index": 1, "name": "Bot 2", "isAI": true, "alive": false, "score": 0, "position": {"x": 4.0, "y": 0.1, "z": 0.0}, "deaths": 1, "respawnIn": 1.4}],
+ "alivePlayers": 3, "events": {"count": 12, "lastId": 12}}
+```
+
+Top level: `running` (always true), `mod`, `modType`, `playtest` (counts playtests since the game started, matches
+`get_playtest_events.playtest`), `paused` (`Time.timeScale == 0`), `alivePlayers`, `events` `{count, lastId}`.
+Minigame mods add:
+
+| Field | Meaning (source) |
+|---|---|
+| `useHealth` | the Minigame Settings' "Use Health" (`SimpleModPlayerSettings.useHealth`, default **false**) |
+| `maxHealth` | the settings' `health` (default 100); only when `useHealth` is true |
+| `note` | only when `useHealth` is false: the rule below, in one paragraph |
+| `respawn` | `{enabled, time, invulnerableTime}` from the player settings (`respawnEnabled` default true, `respawnTime` default 3 s); only `enabled` when off |
+| `minigame.type` | `"simple"` for editor-made minigames (`SimpleModController`), `"other"` for any other controller (then only `state`, `round`, `rounds`, `finished` and the players' common fields exist) |
+| `minigame.state` | `MinigameControllerState` name (`Initializing`, `EnablePlayers`, `Countdown`, `Playing`, `RoundResetWait`, `RoundStartWait`, `PreScoreScreen`, ...) |
+| `minigame.round`, `rounds` | 1-based round as the round UI shows it (clamped to `rounds`), and the round count |
+| `minigame.endCondition` | the settings' end-condition flags (`Timer`, `ObtainPoints`, `RemainingPlayersAlive`, `FinishMinigame`, joined by `", "`) |
+| `minigame.placement`, `playerType` | `PlacementCondition` (`MostPoints`, `LeastPoints`, `FinishOrder`, `LastManStanding`) and `ChosenPlayerType` (`ThirdPerson`, `TopDown`, `TwinStick`) |
+| `minigame.roundLength` | with the `Timer` end condition: seconds per round |
+| `minigame.timeRemaining` | with `Timer` and state `Playing`: seconds left in this round (`MinigameController.TimeRemaining`, the timer UI's value) |
+| `minigame.timeElapsed` | state `Playing`: seconds since this round's `StartNewRound` (`Time.time - round_begin_time`) |
+| `minigame.pointsToWin` | with `ObtainPoints`: the score that ends the round |
+| `minigame.minPlayersAlive` | with `RemainingPlayersAlive` (the round ends when that many or fewer remain; only without respawn) |
+| `minigame.finishedPlayers` | with `FinishOrder` / `FinishMinigame`: how many finished this round |
+| `minigame.finished` | true in state `PreScoreScreen` / `ShowScoreScreen`; then also `results` `[{rank, index, name, score}]` (ranked by the game's own `GamePlayer.MinigameScore`, which `BuildResults` filled: the points, negated for `LeastPoints`; ties share a rank; `score` is the raw points) and `winners` (names with rank 1) |
+
+`players` (every `CharacterBase` of the controller, in spawn order; fields marked `?` appear only when they apply):
+
+| Field | Meaning (source) |
+|---|---|
+| `index` | `GamePlayer.GlobalID`: the number every event's `player` uses |
+| `name`, `isAI`, `team?` | `GamePlayer.Name`, `IsAI`; `GameTeam.TeamID` in team mode |
+| `alive` | `!CharacterBase.IsDead` |
+| `health?`, `maxHealth?` | `SimpleModPlayer.CurHealth` / `MaxHealth`; **only when `useHealth` is true** (with health off the stored value is a 0/1 flag, not hit points, see below) |
+| `score` | `CharacterBase.Score` (a `short`: the number the score UI shows; -32768..32767) |
+| `position` | `{x, y, z}` world position, 2 decimals |
+| `deaths` | deaths the **bridge counted** since the playtest began (diff of `alive`); the game keeps no per-player death count |
+| `stunned?` | true while `SimpleModPlayer.Stunned` |
+| `invulnerable?` | true during the respawn invulnerability window (`IsInulnerable`) |
+| `respawnIn?` | seconds until the respawn, while dead, respawns are on and the round is `Playing` (`respawnTime - (Time.time - m_lastDeathTime)`) |
+| `finished?`, `placement?` | `HasFinished` (a Set Placement / finish was reached) and the 1-based finish order (`Placement + 1`) |
+| `lastDamagedBy?` | index of the player whose weapon last damaged this one (`LastSourceOfPlayerDamage`; the game clears it on death) |
+| `heldItem?`, `heldItemType?`, `heldItemCount?` | the most recently picked-up held item (`ModItem` name and `ItemType`) and how many are held (private `m_filoHeldItemStack`, read by reflection) |
+
+Not provided because the game does not track it per player (or only privately and in a way that cannot be read purely):
+kills / damage dealt, ammo or weapon cooldowns, per-team totals (sum the players' `score` by `team`), a death count other
+than the bridge's, the state of running (waiting) actions.
+
+**Board mods** (`modType` `"Board"`): `players` carry `index`, `name`, `isAI`, `team?`, `health` / `maxHealth`
+(`BoardActor.ServerHealth`, `maxHealth`; board health is always in use), `keys` (`BoardPlayer.Gold`: the board's
+"keys" are the gold counter, `GiveKeysAction` calls `GiveGold`), `trophies` (`GoalScore`), `space` (`BoardNode.NodeID`
+of the current space), `state` (`BoardPlayerState` name) and `position`. `board` is `{supported: true, state
+(GameBoardState name), turn (CurTurnNum), currentPlayer (index), keysAre}`. The board runtime is only read this far; if the
+board controller does not exist yet the result is `board: {supported: false, reason}` with an empty `players`. Item mods
+and other types: `supported: false`, `reason`, empty `players`.
+
+While the play scene is still loading (state `PlayMode` but no minigame controller yet) the result is
+`supported: false` with `reason` "the minigame controller does not exist yet" and an empty `players`.
+
+#### `get_playtest_events` (read)
+
+| Param | Type | Default | |
+|---|---|---|---|
+| `max` | int 1-500 | 100 | max entries returned |
+| `sinceId` | int >= 0 | - | return entries with `id > sinceId`, oldest first (without it: the newest `max`) |
+
+Answered on the HTTP thread like `get_log`; works in every editor state, also after the playtest (stop first, read
+afterwards) and with the editor closed.
+
+```json
+{"entries": [
+   {"id": 1, "time": "2026-11-11T18:00:01.020Z", "playSeconds": 0, "type": "playtest_started"},
+   {"id": 2, "time": "2026-11-11T18:00:02.410Z", "playSeconds": 1.39, "type": "player_added", "player": 0, "name": "Bot 1", "isAI": true},
+   {"id": 9, "time": "2026-11-11T18:00:08.002Z", "playSeconds": 6.98, "type": "trigger_fired", "player": 1, "name": "Bot 2", "object": "Hazard",
+    "objectGuid": "aa10...", "component": "ModTrigger", "trigger": "OnEnterActions", "triggerType": "None", "event": "Hit", "actions": 1,
+    "seed": 123456, "source": "player 1", "receiver": "Hazard"},
+   {"id": 11, "time": "2026-11-11T18:00:08.010Z", "playSeconds": 6.99, "type": "player_died", "player": 1, "name": "Bot 2", "deaths": 1,
+    "cause": "ChangeHealth action [receiver Hazard, source player 1]"}],
+ "nextId": 11, "dropped": false, "running": true, "playtest": 1, "logicEvents": true, "suppressedLogicEvents": 0, "sessionId": "3b0f2c...e1"}
+```
+
+- `entries[]`: `id` (monotonic over the whole game session, first id 1; the clear below does **not** reset it), `time` (UTC), `playSeconds`
+  (seconds since `PlayMode` was reached, 2 decimals), `type`, `player` + `name` when the event is about one player, then
+  the type's own fields (flat).
+- `nextId` = pass as `sinceId` next time; `dropped: true` = entries after `sinceId` were overwritten (500-entry ring) or
+  cleared by a new playtest before you read them (an `id` from the previous playtest is still accepted: you get the new
+  playtest's events and `dropped: true`).
+- `running` (a playtest is in `PlayMode` now), `playtest` (sequence number; a change means the buffer was cleared for a
+  new playtest, started by the bridge or by hand), `logicEvents` (false when the recording hooks could not be installed:
+  then `trigger_fired` / `action_executed` never appear, everything else still does), `suppressedLogicEvents` (trigger/action
+  records skipped by the rate limits, total), `sessionId` (changes when the game restarts).
+- The buffer is **cleared when a new playtest starts** (the editor leaves `Editing`) and is kept after it ended until the next one starts.
+
+Event types:
+
+| `type` | When (how it is detected) | Extra fields |
+|---|---|---|
+| `playtest_started` / `playtest_ended` | the editor reached / left `PlayMode` | `playSeconds` (ended: length) |
+| `player_added` / `player_removed` | a player appears in / disappears from the controller's player list (every player is `player_added` once at the start) | `isAI`, `team?`, `health?` |
+| `health_changed` | the health value changed (only with health in use; not on a respawn) | `old`, `new`, `delta`, `max`, `by?` (damaging player), `cause?` |
+| `player_died` | `alive` true to false | `health?` (0), `deaths` (the bridge's count), `by?`, `cause?` |
+| `player_respawned` | `alive` false to true (a respawn after `respawnTime`, or the reset at the start of the next round) | `health?` |
+| `score_changed` | `Score` changed (board: `keys_changed`, and `trophies_changed`) | `old`, `new`, `delta`, `cause?` |
+| `player_stunned` | `Stunned` false to true (the end of a stun is not recorded) | |
+| `round_started` / `round_ended` | the controller state entered / left `Playing` | `round`, `rounds`, (`round_ended`: `state` it went to) |
+| `minigame_finished` | the controller state entered `PreScoreScreen` / `ShowScoreScreen` | `results`, `winners` (as `get_playtest_state`), `rounds` |
+| `turn_started` (Board) | `GameBoardController.CurPlayer` changed | `turn` |
+| `trigger_fired` | a mod trigger ran its action list (`ModLogicTrigger.RunActionsLocal`; triggers with no actions never run) | `object` (GameObject name), `objectGuid` (the `get_hierarchy` guid), `component`, `trigger` (`Triggers[i]`, `OnEnterActions`, `OnUseTrigger`, `playerSettings.onDeathTrigger`, ... where the owner type is known, else `#<index>`), `triggerType`, `event` (`ModEventType`), `actions` (count), `seed`, `source`, `receiver` (`player N` or an object name) |
+| `action_executed` | a mod action ran (`ModAction.Execute`; `Wait` is handled by the runner and not recorded) | `action` (`ModActionType`), `index` (position in its list), `seed` (the same `seed` as the `trigger_fired` of that run), `source`, `receiver` |
+
+`player` of a logic record is the player involved (the event's source player, else the receiver player); `cause` is a
+**hint**: the Change Health / Kill / Damage / Heal (health) or Change Score / Set Placement (score) actions that ran in the
+same or the previous frame, up to three joined by `"; "`, with their source/receiver; it says an action ran at about
+that time, not which player it targeted.
+
+**How the events are detected.** The health, score, alive, stunned, round, minigame and player events come from
+**diffing** a per-frame snapshot of the players (plain getters only; a frame in which nothing changed allocates nothing
+and records nothing). Only `trigger_fired`, `action_executed` and the cause hints need the game to tell us something, and
+for those the plugin installs **record-only Harmony postfixes** (own Harmony id `com.pummelbridge.plugin.playtesthooks`;
+precedent `Hooks/SaveWatch.cs`) on `ModLogicTrigger.RunActionsLocal(ModEvent)` and on the eight declared overrides of
+`ModAction.Execute(ModEvent)` (`ModAction`, `TargetAction`, `WaitAction`, `GiveItemAction`, `MoveSpaceAction`,
+`SetConnectionActiveAction`, `SetGravityAction`, `SpawnPrefabAction`). A postfix returns at once unless a playtest is in
+`PlayMode`, never changes arguments or results, and swallows every exception. If a target cannot be patched, a warning is
+logged at startup and only those two event types are affected (`logicEvents` reports it). The hooks are installed with the RPC server (`[General] PluginEnabled` and `[Server] Enabled` both true), separately from the publish block, and are never removed at runtime (they are inert outside a playtest).
+
+**Rate limits for `trigger_fired` / `action_executed`** (gameplay events are never limited): at most one record per
+trigger slot / action per second (the skipped ones are counted in `repeats` on the next record of that key), and at most
+10 per second overall (burst 20), so a per-frame `Update` trigger or a Timer cannot push deaths out of the 500-entry ring.
+The ring holds 500 entries; read it every few seconds in a long test, or stop and read.
+
+#### What health and score mean in simple minigames
+
+The runtime is `SimpleModController` / `SimpleModPlayer` (editor-made minigames); the rules are read from the game source.
+
+- **Health in use (`useHealth` true):** `maxHealth` (`health`, default 100) is the starting and maximum value; the player
+  is set to it at spawn and at every respawn / round reset. `Change Health` computes `result = op(current, value)`
+  (`Set`, `Add`, `Subtract`, `Multiply`, `Divide`; **the action's default operation is `Set`**, so `m_value: -25` without
+  `m_operation` sets health to -25 = dead), clamps it to `0..health`, stores it, and if the stored health is 0 or less the
+  player is killed. `m_value` 0 is a no-op (a hit animation only). A weapon hit applies the weapon's damage as `Subtract`.
+- **Health off (`useHealth` false, the default): `Change Health` is a kill switch.** The health value is not
+  initialised (it stays 0 until the first respawn / round reset sets it to the "max", which is 1 when health is off) and
+  the stored value is clamped to 0..1. `ChangeHealth` therefore kills whenever the result is 0 or less: from the initial 0
+  every `Add -25`, `Subtract 25`, `Set 0`, `Multiply`, `Divide` ... leaves 0 and kills at once, whatever the amount; a result
+  above 0 sets the value to 1 (nothing visible) and the next decrease kills. This is why a Change Health -25 in a mod with
+  default settings killed bots instantly. Turning on **Use Health** in the Minigame Settings (by hand; the bridge edits no settings except
+  the player-settings triggers) and setting **Health** gives real hit points. The `note` of `get_playtest_state` repeats this while health is off.
+- **Death is refused in three situations** (health is still changed): during the respawn invulnerability window after a
+  respawn (`respawnInvulnerableTime`, default 1 s), during the portal respawn animation, and between rounds. The
+  player then stays alive with health 0 and the next `Change Health` kills it - so a hit during invulnerability can
+  leave a player alive at 0 health.
+- **Death and respawn:** `onDeathTrigger` runs, then the player ragdolls, health is set to 0, the stun is cleared. If
+  `respawnEnabled` (default true) and the round is `Playing`, after `respawnTime` (default 3 s) the player is teleported to a
+  respawn point, health is reset to the maximum, `isDead` clears and `onRespawnTrigger` runs. With respawn off a dead player stays
+  dead until the next round (the `RemainingPlayersAlive` end condition only counts when respawn is off).
+- **Score** is a signed 16-bit value per player (`CharacterBase.Score`; `Change Score` applies `Set/Add/...` and clamps to
+  -32768..32767). The game itself adds points in two cases: `LastManStanding` placement gives a dying player
+  `10 * (players already dead + 1)` points (and each survivor the same at the round end), and finishing (`Set Placement` /
+  `SetFinished`) gives `100 * (players - already finished)`. Nothing else changes a score unless a Change Score action does.
+- **Rounds and results:** the round ends when an enabled end condition is met (`Timer`: time up; `ObtainPoints`: someone
+  reached `pointsToWin`; `RemainingPlayersAlive`: `minPlayersAlive` or fewer left and respawn is off, solo or team mode;
+  `FinishMinigame`: everyone finished). After the last round `BuildResults` copies the scores to `GamePlayer.MinigameScore`
+  (negated for `LeastPoints`) and the controller goes to `PreScoreScreen`: that is `minigame_finished`.
+
 ### What a playtest writes and what reaches Steam
 
 On disk (all inside the open test mod's folder unless noted):
@@ -1567,8 +1769,10 @@ resolve (they would read as `registered: false`).
 
 | Tool | During a playtest |
 |---|---|
-| `ping`, `get_log`, `screenshot` | work unchanged (`get_log` and `screenshot` are the way to observe a playtest; the screenshot shows the editor window with the play view) |
-| `get_status` | works; `playtest` block with `running: true`, times, `paused`, `minigame` / `board` state |
+| `ping`, `get_log`, `screenshot` | work unchanged (`get_log` and `screenshot` are the way to observe a playtest from outside; the screenshot shows the editor window with the play view) |
+| `get_status` | works; `playtest` block with `running: true`, times, `paused`, `minigame` / `board` state, `eventCount`, `lastEventId`, `alivePlayers` |
+| `get_playtest_state` | **needs** a running playtest (`PlayMode`): reads the runtime players and minigame/board; `INVALID_STATE` in every other state (the message says what to do) |
+| `get_playtest_events` | works in every state, also with the editor closed and after the playtest (reads the plugin's own buffer; answered on the HTTP thread) |
 | `get_hierarchy` | works; lists the **edit-time** scene and adds `playMode: true` + `playModeNote` (the synthetic root shows `active: false`) |
 | `list_assets`, `list_trigger_types`, `list_action_types` without an address | work; result has `playMode: true` (static or editor-mod data) |
 | `list_mods`, `list_component_types` | work (array results, no marker; `addable` describes edit mode) |
@@ -1661,12 +1865,22 @@ exactly what was applied; revert by hand with `delete_object` or one `undo` per 
      {"id": "marker", "tool": "create_object", "params": {"kind": "sphere", "name": "Marker",
         "parentGuid": "$floor.guid", "position": {"x": 0, "y": 1, "z": 0}}},
      {"tool": "get_hierarchy"}]}
+   (Hazard's Change Health Subtract 1 kills every player that enters it, because Use Health is off in the default Minigame Settings: see
+   [What health and score mean](#what-health-and-score-mean-in-simple-minigames))
    -> completed 7; results[0].result.guid is the floor's guid, referenced by steps[5] (`parentGuid`), and results[2].result.guid by steps[3] and steps[4]
 3. validate_mod -> valid: true (warnings: empty description, no preview image)
 4. save_mod
 5. start_playtest {"players": 4, "aiOnly": true} -> playing: true, saved: true
-6. get_status (playtest.running, playtest.minigame.round) / get_log {"sinceId": <nextId before step 5>} / screenshot
-7. stop_playtest -> stopped: true, state "Editing"
+6. get_status (playtest.running, playtest.minigame.round, playtest.eventCount) / get_log {"sinceId": <nextId before step 5>} / screenshot
+7. observe what happens to the players (a trigger that "should" hurt players has to be verified, not assumed):
+   get_playtest_state -> useHealth false + note (health is off: every Change Health that leaves 0 or less kills at once),
+     players[i].alive / score / position / deaths, minigame.state "Playing", timeRemaining
+   get_playtest_events {"max": 100} -> entries such as
+     {"id": 3, "playSeconds": 6.4, "type": "action_executed", "action": "ChangeHealth", "receiver": "Hazard", "source": "player 2", ...}
+     {"id": 4, "playSeconds": 6.4, "type": "player_died", "player": 2, "name": "Bot 3", "deaths": 1, "cause": "ChangeHealth action [receiver Hazard, source player 2]"}
+   poll with {"sinceId": <nextId>}, or stop first (step 8) and read the whole feed afterwards: it is kept until the next playtest starts
+8. stop_playtest -> stopped: true, state "Editing"
+9. get_playtest_events {"sinceId": 0} -> the full feed of that playtest (player_added x4, round_started, deaths, minigame_finished with results)
 ```
 
 ---

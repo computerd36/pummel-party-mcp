@@ -1,6 +1,6 @@
 {
   "name": "pummelbridge-mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "MCP server (read tools plus sandbox-only write and editing tools) bridging to the PummelBridge BepInEx plugin (Pummel Party mod editor)",
   "type": "module",
   "main": "dist/index.js",

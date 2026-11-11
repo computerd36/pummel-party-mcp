@@ -101,6 +101,7 @@ namespace PummelBridge
                 m_poller = new FramePoller(log);
                 m_edit = new EditServices(m_poller, log);
                 InstallSaveWatch(log);
+                InstallPlaytestHooks();
                 BridgeConfig config = m_config;
                 WriteSafety safety = new WriteSafety(() => config.EnableWrites, block.IsComplete, new GameEditorGuardHost(log));
                 ToolRegistry registry = new ToolRegistry(safety, new WriteQueue(log));
@@ -116,7 +117,7 @@ namespace PummelBridge
                 ObjectEditTools.Register(registry, m_edit);
                 ComponentTools.Register(registry, m_edit);
                 ActionEditTools.Register(registry, m_edit);
-                PlaytestTools.Register(registry, m_edit);
+                PlaytestTools.Register(registry, m_edit, info);
                 BatchTool.Register(registry, m_poller); // last: steps are looked up in the registry at call time
 
                 RpcHandler handler = new RpcHandler(registry, m_dispatcher, log, MainThreadTimeout);
@@ -147,6 +148,7 @@ namespace PummelBridge
             m_edit = null;
             m_registry = null;
             SaveWatch.OnSaved = null;
+            PlaytestHooks.Collecting = false;
         }
 
         /// <summary>Installs the block; the returned monitor re-verifies the required prefixes live (guard step 2, get_status).</summary>
@@ -197,6 +199,31 @@ namespace PummelBridge
             catch (Exception e)
             {
                 Logger.LogWarning($"Save watch not installed ({e.GetType().Name}: {e.Message}); unsaved-edit tracking falls back to the editor's dirty flag.");
+            }
+        }
+
+        /// <summary>
+        /// Recording-only postfixes for the playtest event feed (trigger fired / action executed). Failure only removes those
+        /// two event types; the diff-based events and get_playtest_state do not depend on them.
+        /// </summary>
+        private void InstallPlaytestHooks()
+        {
+            try
+            {
+                System.Collections.Generic.List<string> problems = PlaytestHooks.Install(new Harmony(PlaytestHooks.HarmonyId));
+                if (problems.Count > 0)
+                {
+                    Logger.LogWarning($"Playtest hooks: {PlaytestHooks.TriggerHooks} trigger and {PlaytestHooks.ActionHooks} action hooks installed; problems: {string.Join("; ", problems.ToArray())}. " +
+                                      "get_playtest_events may lack trigger_fired / action_executed entries.");
+                }
+                else
+                {
+                    Logger.LogInfo($"Playtest hooks installed (record-only postfixes): {PlaytestHooks.TriggerHooks} trigger, {PlaytestHooks.ActionHooks} action methods.");
+                }
+            }
+            catch (Exception e)
+            {
+                Logger.LogWarning($"Playtest hooks not installed ({e.GetType().Name}: {e.Message}); get_playtest_events has no trigger_fired / action_executed entries.");
             }
         }
 

@@ -6,7 +6,7 @@ using PummelBridge.Game;
 
 namespace PummelBridge.Tools
 {
-    /// <summary>validate_mod (read); start_playtest (write, OpenMod); stop_playtest (write, OpenMod, allowed in play mode).</summary>
+    /// <summary>validate_mod (read); get_playtest_state / get_playtest_events (read); start_playtest (write, OpenMod); stop_playtest (write, OpenMod, allowed in play mode).</summary>
     internal static class PlaytestTools
     {
         /// <summary>Queueing + validation + Play + wait for play mode (scene and mod load). Commit grace (4 s) comes on top.</summary>
@@ -22,9 +22,11 @@ namespace PummelBridge.Tools
             public bool ValidateFirst = true;
         }
 
-        public static void Register(ToolRegistry registry, EditServices services)
+        public static void Register(ToolRegistry registry, EditServices services, BridgeRuntimeInfo info)
         {
             registry.Register(ToolDefinition.Read("validate_mod", ctx => ctx.OnMainThread(ValidateMod)));
+            registry.Register(ToolDefinition.Read("get_playtest_state", ctx => ctx.OnMainThread(() => PlaytestState(services))));
+            registry.Register(ToolDefinition.Read("get_playtest_events", ctx => PlaytestEvents(ctx, services.Feed, info)));
 
             registry.Register(ToolDefinition.Write("start_playtest", WriteGuard.OpenMod(),
                 ctx =>
@@ -45,6 +47,28 @@ namespace PummelBridge.Tools
 
             registry.Register(ToolDefinition.Write("stop_playtest", WriteGuard.OpenMod(allowPlayMode: true), null,
                 inv => Stop(inv, services), StopTimeout));
+        }
+
+        // ------------------------------------------------------------------ get_playtest_state / get_playtest_events
+
+        private static JObject PlaytestState(EditServices services)
+        {
+            EditorSystem ed = EditorAccess.EditorOrNull();
+            RpcException gate = PlaytestGate.CheckRunning(PlaytestAccess.StateOf(ed));
+            if (gate != null)
+            {
+                throw gate;
+            }
+            services.Observe(); // record the newest frame first so the event counters match the state
+            return PlaytestStateReader.Read(ed, services.Feed);
+        }
+
+        /// <summary>Answered on the HTTP thread (the ring is thread-safe): works while the game is busy and after the playtest ended.</summary>
+        private static JObject PlaytestEvents(ToolContext ctx, PlaytestFeed feed, BridgeRuntimeInfo info)
+        {
+            int max = ctx.GetInt("max", 100, 1, PlaytestFeed.DefaultCapacity);
+            long? sinceId = ctx.GetLong("sinceId", 0, long.MaxValue);
+            return PlaytestEventJson.Result(feed, max, sinceId, PummelBridge.Hooks.PlaytestHooks.LogicEvents, info?.SessionId);
         }
 
         // ------------------------------------------------------------------ validate_mod
@@ -282,6 +306,13 @@ namespace PummelBridge.Tools
             catch (RpcException)
             {
                 // toolbar fields unreadable (game changed): leave the choice out
+            }
+            if (services?.Feed != null)
+            {
+                int? alive = services.Feed.AlivePlayers;
+                j["eventCount"] = services.Feed.EventCount;
+                j["lastEventId"] = services.Feed.LastEventId;
+                j["alivePlayers"] = alive.HasValue ? new JValue(alive.Value) : JValue.CreateNull();
             }
             if (state != PlayState.Editing)
             {

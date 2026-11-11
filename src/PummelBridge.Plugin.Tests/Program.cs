@@ -37,6 +37,7 @@ namespace PummelBridge.Tests
             EditCoreTests.Run((name, ok) => Check(name, ok));
             ActionCoreTests.Run((name, ok) => Check(name, ok));
             PlaytestBatchTests.Run((name, ok) => Check(name, ok));
+            PlaytestFeedTests.Run((name, ok) => Check(name, ok));
             AssetListingTests();
             ServerTests();
             Console.WriteLine();

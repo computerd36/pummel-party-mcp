@@ -17,6 +17,11 @@ namespace PummelBridge.Game
         /// <summary>Playtest timeline (get_status.playtest), fed by <see cref="Observe"/>.</summary>
         public PlaytestClock Playtest { get; } = new PlaytestClock();
 
+        /// <summary>Playtest event ring + diffing (get_playtest_events / get_playtest_state), fed by <see cref="Observe"/>.</summary>
+        public PlaytestFeed Feed { get; }
+
+        private readonly PlaytestWatch m_watch;
+
         /// <summary>Reused every frame by <see cref="Observe"/> (the tracker copies what it keeps).</summary>
         private readonly UndoSignature m_scratch = new UndoSignature();
 
@@ -24,6 +29,9 @@ namespace PummelBridge.Game
         {
             Poller = poller;
             Log = log ?? NullBridgeLog.Instance;
+            Feed = new PlaytestFeed(PlaytestFeed.DefaultCapacity, PlaytestStateReader.StateName);
+            PlaytestLogicRecorder.Feed = Feed;
+            m_watch = new PlaytestWatch(Feed, Log);
         }
 
         /// <summary>Feeds the tracker with the current editor state (once per frame, and before every check).</summary>
@@ -32,7 +40,10 @@ namespace PummelBridge.Game
             try
             {
                 EditorSystem ed = EditorAccess.EditorOrNull();
-                Playtest.Observe(PlaytestAccess.StateOf(ed), DateTime.UtcNow);
+                DateTime now = DateTime.UtcNow;
+                PlayState playState = PlaytestAccess.StateOf(ed);
+                Playtest.Observe(playState, now);
+                m_watch.Frame(ed, playState, now);
                 PummelMod mod = ed?.CurrentMod;
                 if (ed == null || mod == null)
                 {

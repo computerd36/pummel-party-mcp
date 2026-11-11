@@ -22,18 +22,19 @@ const GUIDE = [
 
   "SAFETY: write tools act only on sandbox mods named PB_TEST_ (^PB_TEST_[A-Za-z0-9_ -]+$, max 64 chars, no leading/trailing space); anything else is refused (GUARD_NOT_TEST_MOD). Real mods can never be changed; Workshop publishing is blocked and has no tool. create_test_mod/open_test_mod are refused while a real mod is open (the human closes it). Writes need Safety.EnableWrites (get_status: writesEnabled, publishBlock.complete).",
 
-  "WORKFLOW: get_status -> list_mods -> open_test_mod or create_test_mod -> get_hierarchy (guids) -> edits (create_object, set_transform, add_component, set_property, ...; many at once: run_batch) -> get_object to verify -> validate_mod -> save_mod -> start_playtest (aiOnly true runs unattended) -> get_status.playtest / get_log / screenshot -> stop_playtest. Edits stay in memory until save_mod.",
+  "WORKFLOW: get_status -> list_mods -> open_test_mod or create_test_mod -> get_hierarchy (guids) -> edits (create_object, set_transform, add_component, set_property, ...; many at once: run_batch) -> get_object to verify -> validate_mod -> save_mod -> start_playtest (aiOnly true runs unattended) -> get_playtest_state / get_playtest_events -> stop_playtest. Edits stay in memory until save_mod.",
   "ACTIONS: create_object kind trigger/logic; for a Trigger component set_property TriggerOnEnter (or TriggerOnExit/TriggerOnStay/TriggerOnHit) true to make its slot editable -> get_action_graph -> list_action_types with that trigger address -> add_action -> get_action_graph to verify -> save_mod. Logic components hold a trigger list (add_trigger, set_trigger, remove_trigger; Triggers[0], ...); other components have fixed slots. set_property cannot set triggers or actions.",
 
   "EDIT RULES: edit tools need the Editing state and return INVALID_STATE while an editor dialog is open, the left mouse button is held in the game window, or play mode is active (stop_playtest, or wait / tell the human, then retry). Every edit selects the edited object. Replies carry changed, undoable, undoStackLength (plus undoPending/note). One call = one undo step. undo has no redo; creating an object is not undoable (use delete_object). Undoing a component add pushes an extra snapshot (extraUndoEntries): one more undo re-adds it. Player-settings trigger edits (scope playerSettings) are NOT undoable: written by save_mod.",
 
-  "PLAYTEST: validate_mod first. start_playtest SAVES the open sandbox mod, applies players/aiOnly, presses Play and returns in PlayMode (limit 60 s); INVALID_STATE on validator errors (error.data.validation lists them; validateFirst false = Run With Errors), an open prefab or dialog, or a BoardSpace mod. aiOnly true: AIs play and rounds run by themselves; otherwise a human must play player 1 (no input is sent). Observe: get_status.playtest (running, playSeconds, minigame {state, round, rounds}), get_log (sinceId), screenshot. During play these work: ping, get_status, get_log, screenshot, list_mods, list_component_types, get_hierarchy (EDIT-TIME scene), list_assets/list_trigger_types/list_action_types without address. INVALID_STATE: get_object, get_action_graph, list_action_types with address, get_open_mod, validate_mod and all edit/lifecycle tools incl. save_mod, undo, run_batch. stop_playtest before editing again. After a start TIMEOUT: get_status, then stop_playtest; do not retry blindly.",
+  "PLAYTEST: validate_mod first. start_playtest SAVES the open sandbox mod, applies players/aiOnly, presses Play, returns in PlayMode (limit 60 s); INVALID_STATE on validator errors (error.data.validation; validateFirst false = Run With Errors), an open prefab or dialog, or a BoardSpace mod. aiOnly true: AIs play, rounds run by themselves; otherwise a human plays player 1 (no input is sent). VERIFY, never assume a trigger or action worked: get_playtest_state (running only: players alive/health/score/position/deaths, minigame state/round/time, useHealth + note) and get_playtest_events (ring of 500: player_died/respawned, health_changed, score_changed, round_started/ended, minigame_finished, trigger_fired, action_executed; page with sinceId; cleared when the next playtest starts, so stop_playtest first and read afterwards works). Also get_status.playtest, get_log, screenshot. HEALTH: with useHealth off (default) any Change Health leaving 0 or less kills at once, whatever the amount; hit points need Use Health in the Minigame Settings (by hand). During play these also work: ping, get_status, get_log, screenshot, list_mods, list_component_types, get_hierarchy (EDIT-TIME scene), list_assets/list_trigger_types/list_action_types without address. INVALID_STATE: get_object, get_action_graph, list_action_types with address, get_open_mod, validate_mod and all edit/lifecycle tools incl. save_mod, undo, run_batch. stop_playtest before editing. After a start TIMEOUT: get_status, then stop_playtest; do not retry blindly.",
+  "MOD ID: publishedFileId \"256\" (get_open_mod, create/open_test_mod) means never published: the game's local id for unpublished mods. It is not a Workshop item or a minigame id.",
   "MINIMAL VALID MINIGAME: NumberOfRounds > 0 (default 1) plus at least one ACTIVE Player Spawn (create_object kind playerSpawn; defaults cover all counts, players and respawn) = valid true. Warnings never block (empty description, no preview image, no collider below a spawn: cube/plane/prop have one). Board mods cannot be made valid via the bridge.",
   "BATCH: run_batch runs 1-100 steps {tool, params?, id?} in order in one write-queue turn (limit 120 s); each write step has its own guard, commit and undo step. Allowed: the edit tools, undo, save_mod and the get_/list_ read tools in its schema (not lifecycle, playtest, screenshot, ping, get_status, get_log, get_open_mod, validate_mod). NO ROLLBACK (object creation is not undoable): stopOnError (default true) stops at the first failed step and results lists what was applied; revert with delete_object or undo per step; false = attempt all; nothing is saved without a save_mod step. Step failures are in results ({ok, result|error}), not a call error; the call fails only on up-front validation (INVALID_PARAMS naming the step, nothing run) or a guard. id [A-Za-z][A-Za-z0-9_-]{0,63}, unique. PLACEHOLDERS: a string VALUE (any depth, not keys) in params starting with $ is a reference $<id>(.name|[n]){1,8} into an EARLIER step's result (no forward/self refs), replaced by that JSON value of any type before the step runs: \"$floor.guid\", \"$dup.objects[0].guid\". \"$$5\" = literal \"$5\"; any other $ string is refused up front; a reference to a failed step or missing path fails that step.",
 
   "CLAMPING: values may be clamped. Transform: world position within -1000..1000, rotation -3600..3600, scale 0.001..1000 per axis. Setter/inspector limits too (Wait m_seconds 0..3600, m_volume 0..1, Timer m_interval.min >= 0.1). See applied / clamped / inspectorClamped.",
 
-  `ADDRESSES: objects by guid (ModTransform guid from get_hierarchy/get_object). Components by guid, class name (ModLight) or UI name (Light), case-insensitive. Trigger address: {guid, component?, trigger, path?}, or {scope:"playerSettings", trigger, path?} (Minigame only; no guid/component). trigger = the triggerName from get_action_graph (OnEnterActions, OnUseTrigger, Triggers[0], ...); player-settings names: ${PLAYER_TRIGGERS}. component only when several components have a trigger of that name. path (max 8 steps {action, choice}) enters nested Display Popup lists: each step = a Display Popup action in the current list + a 0-based choice whose On Select list becomes the edited one. Some slots are editable only while a component flag is on (OnEnterActions needs TriggerOnEnter, OnExitActions TriggerOnExit); get_action_graph reports editable/reason; action tools refuse non-editable slots.`,
+  `ADDRESSES: objects by guid (ModTransform guid from get_hierarchy/get_object). Components by guid, class name (ModLight) or UI name (Light), case-insensitive. Trigger address: {guid, component?, trigger, path?}, or {scope:"playerSettings", trigger, path?} (Minigame only; no guid/component). trigger = the triggerName from get_action_graph (OnEnterActions, OnUseTrigger, Triggers[0], ...); player-settings names: ${PLAYER_TRIGGERS}. component only when several components have a trigger of that name. path (max 8 steps {action, choice}) enters nested Display Popup lists: each step = a Display Popup action in the current list + a 0-based choice whose On Select list becomes the edited one. Some slots are editable only while a component flag is on; get_action_graph reports editable/reason and the action tools refuse non-editable slots.`,
 
   "PROPERTY VALUES (set_property/set_properties; the shapes get_object returns): Boolean; integers (3.0 ok); Single/Double finite number; String (max 16384); enum name (case-insensitive) or defined integer, flags joined by comma (\"OnSelf, OnTargets\"); Vector2/3/4, Quaternion {x,y[,z[,w]]} or array of 2-4 numbers; Color {r,g,b,a?} 0-1; Color32 0-255 ints; Rect {x,y,width,height}; LayerMask integer; asset references null, a guid or {guid} (from list_assets; registered:false refused); scene-object references null, a component guid or an object guid; arrays a JSON array (max 1024); AnimationCurve {keys:[{time,value,inTangent?,outTangent?}]} (max 256); MinMaxCurve a number or {mode:Constant|TwoConstants|Curve|TwoCurves, constant|constantMin+constantMax|curve|curveMin+curveMax, curveMultiplier?}; MinMaxGradient a color or {mode:Color|TwoColors|Gradient|RandomColor|TwoGradients, color|colorMin+colorMax|gradient|gradientMin+gradientMax}, gradient {mode?, colorKeys:[{color,time}], alphaKeys:[{alpha,time}]}.",
   "PROPERTY RULES: names as get_object lists them (unique case-insensitive match ok). Values are validated first: if one fails nothing changes. NOT settable (INVALID_PARAMS): triggers/action lists (use the action tools), guid and hiddenInInspector properties, ModComplexFloat, ModWeaponInfo, SimpleModHitAction, ModSimpleAnimation[], BoardNodeConnection[], Burst[], byte[]; on a prefab instance only Transform and Prefab Instance. A throwing setter returns INTERNAL naming the properties already set; one undo reverts them.",
@@ -50,6 +51,17 @@ const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: fal
 const WRITE_IDEMPOTENT = { ...WRITE, idempotentHint: true };
 const WRITE_DESTRUCTIVE = { ...WRITE, destructiveHint: true };
 type Annotations = { readOnlyHint: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint: boolean };
+
+// A non-empty string. A refinement instead of .min(1): the published schema then omits "minLength":1, which was repeated
+// ~50 times in tools/list (about 700 characters of the 40,000 budget); empty strings are still refused before the plugin.
+const nonEmpty = () => z.string().refine((v) => v.length > 0, { message: "must not be empty" });
+
+// registerTool() stamps every tool with execution: { taskSupport: "forbidden" }, which is also what a missing field means in the
+// MCP spec (no task support). Removing it saves ~40 characters per tool (about 1,600 of the 40,000 budget).
+function withoutDefaultExecution<T extends { execution?: unknown }>(tool: T): T {
+  tool.execution = undefined;
+  return tool;
+}
 
 const MAX_TEXT_CHARS = 100_000;
 const RULES = " See bridge_guide.";
@@ -87,7 +99,7 @@ function register(
 ): void {
   const schema = input instanceof z.ZodType ? input : z.object(input).strict();
   const write = !annotations.readOnlyHint;
-  server.registerTool(
+  withoutDefaultExecution(server.registerTool(
     name,
     { description, inputSchema: schema as any, annotations },
     async (args: Record<string, unknown>): Promise<ToolResult> => {
@@ -100,7 +112,7 @@ function register(
         return errorResult(e);
       }
     },
-  );
+  ));
 }
 
 // ---------------------------------------------------------------------------
@@ -118,10 +130,10 @@ const pathStepSchema = z
   .strict();
 
 const addressFields = {
-  guid: z.string().min(1).optional(),
-  component: z.string().min(1).optional(),
+  guid: nonEmpty().optional(),
+  component: nonEmpty().optional(),
   scope: z.enum(["object", "playerSettings"]).optional(),
-  trigger: z.string().min(1).optional(),
+  trigger: nonEmpty().optional(),
   path: z.array(pathStepSchema).max(8).optional(),
 };
 
@@ -168,14 +180,14 @@ const targetFlagsSchema = z
   .describe('"Source, Advanced", ["Source"] or integer 0-7.');
 const targetsSchema = z.array(z.any()).max(1024);
 
-const guidSchema = z.string().min(1);
-const compSchema = z.string().min(1).describe("Guid, class or UI name.");
+const guidSchema = nonEmpty();
+const compSchema = nonEmpty().describe("Guid, class or UI name.");
 
 // ---------------------------------------------------------------------------
 // Local tool (does not call the plugin)
 // ---------------------------------------------------------------------------
 
-server.registerTool(
+withoutDefaultExecution(server.registerTool(
   "bridge_guide",
   {
     description:
@@ -184,7 +196,7 @@ server.registerTool(
     annotations: READ_ONLY,
   },
   async (): Promise<ToolResult> => ({ content: [{ type: "text", text: GUIDE }] }),
-);
+));
 
 // ---------------------------------------------------------------------------
 // Read tools
@@ -198,13 +210,13 @@ register(
 );
 register(
   "get_status",
-  "Editor/mod status: editorOpen, editorState, modOpen, modName, hasUnsavedEdits, undoStackLength, prefabContext, playMode, playtest (running, playSeconds, paused, minigame/board), writesEnabled, publishBlock. Never fails because of editor state; use it to see why other tools fail.",
+  "Editor/mod status: editorState, modOpen/modName, hasUnsavedEdits, undoStackLength, prefabContext, playtest (running, playSeconds, minigame/board, eventCount, alivePlayers), writesEnabled, publishBlock. Never fails because of editor state; shows why other tools fail.",
   {},
   READ_ONLY,
 );
 register(
   "get_open_mod",
-  "Returns the open mod: name, type, metadata, settings. Needs an open mod.",
+  "Returns the open mod: name, type, metadata, settings, publishedFileId (\"256\" = never published, a local id; not a Workshop item). Needs an open mod.",
   {},
   READ_ONLY,
 );
@@ -212,7 +224,7 @@ register(
   "get_hierarchy",
   "Returns the object tree with each object's guid, name, components and children (guids for other tools). Needs an open mod.",
   {
-    rootGuid: z.string().min(1).optional().describe("Only this object's subtree."),
+    rootGuid: nonEmpty().optional().describe("Only this object's subtree."),
     maxDepth: z.number().int().min(0).max(64).optional().describe("0..64 (default 64); deeper nodes show depthLimited."),
     includeInactive: z.boolean().optional().describe("Default true."),
   },
@@ -228,11 +240,11 @@ register(
 );
 register(
   "get_action_graph",
-  "Returns the triggers and actions of an object (guid, optional component filter) or of the player settings (scope playerSettings): one entry per trigger slot { component, triggerName, triggerType, actions: [{ index, type, targetFlags, targets, parameters }], callSite, editable (+ reason) }. triggerName is the trigger address for the action tools; parameter keys are the names add_action/set_action take.",
+  "Triggers and actions of an object (guid, optional component) or of the player settings (scope playerSettings): one entry per slot { component, triggerName, triggerType, actions: [{ index, type, targetFlags, targets, parameters }], callSite, editable (+ reason) }. triggerName is the trigger address; parameter keys are the names add_action/set_action take.",
   z
     .object({
       guid: addressFields.guid,
-      component: z.string().min(1).optional().describe("Only this component's triggers; not with scope playerSettings."),
+      component: nonEmpty().optional().describe("Only this component's triggers; not with scope playerSettings."),
       scope: addressFields.scope,
     })
     .strict()
@@ -306,7 +318,7 @@ register(
 register(
   "list_component_types",
   "Lists registered component types: [{ type, uiName, category, addable, reason?, allowsMultiple, supportsChildren, modTypes }]. type or uiName goes to add_component; addable follows the Add Component picker (with guid also that object's rules). Needs an open mod.",
-  { guid: z.string().min(1).optional().describe("Also apply this object's rules.") },
+  { guid: nonEmpty().optional().describe("Also apply this object's rules.") },
   READ_ONLY,
 );
 register(
@@ -328,6 +340,23 @@ register(
   "Runs the editor's Mod Validator (as the Play button does): { valid, canPlaytest, errorCount, warningCount, issues: [{ severity, message, description?, fixable }] }. Changes nothing. Call before start_playtest (bridge_guide: MINIMAL VALID MINIGAME).",
   {},
   READ_ONLY,
+);
+
+register(
+  "get_playtest_state",
+  "State of the RUNNING playtest (else INVALID_STATE): { players: [{ index, name, isAI, team?, alive, health?, score, position, deaths, stunned?, respawnIn?, heldItem? }], minigame { state, round, rounds, timeRemaining?, results? }, useHealth, note }; Board mods: board, keys, trophies. Compact; poll it.",
+  {},
+  READ_ONLY,
+);
+register(
+  "get_playtest_events",
+  "Events of the current or last playtest { entries: [{ id, time, playSeconds, type, player?, ... }], nextId, dropped }: player_died/respawned, health_changed, score_changed, round_started/ended, minigame_finished, trigger_fired, action_executed. Pass nextId as sinceId. Kept after stop_playtest until the next playtest starts.",
+  {
+    max: z.number().int().min(1).max(500).optional().describe("1..500 (default 100)."),
+    sinceId: z.number().int().min(0).optional().describe("A previous nextId."),
+  },
+  READ_ONLY,
+  { narrow: "use a smaller max, or sinceId" },
 );
 
 // ---------------------------------------------------------------------------
@@ -391,16 +420,16 @@ const CREATE_KINDS = [
 
 register(
   "create_object",
-  `Creates an object like the editor's GameObject menu and selects it. kind defaults to "empty" ("prop" if prop is given, "prefabInstance" if prefab is given). playerSpawn/item/trigger/logic/weaponSource: Minigame only; boardSpace: Board only; prefabInstance/boardSpace: not while a prefab is edited. Parents that cannot have children (prefab instance, board space, item, text) are refused. Transform values are local, clamped. Not undoable: use delete_object.${RULES}`,
+  `Creates an object (like the GameObject menu) and selects it. kind defaults to "empty" ("prop" if prop is given, "prefabInstance" if prefab is given). playerSpawn/item/trigger/logic/weaponSource: Minigame only; boardSpace: Board only; prefabInstance/boardSpace: not while a prefab is edited. Parents that cannot have children (prefab instance, board space, item, text) are refused. Transform values are local, clamped. Not undoable: use delete_object.${RULES}`,
   {
     kind: z.enum(CREATE_KINDS).optional(),
     name: nameFieldSchema.optional(),
-    parentGuid: z.string().min(1).nullable().optional().describe("null/omitted = top level."),
+    parentGuid: nonEmpty().nullable().optional().describe("null/omitted = top level."),
     position: vec3().optional(),
     rotation: vec3().optional(),
     scale: vec3().optional(),
-    prop: z.string().min(1).optional().describe("Prop asset guid (kind prop)."),
-    prefab: z.string().min(1).optional().describe("Prefab asset guid (kind prefabInstance)."),
+    prop: nonEmpty().optional().describe("Prop asset guid (kind prop)."),
+    prefab: nonEmpty().optional().describe("Prefab asset guid (kind prefabInstance)."),
   },
   WRITE,
 );
@@ -421,7 +450,7 @@ register(
   `Moves an object under a new parent; world transform is kept. Refused: into itself or a descendant, a parent that cannot have children or is in another context, the open prefab's root, siblingIndex out of range. No change gives changed false.${RULES}`,
   {
     guid: guidSchema,
-    newParentGuid: z.string().min(1).nullable().describe("Required; null = top level."),
+    newParentGuid: nonEmpty().nullable().describe("Required; null = top level."),
     siblingIndex: z.number().int().min(0).optional().describe("Default: last."),
   },
   WRITE,
@@ -446,7 +475,7 @@ register(
 register(
   "add_component",
   `Adds a component like the Add Component popup; list_component_types (with the guid) shows addable types and why not. Editor rules apply: single-instance types; Prefab Instance, Board Space, Item and Text need a childless object and exclude each other; nothing on a prefab instance.${RULES}`,
-  { guid: guidSchema, type: z.string().min(1).describe("Class name (ModLight) or UI name (Light).") },
+  { guid: guidSchema, type: nonEmpty().describe("Class name (ModLight) or UI name (Light).") },
   WRITE,
 );
 register(
@@ -461,7 +490,7 @@ register(
   {
     guid: guidSchema,
     component: compSchema,
-    property: z.string().min(1),
+    property: nonEmpty(),
     value: z
       .any()
       .refine((v) => v !== undefined, { message: "value is required (use null to clear a reference)" })
@@ -476,7 +505,7 @@ register(
     guid: guidSchema,
     component: compSchema,
     values: z
-      .record(z.string().min(1), z.any())
+      .record(nonEmpty(), z.any())
       .refine((o) => Object.keys(o).length >= 1 && Object.keys(o).length <= 64, { message: "values must have 1-64 entries" })
       .describe("{propertyName: value}, 1-64 entries."),
   },
@@ -498,7 +527,7 @@ register(
   `Adds an action to a trigger's list. type: ModActionType name (ChangeHealth), class or UI name; call list_action_types with the same address first. index omitted = append (call-site default target flags apply); 0..count-1 inserts before that action. Applied in order: defaults, call-site flags (append only), parameters, targetFlags, targets. Refused: unknown type, an action the call site does not offer, index > count.${RULES}`,
   withAddress(
     {
-      type: z.string().min(1),
+      type: nonEmpty(),
       index: indexSchema("Omitted = append.").optional(),
       parameters: parametersSchema.optional(),
       targetFlags: targetFlagsSchema.optional(),
@@ -548,9 +577,9 @@ register(
   `Appends a trigger to an object's Logic component list. type: Start (default), Enable, Update, Hit, WeaponHit, Timer, RoundStart, RoundEnd or class name; must be addable (list_trigger_types). parameters: Hit/WeaponHit m_hitType, Timer m_interval (min >= 0.1). Only guid and component address it. Returns the trigger as a get_action_graph entry (Triggers[n] = its address).${RULES}`,
   z
     .object({
-      guid: z.string().min(1),
-      component: z.string().min(1).optional(),
-      type: z.string().min(1).optional().describe('Default "Start".'),
+      guid: nonEmpty(),
+      component: nonEmpty().optional(),
+      type: nonEmpty().optional().describe('Default "Start".'),
       parameters: parametersSchema.optional(),
     })
     .strict(),
@@ -573,7 +602,7 @@ register(
   `Changes a trigger's type and/or parameters (at least one). type: Logic list entries (Triggers[i]) only; a different type replaces the trigger, KEEPS its actions and RESETS parameters to the new type's defaults (given parameters are then applied). parameters: Hit/WeaponHit m_hitType, Timer m_interval (min >= 0.1); other slots have none.${RULES}`,
   withAddress(
     {
-      type: z.string().min(1).optional(),
+      type: nonEmpty().optional(),
       parameters: parametersSchema.optional(),
     },
     {
@@ -593,7 +622,7 @@ const PLAYERS_STRING_RE = /^(?:[2-8](?: Players)?|2v2(?: Teams)?|2v2v2(?: Teams)
 
 register(
   "start_playtest",
-  `SAVES the open sandbox mod to disk, then presses Play and waits (up to 60 s) for play mode. Validator errors give INVALID_STATE with error.data.validation unless validateFirst is false. aiOnly: AIs play by themselves; else a human must play. Then get_status/get_log/screenshot; stop_playtest before editing.${RULES}`,
+  `SAVES the open sandbox mod to disk, then presses Play and waits (up to 60 s) for play mode. Validator errors give INVALID_STATE unless validateFirst is false. aiOnly: AIs play by themselves; else a human must.${RULES}`,
   {
     players: z
       .union([
@@ -639,7 +668,7 @@ const batchStepSchema = z
   .strict();
 register(
   "run_batch",
-  `Runs 1-100 steps in order (up to 120 s); params may reference earlier results, e.g. "$floor.guid" (bridge_guide: BATCH). NO ROLLBACK: object creation cannot be undone; stopOnError (default true) stops at the first failed step. Can contain deletes; each step is its own undo step.${RULES}`,
+  `Runs 1-100 steps in order (up to 120 s); params may reference earlier results ("$floor.guid"; bridge_guide: BATCH). NO ROLLBACK; stopOnError (default true) stops at the first failure. Can contain deletes.${RULES}`,
   z
     .object({
       steps: z

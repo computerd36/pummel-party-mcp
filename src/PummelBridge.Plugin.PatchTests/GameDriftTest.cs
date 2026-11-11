@@ -81,6 +81,11 @@ namespace PummelBridge.PatchTests
                 ("ToolbarWidget", "m_playerCount", "System.String[]", false),
                 ("ModValidationSystem", "m_validators", "System.Collections.Generic.List`1[ModValidationCallbackReceiver]", true),
                 ("MinigameController", "round", "System.Int32", false),
+                // playtest visibility (get_playtest_state / get_playtest_events, plugin 0.6.0)
+                ("MinigameController", "round_begin_time", "System.Single", false),
+                ("SimpleModPlayer", "m_lastDeathTime", "System.Single", false),
+                ("SimpleModPlayer", "m_filoHeldItemStack", "System.Collections.Generic.List`1[ModItem]", false),
+                ("ModSystem.Logic.ModLogicTrigger", "m_owner", "ModSystem.Logic.IEventReceiver", false),
             };
             foreach (var f in fields)
             {
@@ -89,10 +94,48 @@ namespace PummelBridge.PatchTests
                 check($"reflected field {f.type}.{f.field} exists ({f.fieldType}{(f.isStatic ? ", static" : "")})",
                     fi != null && fi.FieldType.ToString() == f.fieldType && fi.IsStatic == f.isStatic);
             }
+            PlaytestHookTargets(game, check);
             Type modWorkshopController = game.GetType("WorkshopController", false);
             check("WorkshopController.CurrentBackgroundLoadMod / CurrentActiveMod are static properties",
                 modWorkshopController?.GetProperty("CurrentBackgroundLoadMod", BindingFlags.Public | BindingFlags.Static) != null
                 && modWorkshopController.GetProperty("CurrentActiveMod", BindingFlags.Public | BindingFlags.Static) != null);
+        }
+
+        /// <summary>
+        /// The recording hooks of the playtest event feed (Hooks/PlaytestHooks.cs): ModLogicTrigger.RunActionsLocal(ModEvent) and the
+        /// declared ModAction.Execute(ModEvent) overrides (resolved the same way the hook installer does). A game update that renames
+        /// or re-signs them would silently reduce the feed to the diff-based events, so it is caught here.
+        /// </summary>
+        private static void PlaytestHookTargets(Assembly game, Action<string, bool> check)
+        {
+            Type trigger = game.GetType("ModSystem.Logic.ModLogicTrigger", false);
+            Type action = game.GetType("ModSystem.Logic.ModAction", false);
+            Type ev = game.GetType("ModSystem.Logic.ModEvent", false);
+            MethodInfo run = trigger?.GetMethod("RunActionsLocal", BindingFlags.Instance | BindingFlags.Public, null, new[] { ev }, null);
+            check("hook target ModLogicTrigger.RunActionsLocal(ModEvent) exists", run != null && run.ReturnType == typeof(void));
+            string[] expected = { "GiveItemAction", "ModAction", "MoveSpaceAction", "SetConnectionActiveAction", "SetGravityAction", "SpawnPrefabAction", "TargetAction", "WaitAction" };
+            string[] found = action == null || ev == null
+                ? new string[0]
+                : SafeTypes(game)
+                    .Where(t => t == action || t.IsSubclassOf(action))
+                    .Where(t => t.GetMethod("Execute", BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly, null, new[] { ev }, null) != null)
+                    .Select(t => t.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+            check("hook targets: ModAction.Execute(ModEvent) is declared by exactly " + string.Join(", ", expected) + " (found: " + string.Join(", ", found) + ")",
+                found.SequenceEqual(expected));
+            check("hook target ModAction.Execute returns YieldInstruction",
+                action?.GetMethod("Execute", BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly, null, new[] { ev }, null)?.ReturnType.Name == "YieldInstruction");
+        }
+
+        private static Type[] SafeTypes(Assembly a)
+        {
+            try
+            {
+                return a.GetTypes();
+            }
+            catch (ReflectionTypeLoadException e)
+            {
+                return e.Types.Where(t => t != null).ToArray();
+            }
         }
 
         /// <summary>GameDir as the project file saw it at build time (same property the plugin csproj uses).</summary>

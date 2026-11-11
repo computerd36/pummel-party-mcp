@@ -43,7 +43,7 @@ namespace PummelBridge.Game
             {
                 throw new RpcException(ErrorCodes.InvalidState,
                     $"a playtest is running (editor state {ed.State}): {tool} is only available in edit mode, because during a playtest references resolve " +
-                    "against the playtest's runtime copy of the mod; use get_status, get_log, screenshot or get_hierarchy (edit-time scene), or stop_playtest first");
+                    "against the playtest's runtime copy of the mod; use get_playtest_state, get_playtest_events, get_status, get_log, screenshot or get_hierarchy (edit-time scene), or stop_playtest first");
             }
         }
 
