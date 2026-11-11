@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -18,6 +19,11 @@ namespace PummelBridge.Core
         public int MaxBodyBytes = 1024 * 1024;
         public int MaxHeaderBytes = 16 * 1024;
         public int MaxConcurrentRequests = 16;
+        /// <summary>
+        /// Absolute limit for receiving the complete request (headers and body) after the connection was accepted. Not a
+        /// per-read timeout: a client that sends one byte every few seconds is cut off at this deadline, so slow
+        /// connections cannot hold the concurrent-request slots. Also the send timeout for responses.
+        /// </summary>
         public TimeSpan IoTimeout = TimeSpan.FromSeconds(10);
     }
 
@@ -180,6 +186,7 @@ namespace PummelBridge.Core
         private void HandleConnection(TcpClient client)
         {
             int timeoutMs = (int)m_options.IoTimeout.TotalMilliseconds;
+            Stopwatch requestClock = Stopwatch.StartNew(); // absolute deadline for the whole request, see ReadWithDeadline
             client.ReceiveTimeout = timeoutMs;
             client.SendTimeout = timeoutMs;
             client.NoDelay = true;
@@ -198,11 +205,11 @@ namespace PummelBridge.Core
             string parseError;
             try
             {
-                parseStatus = ReadHead(stream, out head, out leftover, out parseError);
+                parseStatus = ReadHead(stream, requestClock, out head, out leftover, out parseError);
             }
             catch (IOException)
             {
-                WriteResponse(stream, 408, "REQUEST_TIMEOUT", "timed out reading request headers", null);
+                WriteResponse(stream, 408, "REQUEST_TIMEOUT", $"timed out ({m_options.IoTimeout.TotalSeconds:0.#} s total) reading request headers", null);
                 return;
             }
             if (parseStatus != 0)
@@ -288,7 +295,7 @@ namespace PummelBridge.Core
             {
                 while (have < length)
                 {
-                    int n = stream.Read(body, have, (int)length - have);
+                    int n = ReadWithDeadline(stream, requestClock, body, have, (int)length - have);
                     if (n <= 0)
                     {
                         WriteResponse(stream, 400, "BAD_REQUEST", "connection closed before the full body was received", null);
@@ -299,7 +306,7 @@ namespace PummelBridge.Core
             }
             catch (IOException)
             {
-                WriteResponse(stream, 408, "REQUEST_TIMEOUT", "timed out reading request body", null);
+                WriteResponse(stream, 408, "REQUEST_TIMEOUT", $"timed out ({m_options.IoTimeout.TotalSeconds:0.#} s total) reading request body", null);
                 return;
             }
 
@@ -346,7 +353,22 @@ namespace PummelBridge.Core
         }
 
         /// <summary>Returns 0 on success, otherwise an HTTP status (400/431).</summary>
-        private int ReadHead(NetworkStream stream, out RequestHead head, out byte[] leftover, out string error)
+        /// <summary>
+        /// One read bounded by what is left of the request's total budget (<see cref="BridgeHttpServerOptions.IoTimeout"/>
+        /// since accept). Throws IOException when the budget is used up or the read times out.
+        /// </summary>
+        private int ReadWithDeadline(NetworkStream stream, Stopwatch clock, byte[] buffer, int offset, int count)
+        {
+            double left = m_options.IoTimeout.TotalMilliseconds - clock.Elapsed.TotalMilliseconds;
+            if (left <= 0)
+            {
+                throw new IOException("request deadline exceeded");
+            }
+            stream.ReadTimeout = (int)Math.Max(1, Math.Ceiling(left));
+            return stream.Read(buffer, offset, count);
+        }
+
+        private int ReadHead(NetworkStream stream, Stopwatch clock, out RequestHead head, out byte[] leftover, out string error)
         {
             head = null;
             leftover = new byte[0];
@@ -361,7 +383,7 @@ namespace PummelBridge.Core
                     error = "request headers too large";
                     return 431;
                 }
-                int n = stream.Read(buffer, filled, buffer.Length - filled);
+                int n = ReadWithDeadline(stream, clock, buffer, filled, buffer.Length - filled);
                 if (n <= 0)
                 {
                     error = "connection closed before headers were complete";

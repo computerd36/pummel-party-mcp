@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using ModSystem.Logic;
 using PummelBridge.Core;
 using UnityEngine;
@@ -207,8 +208,11 @@ namespace PummelBridge.Game
     /// <item>a mod asset guid (list_assets, or a scene component's guid as get_object shows it in references): the value is
     /// the asset itself for non-Unity assets (PummelPrefab, PummelVisualScript), else its unityObjectAddressable; a
     /// Transform becomes its GameObject when the property is a GameObject;</item>
-    /// <item>an object guid (ModTransform guid from get_hierarchy): the first component on that object whose class or
-    /// wrapped Unity component matches the property type, like dropping the object from the hierarchy.</item>
+    /// <item>an object guid (ModTransform guid from get_hierarchy): the object's Transform (or GameObject) when that fits
+    /// the property type; else the one component on that object whose class or wrapped Unity component matches it, like
+    /// dropping the object from the hierarchy (none or several matching: refused, the candidates and guids listed). The
+    /// editor registers every ModTransform as an asset, so the object case is detected on the asset (decision logic in
+    /// Core/ReferenceRules.cs).</item>
     /// </list>
     /// Scene-object references must point into the same editing context as the edited component (scene objects to scene
     /// objects, prefab objects to the same prefab), as the picker's location filter does. The resolved value must be an
@@ -233,36 +237,89 @@ namespace PummelBridge.Game
             }
             SerializableGuid sg = new SerializableGuid(Guid.Parse(guid));
             ModAsset asset = m_ed.GetAssetWithGuid(sg);
-            if (asset != null)
+
+            // The editor registers each object's ModTransform as a runtime asset (guid = object guid, value = Transform),
+            // so an object guid usually finds an asset. Detect that case; otherwise look the object up in the hierarchy.
+            ModTransform mt = asset != null ? OwnObjectOf(asset, guid) : EditorAccess.FindByGuid(m_ed, guid, out _);
+            ExpectedRefKind kind = expected == typeof(GameObject) ? ExpectedRefKind.GameObject
+                : expected == typeof(Transform) ? ExpectedRefKind.Transform : ExpectedRefKind.Other;
+            List<ModBehaviour> comps = null;
+            RefDecision decision = ReferenceRules.Decide(guid, asset != null, mt != null ? EditorAccess.GuidOf(mt) : null, mt != null ? mt.name : null,
+                kind, mt != null && expected.IsInstanceOfType(mt.transform),
+                () =>
+                {
+                    CheckSameContext(mt.transform, path); // deleted / other-context objects are refused before listing components
+                    comps = EditorAccess.ModComponents(mt.gameObject);
+                    return comps.Select(mb => new RefComponent
+                    {
+                        TypeName = mb.GetType().Name,
+                        Guid = EditorAccess.GuidOf(mb),
+                        Matches = ComponentMatches(mb, expected),
+                    }).ToList();
+                },
+                expected.Name, path);
+            if (decision.Source == RefSource.Asset)
             {
                 return FromAsset(asset, expected, path);
             }
-            // Not an asset guid: an object (ModTransform) guid?
-            ModTransform mt = EditorAccess.FindByGuid(m_ed, guid, out _);
-            if (mt == null)
+
+            // An object dropped on a field that wants one of its components (TrySetBehaviour): that component, preferring
+            // its registered asset (so the reference has a guid when the mod or an undo snapshot is serialised).
+            ModBehaviour hit = comps[decision.ComponentIndex];
+            ModAsset registered = m_ed.GetAssetWithGuid(hit.guid);
+            if (registered != null)
             {
-                throw RpcException.InvalidParams($"'{path}': no asset or object with guid {guid} (see list_assets / get_hierarchy)");
-            }
-            CheckSameContext(mt.transform, path);
-            foreach (ModBehaviour mb in EditorAccess.ModComponents(mt.gameObject))
-            {
-                Component wrapped = mb.Component; // what TrySetBehaviour reads (also sets up a missing wrapped component)
-                if (expected.IsInstanceOfType(mb) || (wrapped != null && expected.IsInstanceOfType(wrapped)) ||
-                    (expected == typeof(GameObject) && mb is ModTransform))
+                object fromAsset = AssetValue(registered, expected, path);
+                if (expected.IsInstanceOfType(fromAsset))
                 {
-                    ModAsset registered = m_ed.GetAssetWithGuid(mb.guid);
-                    if (registered != null)
-                    {
-                        return FromAsset(registered, expected, path);
-                    }
-                    object direct = expected == typeof(GameObject) ? mt.gameObject : (expected.IsInstanceOfType(mb) ? mb : (object)wrapped);
-                    if (expected.IsInstanceOfType(direct))
-                    {
-                        return direct;
-                    }
+                    return FromAsset(registered, expected, path);
                 }
             }
-            throw RpcException.InvalidParams($"'{path}': object '{mt.name}' has no component of type {expected.Name}");
+            Component wrapped = hit.Component;
+            object direct = expected == typeof(GameObject) ? mt.gameObject : (expected.IsInstanceOfType(hit) ? hit : (object)wrapped);
+            if (!expected.IsInstanceOfType(direct))
+            {
+                throw RpcException.InvalidParams($"'{path}': the {hit.GetType().Name} of '{mt.name}' does not give a {expected.Name}");
+            }
+            return direct;
+        }
+
+        /// <summary>The component's class or its wrapped Unity component fits (what TrySetBehaviour accepts), or a GameObject field and the object's Transform.</summary>
+        private static bool ComponentMatches(ModBehaviour mb, Type expected)
+        {
+            if (expected.IsInstanceOfType(mb) || (expected == typeof(GameObject) && mb is ModTransform))
+            {
+                return true;
+            }
+            Component wrapped = mb.Component; // what TrySetBehaviour reads (also sets up a missing wrapped component)
+            return wrapped != null && expected.IsInstanceOfType(wrapped);
+        }
+
+        /// <summary>The mod object whose own ModTransform is <paramref name="asset"/> (asset value = its Transform, same guid), else null.</summary>
+        private static ModTransform OwnObjectOf(ModAsset asset, string guid)
+        {
+            if (!asset.IsUnityObject || ValueConverter.LocationName(asset) == "internal")
+            {
+                return null;
+            }
+            Transform tr = asset.unityObjectAddressable as Transform;
+            ModTransform mt = tr != null ? tr.GetComponent<ModTransform>() : null;
+            return mt != null && string.Equals(EditorAccess.GuidOf(mt), guid, StringComparison.OrdinalIgnoreCase) ? mt : null;
+        }
+
+        /// <summary>The value an asset gives for a field of type <paramref name="expected"/> (not type-checked).</summary>
+        private static object AssetValue(ModAsset asset, Type expected, string path)
+        {
+            if (!asset.IsUnityObject)
+            {
+                return asset;
+            }
+            UnityEngine.Object uo = asset.unityObjectAddressable; // loads internal assets on demand, as the picker does
+            if (uo == null)
+            {
+                throw RpcException.InvalidParams($"'{path}': asset '{asset.name}' could not be loaded");
+            }
+            return expected == typeof(GameObject) && uo is Transform tr ? tr.gameObject : (object)uo;
         }
 
         private object FromAsset(ModAsset asset, Type expected, string path)
@@ -271,20 +328,7 @@ namespace PummelBridge.Game
             {
                 throw RpcException.InvalidParams($"'{path}': '{asset.name}' is deleted (missing)");
             }
-            object value;
-            if (!asset.IsUnityObject)
-            {
-                value = asset;
-            }
-            else
-            {
-                UnityEngine.Object uo = asset.unityObjectAddressable; // loads internal assets on demand, as the picker does
-                if (uo == null)
-                {
-                    throw RpcException.InvalidParams($"'{path}': asset '{asset.name}' could not be loaded");
-                }
-                value = expected == typeof(GameObject) && uo is Transform tr ? tr.gameObject : (object)uo;
-            }
+            object value = AssetValue(asset, expected, path);
             if (!expected.IsInstanceOfType(value))
             {
                 throw RpcException.InvalidParams($"'{path}': '{asset.name}' is a {ValueConverter.AssetTypeName(asset)} ({value.GetType().Name}), expected {expected.Name}");

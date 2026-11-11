@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using PummelBridge.Core;
 using UnityEngine;
 
@@ -13,11 +14,20 @@ namespace PummelBridge.Game
     /// </summary>
     internal static class UndoAccess
     {
-        public static EditorUndo HierarchyManager(EditorSystem ed) =>
-            GameReflection.RequireField(typeof(EditorSystem), "m_heirarchyUndoManager").GetValue(ed) as EditorUndo;
+        // Reflected members, resolved once (the undo watcher reads them every frame).
+        private static FieldInfo s_hierarchyField;
+        private static FieldInfo s_managerListField;
+        private static FieldInfo s_stackField;
 
-        public static IDictionary PrefabManagers(EditorSystem ed) =>
-            GameReflection.RequireField(typeof(EditorSystem), "m_undoManagerList").GetValue(ed) as IDictionary;
+        private static FieldInfo HierarchyField => s_hierarchyField ?? (s_hierarchyField = GameReflection.RequireField(typeof(EditorSystem), "m_heirarchyUndoManager"));
+
+        private static FieldInfo ManagerListField => s_managerListField ?? (s_managerListField = GameReflection.RequireField(typeof(EditorSystem), "m_undoManagerList"));
+
+        private static FieldInfo StackField => s_stackField ?? (s_stackField = GameReflection.RequireField(typeof(EditorUndo), "m_undoEventStack"));
+
+        public static EditorUndo HierarchyManager(EditorSystem ed) => HierarchyField.GetValue(ed) as EditorUndo;
+
+        public static IDictionary PrefabManagers(EditorSystem ed) => ManagerListField.GetValue(ed) as IDictionary;
 
         /// <summary>Count and top event identity of EditorUndo.m_undoEventStack (Stack&lt;BaseUndoEvent&gt;; Peek does not mutate).</summary>
         public static UndoStackState StackState(EditorUndo undo)
@@ -26,7 +36,7 @@ namespace PummelBridge.Game
             {
                 return default(UndoStackState);
             }
-            Stack<BaseUndoEvent> stack = GameReflection.RequireField(typeof(EditorUndo), "m_undoEventStack").GetValue(undo) as Stack<BaseUndoEvent>;
+            Stack<BaseUndoEvent> stack = StackField.GetValue(undo) as Stack<BaseUndoEvent>;
             if (stack == null || stack.Count == 0)
             {
                 return new UndoStackState(0, null);
@@ -44,11 +54,22 @@ namespace PummelBridge.Game
         /// <summary>All stacks of the open mod; null if the editor internals changed.</summary>
         public static UndoSignature Signature(EditorSystem ed)
         {
+            UndoSignature sig = new UndoSignature();
+            return Fill(ed, sig) ? sig : null;
+        }
+
+        /// <summary>
+        /// Refills <paramref name="sig"/> (cleared first) with the stacks of the open mod: no allocation per call apart from
+        /// the enumerator when prefab managers exist. False if the editor internals changed.
+        /// </summary>
+        public static bool Fill(EditorSystem ed, UndoSignature sig)
+        {
+            sig.Clear();
             try
             {
-                UndoSignature sig = new UndoSignature { Hierarchy = StackState(HierarchyManager(ed)) };
+                sig.Hierarchy = StackState(HierarchyManager(ed));
                 IDictionary map = PrefabManagers(ed);
-                if (map != null)
+                if (map != null && map.Count > 0)
                 {
                     foreach (DictionaryEntry e in map)
                     {
@@ -58,11 +79,11 @@ namespace PummelBridge.Game
                         }
                     }
                 }
-                return sig;
+                return true;
             }
             catch (RpcException)
             {
-                return null;
+                return false;
             }
         }
 

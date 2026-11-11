@@ -229,11 +229,12 @@ namespace PummelBridge.Tools
                 ResolvedTrigger r = Fresh(c);
                 ValueConverter conv = new ValueConverter(c.Mod, summarizeTriggers: false, maxDepth: 12);
                 JToken before = settings ? conv.Trigger(r.Trigger, 0) : null;
-                services.MarkEdit(c.Mod, what);
+                services.Observe();
                 Func<JObject> build = apply(r);
                 bool changed = settings
                     ? !JToken.DeepEquals(before, new ValueConverter(c.Mod, summarizeTriggers: false, maxDepth: 12).Trigger(r.Trigger, 0))
                     : EditCommon.SnapshotChanged(host);
+                services.MarkEditIfChanged(c.Mod, what, changed);
                 return new EditOutcome
                 {
                     Changed = changed,
@@ -534,7 +535,7 @@ namespace PummelBridge.Tools
             {
                 throw RpcException.InvalidParams($"unknown trigger type '{typeName}' (see list_trigger_types)");
             }
-            string why = LogicTriggerTypes.WhyNotOffered(tt.ToString(), (int)tt, modType);
+            string why = LogicTriggerTypes.WhyNotOffered(tt.ToString(), modType);
             if (why != null)
             {
                 throw RpcException.InvalidParams(why);
@@ -585,12 +586,14 @@ namespace PummelBridge.Tools
                 {
                     throw new RpcException(ErrorCodes.InvalidState, "the trigger list changed while the edit was waiting for the editor; nothing was changed");
                 }
-                services.MarkEdit(mod, "add_trigger");
+                services.Observe();
                 List<ModLogicTrigger> list = new List<ModLogicTrigger>(current) { trigger };
                 logic.Triggers = list.ToArray(); // ModLogicInspector: modLogic.Triggers = list.ToArray()
+                bool changed = EditCommon.SnapshotChanged(host);
+                services.MarkEditIfChanged(mod, "add_trigger", changed);
                 return new EditOutcome
                 {
-                    Changed = EditCommon.SnapshotChanged(host),
+                    Changed = changed,
                     Then = PostEditWait.AwaitPush,
                     BuildResult = report =>
                     {

@@ -156,6 +156,13 @@ namespace PummelBridge.Tests
             EditorSnapshot nullNames = GoodSnapshot();
             nullNames.ModName = null; nullNames.FolderName = null;
             Check("GUARD_NOT_TEST_MOD when names are unreadable", Code(true, true, g, null, nullNames) == ErrorCodes.GuardNotTestMod);
+            EditorSnapshot missingMember = GoodSnapshot();
+            missingMember.ModName = null; missingMember.ModNameError = "member PummelMod.m_metaData not found - game version changed?";
+            RpcException me = WriteGuardEvaluator.Evaluate(new WriteSafety(() => true, () => true, new FakeHost()), g, null, missingMember);
+            Check("unreadable name because of a missing game member: refused (fail closed) with a clear message",
+                me != null && me.Code == ErrorCodes.Internal && me.Message.Contains("game version changed"));
+            Check("same snapshot through the Lifecycle guard is refused too",
+                Code(true, true, WriteGuard.Lifecycle(a => "PB_TEST_x"), null, missingMember) != null);
 
             EditorSnapshot play = GoodSnapshot();
             play.IsEditing = false; play.StateName = "PlayMode";
@@ -337,6 +344,8 @@ namespace PummelBridge.Tests
                 public object Result;
                 public Exception Error;
                 public bool IsCancelled => false;
+                public bool TryCommit() => true;
+                public TimeSpan Remaining => TimeSpan.MaxValue;
                 public void SetResult(object result) { Result = result; Done.Set(); }
                 public void SetException(Exception error) { Error = error; Done.Set(); }
             }

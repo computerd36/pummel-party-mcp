@@ -248,7 +248,7 @@ namespace PummelBridge.Tools
                 {
                     parameters.Add(ActionParams.Describe(cls, f, fresh, conv));
                 }
-                string why = LogicTriggerTypes.WhyNotOffered(tt.ToString(), (int)tt, modType);
+                string why = LogicTriggerTypes.WhyNotOffered(tt.ToString(), modType);
                 JObject row = new JObject
                 {
                     ["type"] = tt.ToString(),

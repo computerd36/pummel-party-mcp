@@ -25,11 +25,20 @@ namespace PummelBridge.Safety
             "CreatePublishedFileUpdateRequest", "CommitPublishedFileUpdate", "DeletePublishedFile",
         };
 
-        public static List<BlockTarget> Build()
+        /// <summary>Targets in the loaded game assembly (the plugin passes <c>typeof(EditorSystem).Assembly</c>); Steamworks.NET is looked up by name.</summary>
+        public static List<BlockTarget> Build(Assembly game)
+        {
+            Assembly steam = FindSteamworks(out string steamProblem);
+            return Build(game, steam, steamProblem);
+        }
+
+        /// <summary>
+        /// Same, with both assemblies passed in (the offline drift test hands in reflection-only copies of the real
+        /// Assembly-CSharp.dll and com.rlabrecque.steamworks.net.dll). Nothing here executes game code or patches anything.
+        /// </summary>
+        public static List<BlockTarget> Build(Assembly game, Assembly steam, string steamProblem)
         {
             List<BlockTarget> list = new List<BlockTarget>();
-            Assembly game = typeof(EditorSystem).Assembly;
-            Assembly steam = FindSteamworks(out string steamProblem);
 
             // ---- game layer: all required ----
             Game(list, game, steam, "WorkshopModInstaller", "PublishItem");
@@ -45,10 +54,10 @@ namespace PummelBridge.Safety
 
             // ---- Steamworks.SteamUGC ----
             Type ugc = steam?.GetType("Steamworks.SteamUGC", false);
-            Exact(list, ugc, steam, steamProblem, "SteamUGC", true, "CreateItem", "Steamworks.AppId_t", "Steamworks.EWorkshopFileType");
-            Exact(list, ugc, steam, steamProblem, "SteamUGC", true, "StartItemUpdate", "Steamworks.AppId_t", "Steamworks.PublishedFileId_t");
-            Exact(list, ugc, steam, steamProblem, "SteamUGC", true, "SubmitItemUpdate", "Steamworks.UGCUpdateHandle_t", "System.String");
-            Exact(list, ugc, steam, steamProblem, "SteamUGC", true, "DeleteItem", "Steamworks.PublishedFileId_t");
+            Exact(list, game, ugc, steam, steamProblem, "SteamUGC", true, "CreateItem", "Steamworks.AppId_t", "Steamworks.EWorkshopFileType");
+            Exact(list, game, ugc, steam, steamProblem, "SteamUGC", true, "StartItemUpdate", "Steamworks.AppId_t", "Steamworks.PublishedFileId_t");
+            Exact(list, game, ugc, steam, steamProblem, "SteamUGC", true, "SubmitItemUpdate", "Steamworks.UGCUpdateHandle_t", "System.String");
+            Exact(list, game, ugc, steam, steamProblem, "SteamUGC", true, "DeleteItem", "Steamworks.PublishedFileId_t");
             if (ugc != null)
             {
                 Type updateHandle = steam.GetType("Steamworks.UGCUpdateHandle_t", false);
@@ -100,7 +109,7 @@ namespace PummelBridge.Safety
             list.Add(Resolve(t, method, paramTypes, game, steam, display, "game", true));
         }
 
-        private static void Exact(List<BlockTarget> list, Type t, Assembly steam, string steamProblem, string layer, bool required, string method, params string[] paramTypes)
+        private static void Exact(List<BlockTarget> list, Assembly game, Type t, Assembly steam, string steamProblem, string layer, bool required, string method, params string[] paramTypes)
         {
             string display = $"{layer}.{method}({string.Join(", ", paramTypes.Select(Short).ToArray())})";
             if (t == null)
@@ -108,7 +117,7 @@ namespace PummelBridge.Safety
                 list.Add(new BlockTarget { Name = display, Layer = layer, Required = required, Problem = steamProblem ?? $"type Steamworks.{layer} not found" });
                 return;
             }
-            list.Add(Resolve(t, method, paramTypes, typeof(EditorSystem).Assembly, steam, display, layer, required));
+            list.Add(Resolve(t, method, paramTypes, game, steam, display, layer, required));
         }
 
         private static BlockTarget Resolve(Type t, string method, string[] paramTypes, Assembly game, Assembly steam, string display, string layer, bool required)

@@ -7,13 +7,21 @@ namespace PummelBridge.Core
     /// <summary>
     /// Serialises write tools on the main thread: only one write tool body is active at a time; later ones wait in FIFO
     /// order and start (guard evaluated afresh) when the active one completes. A waiting entry whose caller gave up
-    /// (dispatcher timeout) is dropped without running. Bodies that span frames must eventually complete their
+    /// (dispatcher timeout) is dropped without running, and one with less than <see cref="MinStartBudget"/> left fails
+    /// with TIMEOUT without running. Bodies that span frames must eventually complete their
     /// completion, also when cancelled; as a safety net an active entry whose caller gave up is force-released after
     /// <see cref="StuckGrace"/>. Main thread only (no locking); pure, so it is unit-tested.
     /// </summary>
     public sealed class WriteQueue
     {
         public static readonly TimeSpan StuckGrace = TimeSpan.FromSeconds(10);
+
+        /// <summary>
+        /// A queued call with less time than this left until its deadline is failed with TIMEOUT instead of being started
+        /// (it never runs). Bodies that need more check their own budget at their commit point
+        /// (<see cref="WriteInvocation.Commit"/>, <see cref="EditPipeline"/>).
+        /// </summary>
+        public static readonly TimeSpan MinStartBudget = TimeSpan.FromSeconds(1);
 
         private readonly Queue<Entry> m_pending = new Queue<Entry>();
         private readonly Func<TimeSpan> m_clock;
@@ -79,6 +87,15 @@ namespace PummelBridge.Core
                     {
                         continue; // caller already got TIMEOUT; never run it
                     }
+                    TimeSpan left = next.Inner.Remaining;
+                    if (left < MinStartBudget)
+                    {
+                        // Waited too long behind other writes: fail before the guard or body touches anything.
+                        next.Inner.SetException(new RpcException(ErrorCodes.Timeout,
+                            $"the call waited in the write queue behind other write calls and could not start within its time limit ({Math.Max(0, left.TotalSeconds):0.#} s left); " +
+                            "it was not started and nothing was changed (safe to retry)"));
+                        continue;
+                    }
                     m_active = next;
                     try
                     {
@@ -124,6 +141,10 @@ namespace PummelBridge.Core
             }
 
             public bool IsCancelled => Inner.IsCancelled;
+
+            public bool TryCommit() => !m_done && Inner.TryCommit();
+
+            public TimeSpan Remaining => Inner.Remaining;
 
             public TimeSpan CancelSeenAt(TimeSpan now)
             {

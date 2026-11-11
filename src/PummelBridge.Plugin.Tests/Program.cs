@@ -64,6 +64,48 @@ namespace PummelBridge.Tests
                 string t3 = TokenAuth.LoadOrCreate(path, out bool created3);
                 Check("malformed token file is regenerated", created3 && t3 != t1 && TokenAuth.IsWellFormed(t3));
                 Check("two generated tokens differ", TokenAuth.Generate() != TokenAuth.Generate());
+                Check("no temp files left behind after create/regenerate", Directory.GetFiles(dir).Length == 1);
+                File.WriteAllText(path, t3);
+                DateTime stamp = File.GetLastWriteTimeUtc(path);
+                Thread.Sleep(30);
+                TokenAuth.LoadOrCreate(path, out bool createdAgain);
+                Check("a valid token file is not rewritten", !createdAgain && File.GetLastWriteTimeUtc(path) == stamp && File.ReadAllText(path) == t3);
+
+                // Two (here: eight) starters at once on a fresh path: exactly one creates the file, all use the same token,
+                // and the file always holds one complete token.
+                string racePath = Path.Combine(dir, "race", "PummelBridge.token");
+                string[] tokens = new string[8];
+                bool[] createdFlags = new bool[8];
+                using (Barrier gate = new Barrier(8))
+                {
+                    Task[] racers = Enumerable.Range(0, 8).Select(i => Task.Run(() =>
+                    {
+                        gate.SignalAndWait();
+                        tokens[i] = TokenAuth.LoadOrCreate(racePath, out createdFlags[i]);
+                    })).ToArray();
+                    Task.WaitAll(racers);
+                }
+                Check("concurrent first starts: one creator, one shared well-formed token",
+                    createdFlags.Count(c => c) == 1 && tokens.Distinct().Count() == 1 && TokenAuth.IsWellFormed(tokens[0]) && File.ReadAllText(racePath) == tokens[0]);
+                Check("concurrent first starts leave no temp files", Directory.GetFiles(Path.GetDirectoryName(racePath)).Length == 1);
+
+                // Same race, but over a malformed file (replace path): everybody ends with a well-formed token that matches the
+                // file once the dust settles; no temp files remain.
+                string badPath = Path.Combine(dir, "bad", "PummelBridge.token");
+                Directory.CreateDirectory(Path.GetDirectoryName(badPath));
+                File.WriteAllText(badPath, "garbage");
+                string[] badTokens = new string[6];
+                using (Barrier gate = new Barrier(6))
+                {
+                    Task[] racers = Enumerable.Range(0, 6).Select(i => Task.Run(() =>
+                    {
+                        gate.SignalAndWait();
+                        badTokens[i] = TokenAuth.LoadOrCreate(badPath, out bool _);
+                    })).ToArray();
+                    Task.WaitAll(racers);
+                }
+                Check("concurrent starts over a malformed file: all tokens well-formed, file complete, no temp files",
+                    badTokens.All(TokenAuth.IsWellFormed) && TokenAuth.IsWellFormed(File.ReadAllText(badPath)) && Directory.GetFiles(Path.GetDirectoryName(badPath)).Length == 1);
             }
             finally
             {
@@ -302,6 +344,7 @@ namespace PummelBridge.Tests
             Check("dispatch works again after a timeout", r.Status == 200 && r.Ok == true, r);
 
             server.Stop();
+            SlowConnectionTests(handler);
             bool refusedAfterStop;
             try
             {
@@ -328,6 +371,83 @@ namespace PummelBridge.Tests
                 shutdownRejects = true;
             }
             Check("dispatcher rejects work after Shutdown()", shutdownRejects);
+        }
+
+        /// <summary>Absolute request deadline (not per read): drip-feeding clients are cut off; normal requests keep working.</summary>
+        private static void SlowConnectionTests(RpcHandler handler)
+        {
+            Console.WriteLine("-- slow connections (2 s deadline server)");
+            BridgeHttpServer slow = new BridgeHttpServer(new BridgeHttpServerOptions
+            {
+                Port = 0, Token = s_token, MaxConcurrentRequests = 8, IoTimeout = TimeSpan.FromSeconds(2),
+            }, handler.Handle, NullBridgeLog.Instance);
+            slow.Start();
+            int savedPort = s_port;
+            s_port = slow.Port;
+            try
+            {
+                byte[] head = BuildHead("POST", "/rpc", "application/json", 1000, s_token, "127.0.0.1:" + s_port, null);
+                int drippers = 4;
+                TcpClient[] clients = new TcpClient[drippers];
+                Task<double>[] closedAfter = new Task<double>[drippers];
+                for (int i = 0; i < drippers; i++)
+                {
+                    TcpClient c = new TcpClient();
+                    c.Connect("127.0.0.1", s_port);
+                    clients[i] = c;
+                    // headers complete, then the 1000-byte body arrives one byte every 200 ms: every single read is well within
+                    // any per-read timeout, only an absolute deadline can stop it.
+                    closedAfter[i] = Task.Run(() => DripUntilClosed(c, head));
+                }
+                Thread.Sleep(500);
+                Stopwatch sw = Stopwatch.StartNew();
+                Resp normal = Send("POST", "/rpc", "{\"method\":\"ping\",\"params\":{}}");
+                Check($"a normal request works while {drippers} slow ones are open ({sw.ElapsedMilliseconds} ms)", normal.Status == 200 && normal.Ok == true, normal);
+                Task.WaitAll(closedAfter, TimeSpan.FromSeconds(8));
+                bool allClosed = closedAfter.All(t => t.IsCompleted);
+                double min = allClosed ? closedAfter.Min(t => t.Result) : -1;
+                double max = allClosed ? closedAfter.Max(t => t.Result) : -1;
+                Check($"drip-fed connections are closed at the 2 s deadline (closed after {min:0.0}-{max:0.0} s)", allClosed && min >= 1.5 && max < 4.5);
+                foreach (TcpClient c in clients)
+                {
+                    c.Close();
+                }
+                Resp after = Send("POST", "/rpc", "{\"method\":\"ping\",\"params\":{}}");
+                Check("server still serves after the slow connections were dropped", after.Status == 200 && after.Ok == true, after);
+            }
+            finally
+            {
+                s_port = savedPort;
+                slow.Stop();
+            }
+        }
+
+        /// <summary>Sends the head, then one body byte per 200 ms until the server closes the connection; returns seconds until closed.</summary>
+        private static double DripUntilClosed(TcpClient c, byte[] head)
+        {
+            Stopwatch sw = Stopwatch.StartNew();
+            NetworkStream s = c.GetStream();
+            s.ReadTimeout = 6000;
+            try
+            {
+                s.Write(head, 0, head.Length);
+                for (int i = 0; i < 40; i++)
+                {
+                    Thread.Sleep(200);
+                    if (c.Client.Poll(0, SelectMode.SelectRead) && c.Available == 0)
+                    {
+                        break; // peer closed
+                    }
+                    s.WriteByte((byte)'x');
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (SocketException)
+            {
+            }
+            return sw.Elapsed.TotalSeconds;
         }
 
         // ------------------------------------------------------------------ helpers

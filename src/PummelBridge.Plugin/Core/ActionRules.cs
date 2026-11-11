@@ -511,22 +511,24 @@ namespace PummelBridge.Core
     /// <summary>ModLogicInspector's "Event" dropdown: ModTriggerType values minus the per-mod-type hide list.</summary>
     public static class LogicTriggerTypes
     {
-        private static readonly int[] s_minigameHidden = { 0, 112 };          // None, BoardSpace
-        private static readonly int[] s_boardHidden = { 0, 112, 64, 80, 128, 144 }; // + Hit, WeaponHit, RoundStart, RoundEnd
+        // Matched by ModTriggerType member name (not by numeric value), so a renumbered enum cannot hide the wrong types.
+        private static readonly string[] s_minigameHidden = { "None", "BoardSpace" };
+        private static readonly string[] s_boardHidden = { "None", "BoardSpace", "Hit", "WeaponHit", "RoundStart", "RoundEnd" };
 
-        public static int[] Hidden(string modType) => modType == "Board" ? s_boardHidden : s_minigameHidden;
+        public static string[] Hidden(string modType) => modType == "Board" ? s_boardHidden : s_minigameHidden;
 
-        public static string WhyNotOffered(string typeName, int value, string modType)
+        /// <param name="typeName">The ModTriggerType member name (<c>enumValue.ToString()</c>).</param>
+        public static string WhyNotOffered(string typeName, string modType)
         {
-            if (Array.IndexOf(Hidden(modType), value) < 0)
+            if (Array.IndexOf(Hidden(modType), typeName) < 0)
             {
                 return null;
             }
-            if (value == 0)
+            if (typeName == "None")
             {
                 return "None is not offered by the Logic component's Event dropdown";
             }
-            if (value == 112)
+            if (typeName == "BoardSpace")
             {
                 return "BoardSpace triggers exist only on Board Space Event components; the Event dropdown does not offer them";
             }

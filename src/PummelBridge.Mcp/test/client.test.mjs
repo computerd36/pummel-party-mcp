@@ -162,6 +162,7 @@ test("new error codes map to hints", async () => {
     GUARD_NOT_TEST_MOD: /do not retry with a different name/,
     INVALID_STATE: /required state/,
     ALREADY_EXISTS: /already exists/,
+    TIMEOUT: /safe to retry.*check get_status and list_mods, do not retry blindly/s,
   };
   try {
     const c = new BridgeClient({ port: fake.port, tokenFile: tf });

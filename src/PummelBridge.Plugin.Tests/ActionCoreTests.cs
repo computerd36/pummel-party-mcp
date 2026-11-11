@@ -206,10 +206,10 @@ namespace PummelBridge.Tests
                 && CallSites.WhySlotHidden("ModItem", "OnDropTrigger", item("Worn")) == null);
             Check("other components: always shown", CallSites.WhySlotHidden("ModLogic", "Triggers", _ => null) == null);
 
-            Check("Logic dropdown: minigame hides None/BoardSpace only", LogicTriggerTypes.WhyNotOffered("Hit", 64, "Minigame") == null
-                && LogicTriggerTypes.WhyNotOffered("None", 0, "Minigame") != null && LogicTriggerTypes.WhyNotOffered("BoardSpace", 112, "Minigame") != null);
-            Check("Logic dropdown: board hides Hit/WeaponHit/RoundStart/RoundEnd", new[] { 64, 80, 128, 144 }.All(v => LogicTriggerTypes.WhyNotOffered("X", v, "Board") != null)
-                && LogicTriggerTypes.WhyNotOffered("Timer", 96, "Board") == null);
+            Check("Logic dropdown: minigame hides None/BoardSpace only", LogicTriggerTypes.WhyNotOffered("Hit", "Minigame") == null
+                && LogicTriggerTypes.WhyNotOffered("None", "Minigame") != null && LogicTriggerTypes.WhyNotOffered("BoardSpace", "Minigame") != null);
+            Check("Logic dropdown: board hides Hit/WeaponHit/RoundStart/RoundEnd", new[] { "Hit", "WeaponHit", "RoundStart", "RoundEnd" }.All(v => LogicTriggerTypes.WhyNotOffered(v, "Board") != null)
+                && LogicTriggerTypes.WhyNotOffered("Timer", "Board") == null);
         }
 
         // ================================================================== target flags

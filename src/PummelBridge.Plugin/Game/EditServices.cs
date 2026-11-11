@@ -14,6 +14,9 @@ namespace PummelBridge.Game
         public EditTracker Tracker { get; } = new EditTracker();
         public IBridgeLog Log { get; }
 
+        /// <summary>Reused every frame by <see cref="Observe"/> (the tracker copies what it keeps).</summary>
+        private readonly UndoSignature m_scratch = new UndoSignature();
+
         public EditServices(FramePoller poller, IBridgeLog log)
         {
             Poller = poller;
@@ -32,7 +35,7 @@ namespace PummelBridge.Game
                     Tracker.Observe(null, false, null);
                     return;
                 }
-                Tracker.Observe(mod, mod.IsLoaded && !ed.IsLoading, UndoAccess.Signature(ed));
+                Tracker.Observe(mod, mod.IsLoaded && !ed.IsLoading, UndoAccess.Fill(ed, m_scratch) ? m_scratch : null);
             }
             catch (Exception e)
             {
@@ -57,6 +60,13 @@ namespace PummelBridge.Game
         {
             Observe();
             Tracker.MarkBridgeEdit(mod, what);
+        }
+
+        /// <summary>Marks a bridge edit only when the edit actually changed something (a no-op must not look like an unsaved edit).</summary>
+        public void MarkEditIfChanged(PummelMod mod, string what, bool changed)
+        {
+            Observe();
+            Tracker.MarkBridgeEditIfChanged(mod, what, changed);
         }
 
         /// <summary>

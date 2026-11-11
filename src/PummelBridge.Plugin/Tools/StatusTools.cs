@@ -14,7 +14,8 @@ namespace PummelBridge.Tools
 
         public static readonly string[] Capabilities = { "read", "write", "edit", "actions" };
 
-        public static void Register(ToolRegistry registry, BridgeRuntimeInfo info, Func<bool> writesEnabled, PublishBlockStatus publishBlock, EditServices services)
+        /// <param name="publishBlock">Live publish-block status (re-verifies the required prefixes on every call).</param>
+        public static void Register(ToolRegistry registry, BridgeRuntimeInfo info, Func<bool> writesEnabled, Func<PublishBlockStatus> publishBlock, EditServices services)
         {
             s_services = services;
             // Answered on the HTTP thread from values cached at startup: works with the editor closed and even
@@ -35,12 +36,13 @@ namespace PummelBridge.Tools
                 JObject status = GetStatus();
                 status["capabilities"] = new JArray(Capabilities);
                 status["writesEnabled"] = writesEnabled();
+                PublishBlockStatus block = publishBlock();
                 status["publishBlock"] = new JObject
                 {
-                    ["active"] = publishBlock.Active,
-                    ["complete"] = publishBlock.Complete,
-                    ["patchedCount"] = publishBlock.PatchedCount,
-                    ["missing"] = new JArray(publishBlock.Missing.ToArray()),
+                    ["active"] = block.Active,
+                    ["complete"] = block.Complete,
+                    ["patchedCount"] = block.PatchedCount,
+                    ["missing"] = new JArray(block.Missing.ToArray()),
                 };
                 return status;
             })));

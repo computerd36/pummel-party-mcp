@@ -26,6 +26,13 @@ namespace PummelBridge.Core
 
         /// <summary>Key = prefab object (reference identity).</summary>
         public readonly Dictionary<object, UndoStackState> Prefabs = new Dictionary<object, UndoStackState>(ReferenceKeyComparer.Instance);
+
+        /// <summary>Empties the signature so one instance can be refilled every frame without allocating.</summary>
+        public void Clear()
+        {
+            Hierarchy = default(UndoStackState);
+            Prefabs.Clear();
+        }
     }
 
     /// <summary>
@@ -134,6 +141,15 @@ namespace PummelBridge.Core
             if (mod != null && ReferenceEquals(mod, m_mod))
             {
                 MarkDirty("bridge: " + what);
+            }
+        }
+
+        /// <summary>Like <see cref="MarkBridgeEdit"/>, but only when the edit actually changed something (a no-op leaves the tracker clean).</summary>
+        public void MarkBridgeEditIfChanged(object mod, string what, bool changed)
+        {
+            if (changed)
+            {
+                MarkBridgeEdit(mod, what);
             }
         }
 

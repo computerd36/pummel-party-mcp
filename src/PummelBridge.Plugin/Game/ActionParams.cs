@@ -485,9 +485,9 @@ namespace PummelBridge.Game
         public static ComplexValue ReadComplex(object inst, bool integer)
         {
             Type t = inst.GetType();
-            object vt = t.GetField("valueType").GetValue(inst);
-            object min = t.GetField("min").GetValue(inst);
-            object max = t.GetField("max").GetValue(inst);
+            object vt = ComplexField(t, "valueType").GetValue(inst);
+            object min = ComplexField(t, "min").GetValue(inst);
+            object max = ComplexField(t, "max").GetValue(inst);
             return new ComplexValue
             {
                 ValueType = vt.ToString(),
@@ -499,18 +499,25 @@ namespace PummelBridge.Game
         private static void WriteComplex(object inst, ComplexValue v, bool integer)
         {
             Type t = inst.GetType();
-            t.GetField("valueType").SetValue(inst, Enum.Parse(typeof(ComplexValueType), v.ValueType));
+            FieldInfo valueType = ComplexField(t, "valueType");
+            FieldInfo min = ComplexField(t, "min");
+            FieldInfo max = ComplexField(t, "max");
+            valueType.SetValue(inst, Enum.Parse(typeof(ComplexValueType), v.ValueType));
             if (integer)
             {
-                t.GetField("min").SetValue(inst, (int)v.Min);
-                t.GetField("max").SetValue(inst, (int)v.Max);
+                min.SetValue(inst, (int)v.Min);
+                max.SetValue(inst, (int)v.Max);
             }
             else
             {
-                t.GetField("min").SetValue(inst, (float)v.Min);
-                t.GetField("max").SetValue(inst, (float)v.Max);
+                min.SetValue(inst, (float)v.Min);
+                max.SetValue(inst, (float)v.Max);
             }
         }
+
+        /// <summary>Public instance field of a complex-value type; a missing member (game update) names itself instead of a bare NullReferenceException.</summary>
+        private static FieldInfo ComplexField(Type t, string name) =>
+            t.GetField(name) ?? throw RpcException.Internal(GameReflection.MissingMessage(t, name));
 
         // ================================================================== popup choices
 

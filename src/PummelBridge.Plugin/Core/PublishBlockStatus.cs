@@ -2,7 +2,7 @@ using System.Collections.Generic;
 
 namespace PummelBridge.Core
 {
-    /// <summary>Outcome of installing the Workshop publish blocklist (immutable after startup).</summary>
+    /// <summary>Outcome of installing the Workshop publish blocklist (immutable; Safety/PublishBlockMonitor produces a new, incomplete one if a prefix is later removed).</summary>
     public sealed class PublishBlockStatus
     {
         public static readonly PublishBlockStatus NotApplied = new PublishBlockStatus(false, false, 0, new string[0]);

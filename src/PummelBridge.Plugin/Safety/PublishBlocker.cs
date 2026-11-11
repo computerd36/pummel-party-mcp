@@ -26,7 +26,7 @@ namespace PummelBridge.Safety
     /// <summary>
     /// Installs Harmony prefixes that skip the original method and return a safe default. Unity-free and
     /// Steamworks-free (the target list is built elsewhere), so the mechanism can be tested on stand-in methods.
-    /// Patches are never removed.
+    /// Patches are never removed by the plugin; <see cref="PublishBlockMonitor"/> notices when someone else removes them.
     /// </summary>
     public static class PublishBlocker
     {
@@ -128,12 +128,17 @@ namespace PummelBridge.Safety
             HarmonyMethod hm = new HarmonyMethod(prefix) { priority = Priority.Last };
             harmony.Patch(method, prefix: hm);
 
-            Patches info = Harmony.GetPatchInfo(method);
-            bool registered = info != null && info.Prefixes.Any(p => p.owner == harmony.Id && p.PatchMethod == prefix);
-            if (!registered)
+            if (!HasBlockingPrefix(method, harmony.Id))
             {
                 throw new InvalidOperationException("Harmony did not register the prefix");
             }
+        }
+
+        /// <summary>The method currently carries one of this blocker's prefixes installed under <paramref name="harmonyId"/> (Harmony patch info).</summary>
+        public static bool HasBlockingPrefix(MethodBase method, string harmonyId)
+        {
+            Patches info = Harmony.GetPatchInfo(method);
+            return info != null && info.Prefixes.Any(p => p.owner == harmonyId && (p.PatchMethod == s_prefixVoid || p.PatchMethod == s_prefixResult));
         }
 
         /// <summary>Prefix for void methods (and constructors): skip the original.</summary>

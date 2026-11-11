@@ -14,7 +14,26 @@ namespace PummelBridge.Game
         private const BindingFlags AnyInstance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         private const BindingFlags AnyStatic = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
 
-        private static readonly ConcurrentDictionary<string, FieldInfo> s_fields = new ConcurrentDictionary<string, FieldInfo>();
+        /// <summary>Cache key without string concatenation (this is looked up every frame by the undo watcher).</summary>
+        private struct FieldKey : IEquatable<FieldKey>
+        {
+            private readonly Type m_type;
+            private readonly string m_name;
+
+            public FieldKey(Type type, string name)
+            {
+                m_type = type;
+                m_name = name;
+            }
+
+            public bool Equals(FieldKey other) => ReferenceEquals(m_type, other.m_type) && string.Equals(m_name, other.m_name, StringComparison.Ordinal);
+
+            public override bool Equals(object obj) => obj is FieldKey k && Equals(k);
+
+            public override int GetHashCode() => (m_type == null ? 0 : m_type.GetHashCode() * 397) ^ (m_name == null ? 0 : m_name.GetHashCode());
+        }
+
+        private static readonly ConcurrentDictionary<FieldKey, FieldInfo> s_fields = new ConcurrentDictionary<FieldKey, FieldInfo>();
         private static readonly ConcurrentDictionary<string, bool> s_warned = new ConcurrentDictionary<string, bool>();
 
         public static IBridgeLog Log = NullBridgeLog.Instance;
@@ -25,24 +44,30 @@ namespace PummelBridge.Game
         /// <summary>Instance or static field declared on <paramref name="type"/> or a base type; null if missing.</summary>
         public static FieldInfo FindField(Type type, string name)
         {
-            string key = type.FullName + "::" + name;
-            FieldInfo cached = s_fields.GetOrAdd(key, _ =>
+            FieldKey key = new FieldKey(type, name);
+            if (!s_fields.TryGetValue(key, out FieldInfo cached))
             {
-                for (Type t = type; t != null; t = t.BaseType)
-                {
-                    FieldInfo f = t.GetField(name, AnyInstance | AnyStatic | BindingFlags.DeclaredOnly);
-                    if (f != null)
-                    {
-                        return f;
-                    }
-                }
-                return null;
-            });
+                cached = LookupField(type, name);
+                s_fields[key] = cached;
+            }
             if (cached == null)
             {
-                WarnOnce(key, MissingMessage(type, name));
+                WarnOnce(type.FullName + "::" + name, MissingMessage(type, name)); // only on the (rare) failure path
             }
             return cached;
+        }
+
+        private static FieldInfo LookupField(Type type, string name)
+        {
+            for (Type t = type; t != null; t = t.BaseType)
+            {
+                FieldInfo f = t.GetField(name, AnyInstance | AnyStatic | BindingFlags.DeclaredOnly);
+                if (f != null)
+                {
+                    return f;
+                }
+            }
+            return null;
         }
 
         public static FieldInfo RequireField(Type type, string name)

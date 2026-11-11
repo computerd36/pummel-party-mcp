@@ -403,7 +403,7 @@ namespace PummelBridge.Tools
                         }
                     }
                 }
-                services.MarkEdit(mod, "set_property");
+                services.Observe();
                 List<string> done = new List<string>();
                 foreach (PreparedValue pv in prepared)
                 {
@@ -413,14 +413,17 @@ namespace PummelBridge.Tools
                     }
                     catch (RpcException e)
                     {
+                        services.MarkEditIfChanged(mod, "set_property", done.Count > 0); // earlier setters of this call took effect
                         throw new RpcException(e.Code, done.Count == 0 ? e.Message
                             : $"{e.Message}; already set in this call: {string.Join(", ", done.ToArray())} (one undo reverts them)");
                     }
                     done.Add(pv.Name);
                 }
+                bool changed = EditCommon.SnapshotChanged(host);
+                services.MarkEditIfChanged(mod, "set_property", changed);
                 return new EditOutcome
                 {
-                    Changed = EditCommon.SnapshotChanged(host),
+                    Changed = changed,
                     Then = PostEditWait.AwaitPush,
                     BuildResult = report =>
                     {

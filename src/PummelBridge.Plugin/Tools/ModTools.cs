@@ -18,6 +18,15 @@ namespace PummelBridge.Tools
         /// <summary>Dispatcher limit for create/open: a little above <see cref="LoadTimeout"/> so the tool's own TIMEOUT message wins.</summary>
         private static readonly TimeSpan DispatchTimeout = TimeSpan.FromSeconds(35);
 
+        /// <summary>Create/open refuse to start (TIMEOUT, nothing changed) with less than this left until the deadline.</summary>
+        private static readonly TimeSpan MinLoadBudget = TimeSpan.FromSeconds(10);
+
+        /// <summary>The load wait ends this long before the deadline, so the tool's own reply wins.</summary>
+        private static readonly TimeSpan LoadReplyMargin = TimeSpan.FromSeconds(1);
+
+        /// <summary>save_mod refuses to start (TIMEOUT, nothing saved) with less than this left until the deadline.</summary>
+        private static readonly TimeSpan SaveBudget = TimeSpan.FromSeconds(1);
+
         /// <summary>A create/open is waiting for its load (main thread only). Other writes refuse meanwhile.</summary>
         private static bool s_lifecyclePending;
 
@@ -154,6 +163,7 @@ namespace PummelBridge.Tools
             // Listed BEFORE CreateNewMod (the popup does it after): CreateNewMod -> SaveCurrentMod(delayed) ->
             // UpdateLoadedModLastModifiedTime looks the mod up by name and, if it is missing, inserts an entry with a
             // null name that later breaks the list's Sort / DoesModWithNameAlreadyExist.
+            TimeSpan loadLimit = CommitLifecycle(inv);
             EditorAvailableMod entry = new EditorAvailableMod(args.Name, args.Name, args.Type, DateTime.Now);
             manager.AddAvailableMod(entry);
             try
@@ -178,7 +188,7 @@ namespace PummelBridge.Tools
             string workshopFile = Path.Combine(path, "Data", "WorkshopItem.json");
 
             // The empty-mod load is synchronous, but the files are written by a delayed save one or more frames later.
-            WaitForLoad(inv, poller, pm, extraReady: () => File.Exists(metaFile) && File.Exists(workshopFile), onReady: () =>
+            WaitForLoad(inv, poller, pm, loadLimit, "was created", extraReady: () => File.Exists(metaFile) && File.Exists(workshopFile), onReady: () =>
             {
                 if (!string.Equals(EditorAccess.ModFolderName(pm), args.Name, StringComparison.Ordinal) || !TestModName.IsValid(EditorAccess.ModName(pm)))
                 {
@@ -249,6 +259,7 @@ namespace PummelBridge.Tools
 
             // Same call the Open Mod dialog ends in (OpenModWithPopupPrompt -> OpenMod) without its unsaved-changes
             // popup, which CheckCanSwitchAway replaces.
+            TimeSpan loadLimit = CommitLifecycle(inv);
             ed.OpenMod(folder);
             PummelMod pm = ed.CurrentMod;
             if (pm == null)
@@ -256,7 +267,7 @@ namespace PummelBridge.Tools
                 throw RpcException.Internal("OpenMod did not set the current mod");
             }
             log.Info($"open_test_mod: opening '{args.Name}'");
-            WaitForLoad(inv, poller, pm, extraReady: null, onReady: () =>
+            WaitForLoad(inv, poller, pm, loadLimit, "is being opened", extraReady: null, onReady: () =>
             {
                 if (!TestModName.IsValid(EditorAccess.ModName(pm)) || !TestModName.IsValid(EditorAccess.ModFolderName(pm)))
                 {
@@ -278,6 +289,7 @@ namespace PummelBridge.Tools
             PummelMod mod = ed.CurrentMod; // guard: loaded test mod, not loading, state Editing
             EditorAvailableModManager manager = ed.GetAvailableModManager();
             RefuseIfBrokenModList(manager);
+            inv.Commit(SaveBudget); // TIMEOUT (nothing saved) if the caller gave up or too little time is left
             EnsureListed(manager, mod);
             GameEditorGuardHost.EnforceDefaultWorkshopId(mod, log);
 
@@ -301,10 +313,22 @@ namespace PummelBridge.Tools
         // ------------------------------------------------------------------ helpers
 
         /// <summary>
-        /// Completes the invocation from a later frame once <paramref name="pm"/> is the loaded current mod (and
-        /// <paramref name="extraReady"/> holds), or fails it on load failure / after <see cref="LoadTimeout"/>.
+        /// Commit point of create/open (right before the first change): needs <see cref="MinLoadBudget"/> left until the
+        /// caller's deadline, else TIMEOUT with nothing changed. Returns the load limit: <see cref="LoadTimeout"/>, shortened
+        /// so the tool's own reply is sent before the deadline when the call waited in the write queue.
         /// </summary>
-        private static void WaitForLoad(WriteInvocation inv, FramePoller poller, PummelMod pm, Func<bool> extraReady, Func<JObject> onReady)
+        private static TimeSpan CommitLifecycle(WriteInvocation inv)
+        {
+            inv.Commit(MinLoadBudget);
+            TimeSpan left = inv.Completion.Remaining - LoadReplyMargin;
+            return left < LoadTimeout ? left : LoadTimeout;
+        }
+
+        /// <summary>
+        /// Completes the invocation from a later frame once <paramref name="pm"/> is the loaded current mod (and
+        /// <paramref name="extraReady"/> holds), or fails it on load failure / after <paramref name="limit"/>.
+        /// </summary>
+        private static void WaitForLoad(WriteInvocation inv, FramePoller poller, PummelMod pm, TimeSpan limit, string what, Func<bool> extraReady, Func<JObject> onReady)
         {
             Stopwatch sw = Stopwatch.StartNew();
             s_lifecyclePending = true;
@@ -312,11 +336,8 @@ namespace PummelBridge.Tools
             {
                 try
                 {
-                    if (inv.Completion.IsCancelled)
-                    {
-                        s_lifecyclePending = false;
-                        return true;
-                    }
+                    // No cancel branch: CommitLifecycle committed before the load started, and a committed call can no
+                    // longer be cancelled by the dispatcher (see IWorkCompletion.TryCommit), so IsCancelled is never true here.
                     EditorSystem ed = EditorAccess.EditorOrNull();
                     if (ed == null)
                     {
@@ -326,6 +347,11 @@ namespace PummelBridge.Tools
                     {
                         if (ed.CurrentMod != pm)
                         {
+                            if (ed.CurrentMod != null)
+                            {
+                                return Finish(inv, new RpcException(ErrorCodes.InvalidState,
+                                    "the open mod changed while waiting for the load (another mod was opened by hand); check get_status"));
+                            }
                             return Finish(inv, RpcException.Internal($"the mod failed to load ({pm.lastResult}); see the editor's popup and get_log"));
                         }
                         if (pm.IsLoaded && (extraReady == null || extraReady()))
@@ -335,10 +361,10 @@ namespace PummelBridge.Tools
                             return true;
                         }
                     }
-                    if (sw.Elapsed >= LoadTimeout)
+                    if (sw.Elapsed >= limit)
                     {
                         return Finish(inv, new RpcException(ErrorCodes.Timeout,
-                            $"the mod did not finish loading within {LoadTimeout.TotalSeconds:0} s (it may still finish; check get_status)"));
+                            $"the mod {what}, but it did not finish loading within {limit.TotalSeconds:0} s (it may still finish; check get_status before retrying)"));
                     }
                     return false;
                 }

@@ -33,6 +33,10 @@ namespace PummelBridge.Game
                 snap.ModOpen = true;
                 snap.ModLoaded = mod.IsLoaded;
                 snap.ModName = EditorAccess.ModName(mod);
+                if (snap.ModName == null && GameReflection.FindField(typeof(PummelMod), "m_metaData") == null)
+                {
+                    snap.ModNameError = GameReflection.MissingMessage(typeof(PummelMod), "m_metaData");
+                }
                 snap.FolderName = EditorAccess.ModFolderName(mod);
             }
             return snap;

@@ -10,7 +10,11 @@ namespace PummelBridge.Tools
     /// <summary>Helpers shared by the object/component edit tools. Main thread unless noted.</summary>
     internal static class EditCommon
     {
-        /// <summary>Edit tools: queueing + selection/baseline wait + edit + push wait.</summary>
+        /// <summary>
+        /// Edit tools: queueing + selection/baseline wait + edit + push wait. The pipeline applies an edit only with at least
+        /// its CommitReserve (push wait + margin) left, so a committed call normally replies within this limit; the
+        /// dispatcher's commit grace (4 s) covers frame stalls and stays below the MCP server's 20 s request timeout.
+        /// </summary>
         public static readonly TimeSpan EditTimeout = TimeSpan.FromSeconds(15);
 
         public static readonly ValueTypeDesc Vector3Desc = ValueTypeDesc.Simple(ValueKind.Vector3, "Vector3");

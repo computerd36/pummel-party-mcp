@@ -73,7 +73,7 @@ namespace PummelBridge
             m_logHooked = true;
 
             // 1. Publish block first, before anything else can run. Never removed at runtime.
-            PublishBlockStatus block = InstallPublishBlock(log);
+            PublishBlockMonitor block = InstallPublishBlock(log);
 
             // 2. RPC server (optional).
             if (!m_config.ServerEnabled)
@@ -102,10 +102,10 @@ namespace PummelBridge
                 m_edit = new EditServices(m_poller, log);
                 InstallSaveWatch(log);
                 BridgeConfig config = m_config;
-                WriteSafety safety = new WriteSafety(() => config.EnableWrites, () => block.Complete, new GameEditorGuardHost(log));
+                WriteSafety safety = new WriteSafety(() => config.EnableWrites, block.IsComplete, new GameEditorGuardHost(log));
                 ToolRegistry registry = new ToolRegistry(safety, new WriteQueue(log));
                 m_registry = registry;
-                StatusTools.Register(registry, info, () => config.EnableWrites, block, m_edit);
+                StatusTools.Register(registry, info, () => config.EnableWrites, block.Current, m_edit);
                 HierarchyTools.Register(registry);
                 ObjectTools.Register(registry);
                 ActionTools.Register(registry);
@@ -121,21 +121,41 @@ namespace PummelBridge
                 m_server = new BridgeHttpServer(new BridgeHttpServerOptions { Port = m_config.Port, Token = token }, handler.Handle, log);
                 m_server.Start();
                 Logger.LogInfo($"Listening on http://127.0.0.1:{m_server.Port}/rpc ({string.Join(", ", new System.Collections.Generic.List<string>(registry.Names).ToArray())}); " +
-                               $"writes {(m_config.EnableWrites ? "enabled" : "disabled")}, publish block {(block.Complete ? "complete" : "INCOMPLETE")}");
+                               $"writes {(m_config.EnableWrites ? "enabled" : "disabled")}, publish block {(block.IsComplete() ? "complete" : "INCOMPLETE")}");
             }
             catch (Exception e)
             {
-                Logger.LogError($"Failed to start the RPC server on 127.0.0.1:{m_config.Port}: {e.GetType().Name}: {e.Message}");
-                m_server = null;
+                Logger.LogError($"Failed to start the RPC server on 127.0.0.1:{m_config.Port} (port in use?): {e.GetType().Name}: {e.Message}. " +
+                                "The bridge is idle: no tools are served and no per-frame work runs. The Workshop publish block stays active.");
+                StopBridgeServices();
             }
         }
 
-        private PublishBlockStatus InstallPublishBlock(IBridgeLog log)
+        /// <summary>
+        /// Tears down everything the server needs (dispatcher, poller, edit observer, registry, save-watch callback) so Update()
+        /// does nothing. The publish block (separate Harmony id) is untouched.
+        /// </summary>
+        private void StopBridgeServices()
+        {
+            try { m_server?.Stop(); } catch { /* ignore */ }
+            m_server = null;
+            try { m_dispatcher?.Shutdown(); } catch { /* ignore */ }
+            m_dispatcher = null;
+            m_poller = null;
+            m_edit = null;
+            m_registry = null;
+            SaveWatch.OnSaved = null;
+        }
+
+        /// <summary>Installs the block; the returned monitor re-verifies the required prefixes live (guard step 2, get_status).</summary>
+        private PublishBlockMonitor InstallPublishBlock(IBridgeLog log)
         {
             try
             {
                 PublishBlocker.Configure(log, message => Debug.LogWarning(message));
-                PublishBlockStatus status = PublishBlocker.Apply(new Harmony(PublishBlocker.HarmonyId), PublishBlockTargets.Build());
+                System.Collections.Generic.List<BlockTarget> targets = PublishBlockTargets.Build(typeof(EditorSystem).Assembly);
+                PublishBlockStatus status = PublishBlocker.Apply(new Harmony(PublishBlocker.HarmonyId), targets);
+                PublishBlockMonitor monitor = new PublishBlockMonitor(status, targets, PublishBlocker.HarmonyId, log);
                 if (status.Complete)
                 {
                     Logger.LogInfo($"Workshop publish block active: {status.PatchedCount} methods patched. Publishing to the Workshop is disabled while this plugin is enabled.");
@@ -144,12 +164,12 @@ namespace PummelBridge
                 {
                     Logger.LogError($"Workshop publish block INCOMPLETE ({status.PatchedCount} methods patched; missing: {string.Join("; ", status.Missing.ToArray())}). All write tools are disabled.");
                 }
-                return status;
+                return monitor;
             }
             catch (Exception e)
             {
                 Logger.LogError($"Installing the Workshop publish block failed: {e.GetType().Name}: {e.Message}. All write tools are disabled.");
-                return new PublishBlockStatus(false, false, 0, new[] { "installer failed: " + e.Message });
+                return new PublishBlockMonitor(new PublishBlockStatus(false, false, 0, new[] { "installer failed: " + e.Message }), null, PublishBlocker.HarmonyId, log);
             }
         }
 

@@ -1,4 +1,4 @@
-# PummelBridge HTTP API (api v2, Phase 2 increment 3, plugin 0.4.0)
+# PummelBridge HTTP API (api v2, Phase 2 increment 3, plugin 0.4.2)
 
 The BepInEx plugin `PummelBridge.Plugin` runs inside Pummel Party and exposes the mod editor's state on a
 local HTTP endpoint. api v2 adds the guard layer, the always-on Workshop publish block and four mod lifecycle
@@ -16,7 +16,7 @@ batch tools come in a later increment.
 | Bind address | `127.0.0.1` only (TCP listener on the loopback interface) |
 | Port | BepInEx config `BepInEx\config\com.pummelbridge.plugin.cfg`, section `[Server]`, `Port` (default `38917`, range 1024-65535) |
 | Enable/disable | `[General] PluginEnabled` (master switch) and `[Server] Enabled` (server only); see [Safety](#safety) |
-| Token file | `BepInEx\config\PummelBridge.token`: 64 lowercase hex chars (32 CSPRNG bytes), created on first start, reused afterwards, regenerated if malformed |
+| Token file | `BepInEx\config\PummelBridge.token`: 64 lowercase hex chars (32 CSPRNG bytes), created on first start, reused afterwards, regenerated if malformed; always written via a temp file plus atomic move/replace in the same folder (see [Safety](#token-file)) |
 | Connection | one request per connection; every response has `Connection: close` |
 | Request body | UTF-8 JSON, `Content-Type: application/json` (parameters such as `; charset=utf-8` allowed), `Content-Length` required, max 1 MB (1 048 576 bytes); chunked bodies are refused |
 | Concurrency | up to 16 requests in flight; more get HTTP 503 |
@@ -45,7 +45,7 @@ Content-Length: <n>
 | content type is not `application/json` | 415 | `UNSUPPORTED_MEDIA_TYPE` |
 | `Transfer-Encoding` present or no valid `Content-Length` | 411 | `LENGTH_REQUIRED` |
 | body larger than 1 MB | 413 | `PAYLOAD_TOO_LARGE` |
-| headers/body not received within 10 s | 408 | `REQUEST_TIMEOUT` |
+| complete request (headers and body) not received within 10 s of the connection being accepted (an absolute deadline, not a per-read timeout: dripping bytes does not extend it) | 408 | `REQUEST_TIMEOUT` |
 | body is not valid UTF-8 / not JSON / not an object / `method` not a non-empty string / `params` not an object | 400 | `INVALID_PARAMS` |
 | more than 16 requests in flight | 503 | `SERVER_BUSY` |
 
@@ -78,7 +78,7 @@ Response (HTTP 200 for every well-formed, authenticated call):
 | `NO_MOD_OPEN` | editor open, no mod loaded |
 | `BUSY_LOADING` | the editor is loading a mod (`IsLoading`) or the mod has not finished loading (`!IsLoaded`) |
 | `NOT_FOUND` | object / component not found |
-| `TIMEOUT` | the Unity main thread did not service the call within 10 s (the queued work is discarded, it never runs later) |
+| `TIMEOUT` | the call did not finish within its time limit (10 s; see [Threading](#threading) for the write-tool limits and the exact semantics). For write tools, a `TIMEOUT` whose message says "nothing was changed" / "safe to retry" was refused or cancelled **before** its commit point: nothing was applied and it never runs later. A write call that has passed its commit point never gets that `TIMEOUT` (see [Timeouts and the commit point](#timeouts-and-the-commit-point)) |
 | `INTERNAL` | unexpected exception, or a game member the plugin needs is missing (`member X.Y not found — game version changed?`) |
 | `WRITES_DISABLED` | write tool called while `[Safety] EnableWrites = false` |
 | `PUBLISH_BLOCK_INCOMPLETE` | write tool called while the Workshop publish block is not complete (`get_status.publishBlock`) |
@@ -88,7 +88,8 @@ Response (HTTP 200 for every well-formed, authenticated call):
 
 Edit tools additionally use `NOT_FOUND` (object / component / the edited object was deleted meanwhile),
 `INVALID_PARAMS` (bad value, refused property, a rule the editor's UI enforces) and `TIMEOUT` (the editor did not
-take its undo snapshot in time, or the call waited too long in the write queue).
+take its undo snapshot in time, or the call waited too long in the write queue; always before the edit was applied,
+so safe to retry).
 
 Values in results: enums as their names (flags as `"A, B"`), `Vector2/3/4` and `Quaternion` as `{x,y,z[,w]}`,
 `Color` as `{r,g,b,a}` (0-1 floats), `Color32` as 0-255 ints, GUIDs as lowercase `8-4-4-4-12` strings, NaN/Infinity
@@ -112,6 +113,34 @@ queue; a call that times out while still queued never runs. A `create_test_mod`/
 until its load finishes, so other write calls wait (and may time out) meanwhile. Read tools are not queued and run
 between frames as before.
 
+#### Timeouts and the commit point
+
+Every write tool has a **commit point**: the moment right before its first change to the editor or the mod (edit
+tools: step 3 of the edit sequence in [Editing](#editing), when the edit is applied; `undo`: before the first undo
+step; `save_mod`: before saving; `create_test_mod` / `open_test_mod`: before the mod list entry is added /
+`OpenMod` is called). Reaching it and the caller's timeout are decided atomically: either the timeout wins and the
+body changes nothing, or the body commits and the caller no longer times out.
+
+- **Before the commit point** a call ends with `TIMEOUT` when its time limit runs out (while queued, while the edit
+  waits for the editor's undo snapshot, ...), and it is also refused with `TIMEOUT` instead of starting when too
+  little of its time limit is left after waiting in the write queue behind other writes: less than 1 s for any
+  write tool; less than the post-edit wait (3 s) + 0.5 s for an edit tool, checked at the start and again right before
+  the edit is applied; less than 3 s for `undo`, 10 s for `create_test_mod` / `open_test_mod`, 1 s for `save_mod`.
+  Such a `TIMEOUT` says "nothing was changed" / "safe to retry": nothing was applied (an edit tool may have selected
+  the target object) and the call never runs later. **The caller may simply retry it.**
+- **After the commit point** the call always returns its own outcome, normally the regular success result. Edit tools
+  wait for the editor's undo push at most 3 s **or until the call's deadline, whichever comes first**, and then reply
+  with `undoable` / `undoPending` / `note` saying whether the push was observed in time (see [Editing](#editing)).
+  `undo` stops starting further steps when its deadline is near and replies with the steps done so far (`note`). The
+  create/open load wait is shortened to end 1 s before the deadline; if the load is not done by then the reply is
+  `TIMEOUT` with a message that says the mod **was created / is being opened** and may still finish (check
+  `get_status`, do not blindly retry). Errors that occur after the commit point say what was already applied
+  ("the edit was applied, but then: ...").
+- A committed call normally completes before its deadline (that is what the start budgets are for). If the game's
+  main thread stalls, the plugin keeps waiting up to 4 s past the deadline for the result (edit tools: 15 s + 4 s,
+  below the MCP server's 20 s request timeout); only if even that runs out the reply is `TIMEOUT` with "the change was
+  applied, but the call did not finish ...; check get_status / get_object before retrying".
+
 ---
 
 ## Methods
@@ -121,7 +150,7 @@ between frames as before.
 Works with the editor closed. No params.
 
 ```json
-{"pong": true, "pluginVersion": "0.4.0", "gameVersion": "1.15.2", "unityVersion": "2021.3.45f2",
+{"pong": true, "pluginVersion": "0.4.2", "gameVersion": "1.15.2", "unityVersion": "2021.3.45f2",
  "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions"]}
 ```
 
@@ -148,8 +177,12 @@ No params. Never fails because of editor state.
 - `writesEnabled`: current value of `[Safety] EnableWrites`.
 - `publishBlock`: `active` = at least one blocking patch installed; `complete` = every required target patched
   and no patch failed (write tools need this); `patchedCount` = methods patched (59 expected for game build
-  2025-10-16: 10 game methods, 25 `SteamUGC`, 24 `SteamRemoteStorage`); `missing` = `"<target>: <reason>"` for
-  each target that is missing (required) or whose patch failed. `readOnlyBuild` was removed in api v2.
+  2025-10-16: 10 game methods, 25 `SteamUGC`, 24 `SteamRemoteStorage`; the count at startup); `missing` =
+  `"<target>: <reason>"` for each target that is missing (required) or whose patch failed. The status is **live**:
+  every `get_status` and every write call re-checks (Harmony patch info) that each required target still carries the
+  plugin's prefix; if one was removed after startup (e.g. another plugin unpatched it), `complete` becomes false,
+  `missing` lists it as `"<target>: blocking prefix removed after startup"`, and it stays so until the game is
+  restarted. `readOnlyBuild` was removed in api v2.
 
 - `editorState`: `Editing | EnteringPlayMode | PlayMode | ExitingPlayMode` (null when the editor is closed).
 - `playMode`: `editorState != "Editing"` (a playtest is starting, running or ending).
@@ -431,14 +464,19 @@ template, plus `AddAvailableMod`) and opens it. Besides the guard it checks: the
 (`EditorPopup.IsValidFilenameInput`, which the popup applies and `CreateNewMod` skips); no folder and no mod
 (editor list and every `Data/Meta.json` on disk) with that name, case-insensitive (`ALREADY_EXISTS`); leaving
 the open mod is allowed (rules under `open_test_mod`). Completes from a later frame once the mod is loaded and its
-delayed first save has written `Data/Meta.json` and `Data/WorkshopItem.json`; `TIMEOUT` after 30 s.
+delayed first save has written `Data/Meta.json` and `Data/WorkshopItem.json`; `TIMEOUT` after 30 s (less if the
+call waited in the write queue; refused with `TIMEOUT` before creating anything if less than 10 s are left). A load
+`TIMEOUT` comes after the commit point: the mod was created and may still finish loading; check `get_status` and
+`list_mods` instead of retrying (a retry would get `ALREADY_EXISTS`). See
+[Timeouts and the commit point](#timeouts-and-the-commit-point).
 
 ```json
 {"name": "PB_TEST_Arena", "folderName": "PB_TEST_Arena", "type": "Minigame", "publishedFileId": "256"}
 ```
 
-Errors: guard codes, `INVALID_PARAMS`, `ALREADY_EXISTS`, `INVALID_STATE`, `BUSY_LOADING` (another create/open is
-still waiting for its load), `TIMEOUT`, `INTERNAL` (load failed; the editor shows its own error popup).
+Errors: guard codes, `INVALID_PARAMS`, `ALREADY_EXISTS`, `INVALID_STATE` (also: "the open mod changed while waiting
+for the load", when another mod was opened by hand meanwhile), `BUSY_LOADING` (another create/open is still waiting
+for its load), `TIMEOUT`, `INTERNAL` (load failed; the editor shows its own error popup).
 
 ### `open_test_mod` (write, lifecycle)
 
@@ -451,7 +489,8 @@ Opens an existing test mod with `EditorSystem.OpenMod` (what File > Open Mod end
 Refused if the name fails the rule even when such a folder exists; `NOT_FOUND` if there is no such folder or it has
 no `Data/Meta.json`; `GUARD_NOT_TEST_MOD` if its Meta.json name is not a test-mod name. If that mod is already open
 and loaded: success without reloading, `alreadyOpen: true`. Completes after the asynchronous load; `TIMEOUT`
-after 30 s.
+after 30 s (same rules as `create_test_mod`: a load `TIMEOUT` means the mod is being opened and may still finish;
+check `get_status`).
 
 ```json
 {"name": "PB_TEST_Arena", "folderName": "PB_TEST_Arena", "type": "Minigame", "publishedFileId": "256", "alreadyOpen": false}
@@ -543,13 +582,16 @@ tool `list_component_types` above). They drive the editor through its own method
   only selected object; (2) wait until the editor's undo baseline is a snapshot of exactly that object (checked every
   frame, at most 5 s; normally the same or the next frame, depending on Unity's script order, provided the left mouse
   button is up and has been up for 0.1 s); (3) apply the whole edit in one frame (all properties of one call = **one**
-  undo step); (4) wait until the editor has pushed the pre-edit snapshot as an undo step (at most 3 s, normally the
-  next frame); (5) reply. Structural edits (`duplicate_object`, `delete_object`, `reparent_object`) push their own
+  undo step); (4) wait until the editor has pushed the pre-edit snapshot as an undo step (at most 3 s or until the
+  call's deadline, whichever comes first; normally the next frame); (5) reply. Step 3 is the commit point: a
+  `TIMEOUT` can only happen before it (nothing applied, safe to retry); once the edit is applied the call always
+  returns its result (see [Timeouts and the commit point](#timeouts-and-the-commit-point)). Structural edits (`duplicate_object`, `delete_object`, `reparent_object`) push their own
   undo event exactly like the editor's Duplicate / Delete / hierarchy drag and drop.
 - **Mouse button held**: if the left mouse button is held in the game window during step 2, the call fails with
   `INVALID_STATE` after 5 s and only the selection changed (never a silent non-undoable edit). If it is held during
-  step 4, the edit is done and undoable, but the editor records the step only when the button is released or the
-  selection changes: the reply then has `undoPending: true`.
+  step 4 (or the push is not seen before the wait ends for another reason, e.g. the deadline), the edit is done and
+  undoable, but the editor records the step only when the button is released or the selection changes: the reply then
+  has `undoPending: true`.
 - **Selection side effect**: the edited object stays selected, as after editing it by hand (the previous selection
   is replaced). `create_object` and `duplicate_object` select the new object(s); `delete_object` leaves nothing
   selected (the editor's Delete deselects); `undo` restores the selection recorded with the undone step. A selection
@@ -855,7 +897,7 @@ Value JSON (the shapes `get_object` returns, so values round-trip):
 | `Rect` | `{x, y, width, height}` |
 | `LayerMask` | an integer bit mask |
 | asset references (`Prop`, `Material`, `AudioClip`, `Texture2D`, `Mesh`, `Shader`, `PummelPrefab`, `PummelVisualScript`, ...) | `null`, a guid string, or `{"guid": "..."}`; other keys (`name`, `assetType`, ...) are ignored, so a reference from `get_object` can be sent back; one with `"registered": false` is refused |
-| scene-object references (`Transform`, `GameObject`, component types) | as for assets: the referenced component's guid (the `guid` of a reference in `get_object`), or an **object** guid (`ModTransform` guid): then the first component of that object whose class or wrapped Unity component matches the property type is used, like dropping the object from the hierarchy onto the field |
+| scene-object references (`Transform`, `GameObject`, component types) | as for assets: the referenced component's guid (the `guid` of a reference in `get_object`), or an **object** guid (`ModTransform` guid). An object guid gives the object's `Transform` (or its `GameObject`) when the type is `Transform`, `GameObject` or another type the Transform is an instance of (e.g. `Component`); otherwise the **one** component of that object whose class or wrapped Unity component matches the type (e.g. its Audio Source for an `AudioSource` field), using that component's registered asset, like dropping the object from the hierarchy onto the field. No matching component: refused, the message names the expected type and lists the object's components with their guids; several matching components: refused, the message lists their guids (pass the component guid you mean) |
 | arrays `T[]` of the above | a JSON array (max 1024 elements); a `{"truncatedItems": n}` marker from `get_object` is refused |
 | `AnimationCurve` | `{keys: [{time, value, inTangent?, outTangent?}], preWrapMode?, postWrapMode?}`; wrap modes `Default`, `Once`, `Clamp`, `Loop`, `PingPong`, `ClampForever` (default `ClampForever`); max 256 keys |
 | `ParticleSystem.MinMaxCurve` | a number (= Constant), or `{mode: "Constant", constant}`, `{mode: "TwoConstants", constantMin, constantMax}`, `{mode: "Curve", curveMultiplier?, curve}`, `{mode: "TwoCurves", curveMultiplier?, curveMin, curveMax}` (curves as above, `curveMultiplier` defaults to 1) |
@@ -925,6 +967,8 @@ Then it waits one more frame and reports the stack length. There is **no redo** 
   end of the frame), so the next snapshot differs. Editor behaviour, also with Ctrl+Z: one more undo re-adds the
   component.
 - `undone: 0` + `note: "nothing to undo"` when the stack was empty.
+- If the call's deadline comes near after the first step (very slow frames), no further step is started and the reply
+  has `undone` < `steps` with a `note` ("stopped after N of M steps ..."); call `undo` again for the rest.
 
 Errors: guard codes, `INVALID_STATE`, `TIMEOUT`.
 
@@ -1026,9 +1070,13 @@ editor's object picker (see the reference rules of `set_property`) to the action
 (Scale, Position, Rotation, Play Tween Animation, Set Active, Spawn Effect, Spawn Prefab, Match Transform),
 `AudioSource` (Play Sound), `BoardNode` (board-player actions, Spawn keys, Set Connection Active, Set Board Space
 Active: a board space object), `Component` (all other target actions; an object guid then gives the object's
-Transform). Components of scene objects may reference only scene objects, components inside a prefab only objects of
-the same prefab, player-settings lists only scene objects. The resolved component must be registered as a mod asset,
-so that its guid is written when the mod is saved (`INVALID_PARAMS` otherwise). Show Message uses its targets only
+Transform). For the other types an object guid gives that object's one matching component (e.g. the Audio Source of a
+speaker object for Play Sound); none or several matching components are refused with the object's components and
+their guids listed (see the reference rules of `set_property`). Components of scene objects may reference only scene
+objects, components inside a prefab only objects of the same prefab, player-settings lists only scene objects. The
+resolved component must be registered as a mod asset, so that its guid is written when the mod is saved
+(`INVALID_PARAMS` otherwise); an object guid resolves through the component's registered asset, so it is stored like
+the component guid. Show Message uses its targets only
 while `m_messageTarget` includes `Target`.
 
 ### Parameters (add_action, set_action, add_trigger, set_trigger)
@@ -1291,7 +1339,19 @@ Result: the trigger as a `get_action_graph` entry plus `guid` (object scope), `c
 | `[General] PluginEnabled` | `true` | Read at game start. `false`: the plugin does nothing at all (no server, no patches, one log line). Use this to publish by hand. |
 | `[Safety] EnableWrites` | `true` | Read on every write call. `false`: every write tool returns `WRITES_DISABLED`. Does not affect the publish block. |
 | `[Server] Enabled` | `true` | `false`: no RPC server; the publish block stays active. |
-| `[Server] Port` | `38917` | |
+| `[Server] Port` | `38917` | Read at game start. If the port cannot be bound (already in use), one Error is logged and the bridge stays idle: no dispatcher, frame poller, save watch or undo observer runs and no tool is served. The Workshop publish block stays active. |
+
+### Token file
+
+`BepInEx\config\PummelBridge.token` is written to a temp file in the same folder and then moved into place (missing
+target) or swapped in with `File.Replace` (malformed target), so a reader never sees a half-written token. Two
+processes starting at once converge on one token: the loser of the move re-reads the file and uses the winner's token.
+**Limitation:** the file's ACL is not restricted. It inherits the permissions of the game's `BepInEx\config` folder
+(on Windows normally the current user plus administrators/SYSTEM, but on a game library on another drive it may also
+include "Users"). Restricting it to the current user needs `System.Security.AccessControl`, which is not reliable on
+the game's Mono/net472 runtime without extra dependencies, so the plugin does not try. The token is a protection
+against other web pages and processes that cannot read that folder; treat any local user who can read the folder as
+trusted, or tighten the folder's ACL by hand.
 
 ### Test-mod rule
 
@@ -1324,7 +1384,7 @@ reset to 256 with a warning in the BepInEx and Unity logs. This is the only work
 
 ### Workshop publish block
 
-While the plugin is enabled, Harmony prefixes installed in `Awake` (before the server starts; never removed) skip
+While the plugin is enabled, Harmony prefixes installed in `Awake` (before the server starts; never removed by the plugin) skip
 every Workshop create/update/delete path and return a safe default: the type's `Invalid` handle where one exists
 (`UGCUpdateHandle_t.Invalid` = `ulong.MaxValue`, `SteamAPICall_t.Invalid` = 0), else `false` / 0 / null.
 
@@ -1343,6 +1403,12 @@ every Workshop create/update/delete path and return a safe default: the type's `
   `FileExists`.
 - Fail closed: if a required target is missing or any patch fails, an Error is logged, `publishBlock.complete` is
   false and every write tool returns `PUBLISH_BLOCK_INCOMPLETE`. Read tools keep working.
+- Checked live: before every write tool (guard step 2) and on every `get_status`, the plugin reads Harmony's patch
+  info of each required target (about 14 lookups, no per-frame work). If one no longer carries the plugin's prefix
+  (another plugin called `Harmony.UnpatchAll()` / `UnpatchID`, or unpatched it), the block is incomplete from then on:
+  one Error per lost target in the BepInEx log, `publishBlock.complete: false` with the target in `missing`, every
+  write tool `PUBLISH_BLOCK_INCOMPLETE`. The plugin does **not** re-patch at runtime; restart the game (and remove the
+  plugin that unpatched it). Optional targets are not re-checked.
 - Each blocked call logs a Warning (first call at once, then at most once per method per 10 s with the number of
   calls not logged) to the BepInEx log and to the Unity log, so the editor's Log window shows it:
   `[PummelBridge] Workshop publishing is blocked while the PummelBridge plugin is enabled. Blocked call: WorkshopPopup.PublishMod(PummelMod). Nothing was sent to Steam. To publish, set [General] PluginEnabled = false in BepInEx\config\com.pummelbridge.plugin.cfg and restart the game.`

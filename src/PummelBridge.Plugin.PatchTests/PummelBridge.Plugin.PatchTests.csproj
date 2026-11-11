@@ -25,9 +25,16 @@
 
   <ItemGroup>
     <Compile Include="..\PummelBridge.Plugin\Safety\PublishBlocker.cs" Link="Safety\PublishBlocker.cs" />
+    <Compile Include="..\PummelBridge.Plugin\Safety\PublishBlockMonitor.cs" Link="Safety\PublishBlockMonitor.cs" />
+    <Compile Include="..\PummelBridge.Plugin\Safety\PublishBlockTargets.cs" Link="Safety\PublishBlockTargets.cs" />
     <Compile Include="..\PummelBridge.Plugin\Core\RpcErrors.cs" Link="Core\RpcErrors.cs" />
     <Compile Include="..\PummelBridge.Plugin\Core\PublishBlockStatus.cs" Link="Core\PublishBlockStatus.cs" />
     <Compile Include="..\PummelBridge.Plugin\Hooks\SaveWatch.cs" Link="Hooks\SaveWatch.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The drift test (GameDriftTest.cs) reads the game assemblies from here, for reflection only; nothing is copied. -->
+    <AssemblyMetadata Include="GameDir" Value="$(GameDir)" />
   </ItemGroup>
 
   <ItemGroup>

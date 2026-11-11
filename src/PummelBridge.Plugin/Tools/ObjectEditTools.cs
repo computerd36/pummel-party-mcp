@@ -467,7 +467,7 @@ namespace PummelBridge.Tools
             EditCommon.Run(services, inv, host, selectFirst: true, apply: () =>
             {
                 GameObject go = target.gameObject;
-                services.MarkEdit(mod, "set_object");
+                services.Observe();
                 // InspectorWidget: name field writes GameObject.name, the checkbox calls SetActive (for the selection).
                 if (a.Name != null)
                 {
@@ -477,9 +477,11 @@ namespace PummelBridge.Tools
                 {
                     go.SetActive(a.Active.Value);
                 }
+                bool changed = EditCommon.SnapshotChanged(host);
+                services.MarkEditIfChanged(mod, "set_object", changed);
                 return new EditOutcome
                 {
-                    Changed = EditCommon.SnapshotChanged(host),
+                    Changed = changed,
                     Then = PostEditWait.AwaitPush,
                     BuildResult = report => EditCommon.WithEditFields(new JObject
                     {
@@ -504,11 +506,13 @@ namespace PummelBridge.Tools
             EditHost host = new EditHost(ed, target.gameObject);
             EditCommon.Run(services, inv, host, selectFirst: true, apply: () =>
             {
-                services.MarkEdit(mod, "set_transform");
+                services.Observe();
                 ApplyTransform(target, a.Values);
+                bool changed = EditCommon.SnapshotChanged(host);
+                services.MarkEditIfChanged(mod, "set_transform", changed);
                 return new EditOutcome
                 {
-                    Changed = EditCommon.SnapshotChanged(host),
+                    Changed = changed,
                     Then = PostEditWait.AwaitPush,
                     BuildResult = report =>
                     {
@@ -556,6 +560,12 @@ namespace PummelBridge.Tools
         /// one step per frame, then waits one more frame and reports the stack length (the editor may push an extra
         /// snapshot after undoing a component add/remove, because Undo re-baselines before Unity destroys components).
         /// </summary>
+        /// <summary>Time left until the deadline that undo needs to start (one step per frame, up to 20, plus two frames).</summary>
+        private static readonly TimeSpan UndoStartBudget = TimeSpan.FromSeconds(3);
+
+        /// <summary>After the first step, no further step is started with less than this left (the reply must still go out).</summary>
+        private static readonly TimeSpan UndoStopMargin = TimeSpan.FromSeconds(1);
+
         private static void Undo(WriteInvocation inv, EditServices services)
         {
             int steps = (int)inv.Args;
@@ -563,16 +573,19 @@ namespace PummelBridge.Tools
             EditContext.RequireEditReady(ed);
             PummelMod mod = ed.CurrentMod;
             EditHost host = new EditHost(ed, null);
+            int requested = steps;
             int undone = 0;
             int lengthAfterLast = -1;
             int waitUntilFrame = -1;
+            bool committed = false;
+            bool outOfTime = false;
             JArray events = new JArray();
 
             bool Step()
             {
-                if (inv.Completion.IsCancelled)
+                if (!committed && inv.Completion.IsCancelled)
                 {
-                    inv.Fail(new RpcException(ErrorCodes.Timeout, "the call timed out"));
+                    inv.Fail(new RpcException(ErrorCodes.Timeout, "the call timed out before anything was undone; nothing was changed (safe to retry)"));
                     return true;
                 }
                 RpcException invalid = host.Validate();
@@ -584,8 +597,19 @@ namespace PummelBridge.Tools
                 EditorUndo undo = UndoAccess.CurrentForWrite(ed);
                 if (waitUntilFrame < 0)
                 {
+                    if (committed && undone < steps && inv.Completion.Remaining < UndoStopMargin)
+                    {
+                        // Past the commit point the call always returns its result: stop early and report what was done.
+                        outOfTime = true;
+                        steps = undone;
+                    }
                     if (undone < steps && undo.UndoStackLength() > 0)
                     {
+                        if (!committed)
+                        {
+                            inv.Commit(UndoStartBudget); // throws TIMEOUT (nothing undone) when cancelled or too late
+                            committed = true;
+                        }
                         string type = UndoAccess.TopEventType(undo);
                         int before = undo.UndoStackLength();
                         services.MarkEdit(mod, "undo");
@@ -627,6 +651,11 @@ namespace PummelBridge.Tools
                 if (undone == 0)
                 {
                     r["note"] = "nothing to undo";
+                }
+                if (outOfTime)
+                {
+                    string stopped = $"stopped after {undone} of {requested} steps because the call's time limit was reached; call undo again for the rest";
+                    r["note"] = r["note"] != null ? (string)r["note"] + "; " + stopped : stopped;
                 }
                 inv.Complete(r);
                 return true;

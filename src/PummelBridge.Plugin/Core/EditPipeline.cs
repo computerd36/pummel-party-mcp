@@ -73,11 +73,20 @@ namespace PummelBridge.Core
     /// </list>
     /// Every step re-validates the editor state (mod switch, unload, play mode, deleted target) and fails instead of
     /// touching a stale object. Always completes its completion (also when the caller gave up), so the write queue moves on.
+    /// <para>
+    /// Timeouts: step 3 is the commit point (<see cref="IWorkCompletion.TryCommit"/>). Before it, a caller timeout cancels
+    /// the call and the edit never runs; the pipeline also refuses to start or to apply with less than
+    /// <see cref="CommitReserve"/> (post-edit wait + margin) left until the caller's deadline, so a call delayed in the
+    /// write queue fails before touching anything. After it, the caller cannot cancel any more: the post-edit wait ends
+    /// at <see cref="PushTimeout"/> or at the deadline, whichever comes first, and the normal result is returned
+    /// (<c>undoPending</c> when the push was not observed in time).
+    /// </para>
     /// </summary>
     public sealed class EditPipeline
     {
         public static readonly TimeSpan DefaultBaselineTimeout = TimeSpan.FromSeconds(5);
         public static readonly TimeSpan DefaultPushTimeout = TimeSpan.FromSeconds(3);
+        public static readonly TimeSpan DefaultCommitMargin = TimeSpan.FromSeconds(0.5);
         private const int MaxReselects = 5;
 
         private enum Phase
@@ -99,9 +108,19 @@ namespace PummelBridge.Core
         private int m_reselects;
         private object m_token;
         private EditOutcome m_outcome;
+        private bool m_committed;
 
         public TimeSpan BaselineTimeout = DefaultBaselineTimeout;
         public TimeSpan PushTimeout = DefaultPushTimeout;
+
+        /// <summary>Time to keep between the commit point and the caller's deadline on top of <see cref="PushTimeout"/>.</summary>
+        public TimeSpan CommitMargin = DefaultCommitMargin;
+
+        /// <summary>Minimum time left until the caller's deadline to start, and to apply the edit.</summary>
+        public TimeSpan CommitReserve => PushTimeout + CommitMargin;
+
+        /// <summary>The edit step ran (or is running): from here on the call always ends with the pipeline's own outcome.</summary>
+        public bool IsCommitted => m_committed;
 
         /// <param name="selectFirst">True for edits of an existing object (select + wait for its baseline before applying);
         /// false for creation/undo-like edits that apply at once.</param>
@@ -126,6 +145,17 @@ namespace PummelBridge.Core
         {
             try
             {
+                if (m_completion.IsCancelled)
+                {
+                    return Fail(CancelledError());
+                }
+                TimeSpan left = m_completion.Remaining;
+                if (left < CommitReserve)
+                {
+                    return Fail(new RpcException(ErrorCodes.Timeout,
+                        $"the call could not start in time ({Math.Max(0, left.TotalSeconds):0.#} s of its time limit left after waiting behind other write calls, " +
+                        $"{CommitReserve.TotalSeconds:0.#} s needed); nothing was changed (safe to retry)"));
+                }
                 RpcException invalid = m_host.Validate();
                 if (invalid != null)
                 {
@@ -170,11 +200,14 @@ namespace PummelBridge.Core
             }
         }
 
+        private static RpcException CancelledError() =>
+            new RpcException(ErrorCodes.Timeout, "the call timed out before the edit was applied; nothing was changed (safe to retry)");
+
         private bool Step()
         {
-            if (m_completion.IsCancelled)
+            if (!m_committed && m_completion.IsCancelled)
             {
-                return Fail(new RpcException(ErrorCodes.Timeout, "the call timed out"));
+                return Fail(CancelledError());
             }
             switch (m_phase)
             {
@@ -194,6 +227,13 @@ namespace PummelBridge.Core
                         }
                         m_host.SelectTarget();
                         return false;
+                    }
+                    TimeSpan left = m_completion.Remaining;
+                    if (left < CommitReserve)
+                    {
+                        return Fail(new RpcException(ErrorCodes.Timeout,
+                            $"too little of the call's time limit is left to apply the edit and wait for the editor's undo step ({Math.Max(0, left.TotalSeconds):0.#} s); " +
+                            "nothing was changed (the object was selected; safe to retry)"));
                     }
                     if (m_host.BaselineCoversTarget())
                     {
@@ -222,7 +262,7 @@ namespace PummelBridge.Core
                     {
                         return Complete(new EditReport { Changed = true, UndoRecorded = true });
                     }
-                    if (Elapsed() >= PushTimeout)
+                    if (PostEditWaitOver())
                     {
                         // The pre-edit snapshot is the baseline; the editor pushes it when the mouse is released or the
                         // selection changes. The edit stays undoable.
@@ -242,7 +282,7 @@ namespace PummelBridge.Core
                     {
                         return Complete(new EditReport { Changed = m_outcome.Changed });
                     }
-                    if (Elapsed() >= PushTimeout)
+                    if (PostEditWaitOver())
                     {
                         return Complete(new EditReport { Changed = m_outcome.Changed, BaselineTimedOut = true });
                     }
@@ -254,8 +294,18 @@ namespace PummelBridge.Core
             }
         }
 
+        /// <summary>Post-commit waits end at <see cref="PushTimeout"/> or at the caller's deadline, whichever comes first.</summary>
+        private bool PostEditWaitOver() => Elapsed() >= PushTimeout || m_completion.Remaining <= TimeSpan.Zero;
+
         private bool Apply()
         {
+            // Commit point: atomically either the caller's timeout wins (and the edit never runs) or the edit runs and the
+            // caller waits for this pipeline's own result.
+            if (!m_completion.TryCommit())
+            {
+                return Fail(CancelledError());
+            }
+            m_committed = true;
             m_outcome = m_apply() ?? throw RpcException.Internal("edit returned no outcome");
             if (!m_outcome.Changed && m_outcome.Then != PostEditWait.AwaitBaseline)
             {
@@ -295,7 +345,9 @@ namespace PummelBridge.Core
             }
             catch (Exception e)
             {
-                return Fail(e);
+                return Fail(m_committed && report.Changed
+                    ? new RpcException(ErrorCodes.Internal, $"the edit was applied, but building the reply failed: {e.GetType().Name}: {e.Message}")
+                    : e);
             }
             m_phase = Phase.Done;
             m_completion.SetResult(result);

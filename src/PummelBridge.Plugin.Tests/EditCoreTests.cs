@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using Newtonsoft.Json.Linq;
@@ -20,6 +21,9 @@ namespace PummelBridge.Tests
             WriteQueueTests();
             RegistryQueueTests();
             EditPipelineTests();
+            CommitPipelineTests();
+            CommitDispatchTests();
+            ReferenceRuleTests();
             ReparentTests();
             ComponentRuleTests();
             KindAndClampTests();
@@ -212,6 +216,11 @@ namespace PummelBridge.Tests
             t.Observe(mod, true, Sig(0, null));
             t.Observe(mod, true, Sig(1, e1));
             Check("undo of the initial snapshot and re-push (1->0->1) is neutral", t.HasUnsavedEdits(mod) == false);
+            t.MarkBridgeEditIfChanged(mod, "set_property", false);
+            Check("no-op bridge edit (changed: false) leaves the tracker clean", t.HasUnsavedEdits(mod) == false);
+            t.MarkBridgeEditIfChanged(mod, "set_property", true);
+            Check("bridge edit that changed something -> dirty", t.HasUnsavedEdits(mod) == true);
+            t.MarkSaved(mod, Sig(1, e1));
             t.MarkBridgeEdit(mod, "set_property");
             Check("bridge edit -> dirty", t.HasUnsavedEdits(mod) == true && t.DirtyReason.Contains("bridge"));
             t.MarkBridgeEdit(new object(), "x");
@@ -222,6 +231,28 @@ namespace PummelBridge.Tests
             Check("new prefab manager with its initial snapshot -> clean", t.HasUnsavedEdits(mod) == false);
             t.Observe(mod, true, Sig(1, e1, new KeyValuePair<object, UndoStackState>(prefab, new UndoStackState(2, p2))));
             Check("prefab stack push -> dirty", t.HasUnsavedEdits(mod) == true);
+
+            // The plugin refills one scratch signature every frame: the tracker must not keep a reference to it.
+            object smod = new object(), s1 = new object(), s2 = new object(), sp = new object(), sp1 = new object();
+            EditTracker st = new EditTracker();
+            UndoSignature scratch = new UndoSignature();
+            Action<int, object, object, int, object> fill = (count, top, prefab, pcount, ptop) =>
+            {
+                scratch.Clear();
+                scratch.Hierarchy = new UndoStackState(count, top);
+                if (prefab != null)
+                {
+                    scratch.Prefabs[prefab] = new UndoStackState(pcount, ptop);
+                }
+            };
+            fill(0, null, null, 0, null); st.Observe(smod, true, scratch);
+            fill(1, s1, sp, 1, sp1); st.Observe(smod, true, scratch);
+            fill(1, s1, sp, 1, sp1); st.Observe(smod, true, scratch);
+            Check("refilled scratch signature, unchanged stacks -> clean", st.HasUnsavedEdits(smod) == false);
+            fill(1, s2, sp, 1, sp1); st.Observe(smod, true, scratch);
+            Check("refilled scratch signature, hierarchy top changed -> dirty", st.HasUnsavedEdits(smod) == true);
+            scratch.Clear();
+            Check("Clear() empties the signature", scratch.Hierarchy.Count == 0 && scratch.Hierarchy.Top == null && scratch.Prefabs.Count == 0);
 
             object mod2 = new object();
             t.Observe(mod2, true, Sig(0, null));
@@ -250,10 +281,15 @@ namespace PummelBridge.Tests
         private sealed class FakeCompletion : IWorkCompletion
         {
             public bool Cancelled;
+            public bool Committed;
             public object Result;
             public Exception Error;
             public int Completions;
+            /// <summary>Time left until the deadline; unlimited when null.</summary>
+            public Func<TimeSpan> Left;
             public bool IsCancelled => Cancelled;
+            public bool TryCommit() { if (Cancelled) return false; Committed = true; return true; }
+            public TimeSpan Remaining => Left?.Invoke() ?? TimeSpan.MaxValue;
             public void SetResult(object result) { Result = result; Completions++; }
             public void SetException(Exception error) { Error = error; Completions++; }
         }
@@ -531,6 +567,269 @@ namespace PummelBridge.Tests
             p.Start();
             c.Cancelled = true;
             Check("cancelled call stops the pipeline and still completes (queue moves on)", p.Tick() && c.Completions == 1);
+        }
+
+        // ================================================================== commit point (M1)
+
+        /// <summary>Pipeline + fake completion with a fake clock: the commit point and the deadline rules.</summary>
+        private static void CommitPipelineTests()
+        {
+            Console.WriteLine("-- unit: edit pipeline commit point and deadline");
+            TimeSpan now = TimeSpan.Zero;
+            Func<TimeSpan> clock = () => now;
+            TimeSpan deadline = TimeSpan.FromSeconds(15);
+            Func<TimeSpan> left = () => deadline - now;
+
+            // Timeout before commit: cancelled while waiting for the baseline -> TIMEOUT, edit never runs later.
+            FakeEditHost h = new FakeEditHost();
+            FakeCompletion c = new FakeCompletion { Left = left };
+            int applied = 0;
+            EditPipeline p = new EditPipeline(h, c, true, () => { applied++; return new EditOutcome { Changed = true, Then = PostEditWait.AwaitPush, BuildResult = r => r }; }, clock);
+            p.Start();
+            c.Cancelled = true;
+            h.Baseline = true; // the baseline arrives in the same frame the caller gave up
+            p.Tick();
+            p.Tick();
+            p.Tick();
+            Check("pre-commit timeout: TIMEOUT 'nothing was changed', edit never applied, not committed",
+                applied == 0 && !c.Committed && !p.IsCommitted && (c.Error as RpcException)?.Code == ErrorCodes.Timeout
+                && c.Error.Message.Contains("nothing was changed") && c.Completions == 1);
+
+            // Commit refused (caller gave up between the last check and the edit): TryCommit decides atomically.
+            h = new FakeEditHost { Selected = true, Baseline = true };
+            c = new FakeCompletion { Left = left };
+            applied = 0;
+            p = new EditPipeline(h, c, true, () => { applied++; return new EditOutcome { Changed = true }; }, clock);
+            c.Cancelled = true;
+            Check("cancelled before start: nothing selected, nothing applied", p.Start() && applied == 0 && h.Selects == 0 && (c.Error as RpcException)?.Code == ErrorCodes.Timeout);
+
+            // Deadline reached after commit: the post-edit wait ends at the deadline with the normal (success) result.
+            now = TimeSpan.Zero;
+            h = new FakeEditHost { Selected = true, Baseline = true };
+            c = new FakeCompletion { Left = left };
+            applied = 0;
+            p = new EditPipeline(h, c, true, () => { applied++; return new EditOutcome { Changed = true, Then = PostEditWait.AwaitPush, BuildResult = r => r }; }, clock);
+            p.PushTimeout = TimeSpan.FromSeconds(10);
+            now = deadline - TimeSpan.FromSeconds(11); // 11 s left >= reserve (10.5 s): applies
+            p.Start();
+            Check("post-commit: applied once and committed", applied == 1 && c.Committed && p.IsCommitted && c.Completions == 0);
+            c.Cancelled = true; // a (buggy) late cancel flag must not turn an applied edit into a TIMEOUT
+            now = deadline + TimeSpan.FromMilliseconds(1);
+            p.Tick();
+            p.Tick();
+            EditReport rep = c.Result as EditReport;
+            Check("post-commit: deadline reached -> success result with undoPending, applied exactly once",
+                c.Completions == 1 && c.Error == null && rep != null && rep.Changed && rep.UndoPending && applied == 1);
+
+            // Not enough time left to start (waited in the write queue): fails before selecting anything.
+            now = TimeSpan.Zero;
+            h = new FakeEditHost();
+            c = new FakeCompletion { Left = () => TimeSpan.FromSeconds(2) };
+            applied = 0;
+            p = new EditPipeline(h, c, true, () => { applied++; return new EditOutcome { Changed = true }; }, clock);
+            Check("queued too long: TIMEOUT at start, nothing selected or applied",
+                p.Start() && applied == 0 && h.Selects == 0 && (c.Error as RpcException)?.Code == ErrorCodes.Timeout && c.Error.Message.Contains("could not start"));
+
+            // Creation (no select step) also refuses to apply without its reserve.
+            c = new FakeCompletion { Left = () => TimeSpan.FromSeconds(1) };
+            p = new EditPipeline(new FakeEditHost(), c, false, () => { applied++; return new EditOutcome { Changed = true, Then = PostEditWait.AwaitBaseline }; }, clock);
+            Check("create with too little time: not created", p.Start() && applied == 0 && (c.Error as RpcException)?.Code == ErrorCodes.Timeout);
+
+            // The deadline approaches while waiting for the baseline: refuse to apply (the reply could not be sent in time).
+            now = TimeSpan.Zero;
+            h = new FakeEditHost();
+            c = new FakeCompletion { Left = left };
+            applied = 0;
+            p = new EditPipeline(h, c, true, () => { applied++; return new EditOutcome { Changed = true }; }, clock);
+            p.Start();
+            now = deadline - TimeSpan.FromSeconds(3); // < 3.5 s reserve
+            h.Baseline = true;
+            p.Tick();
+            Check("reserve reached while waiting for the baseline: TIMEOUT, nothing applied (object only selected)",
+                applied == 0 && (c.Error as RpcException)?.Code == ErrorCodes.Timeout && c.Error.Message.Contains("nothing was changed"));
+
+            // A reply-building failure after the edit says the edit was applied.
+            h = new FakeEditHost { Selected = true, Baseline = true };
+            c = new FakeCompletion();
+            p = new EditPipeline(h, c, true, () => new EditOutcome { Changed = true, Then = PostEditWait.None, BuildResult = r => throw new InvalidOperationException("boom") }, clock);
+            p.Start();
+            Check("post-commit reply failure: INTERNAL 'the edit was applied'", (c.Error as RpcException)?.Code == ErrorCodes.Internal && c.Error.Message.Contains("applied"));
+        }
+
+        /// <summary>Real dispatcher + write queue + registry with a thread acting as the HTTP caller.</summary>
+        private static void CommitDispatchTests()
+        {
+            Console.WriteLine("-- unit: dispatcher commit semantics (real dispatcher, write queue, registry)");
+            FakeHost guardHost = new FakeHost();
+
+            // 1. Timeout before commit: the caller gets TIMEOUT; the edit never runs, also when the baseline comes later.
+            {
+                MainThreadDispatcher d = new MainThreadDispatcher(TimeSpan.FromSeconds(3));
+                ToolRegistry reg = new ToolRegistry(new WriteSafety(() => true, () => true, guardHost));
+                FakeEditHost eh = new FakeEditHost { Selected = true, Baseline = false };
+                EditPipeline pipe = null;
+                int applied = 0;
+                reg.Register(ToolDefinition.Write("edit", WriteGuard.OpenMod(), null, inv =>
+                {
+                    pipe = new EditPipeline(eh, inv.Completion, true, () => { applied++; return new EditOutcome { Changed = true, Then = PostEditWait.None, BuildResult = r => "ok" }; })
+                    {
+                        PushTimeout = TimeSpan.FromMilliseconds(50),
+                        CommitMargin = TimeSpan.Zero,
+                        BaselineTimeout = TimeSpan.FromSeconds(30),
+                    };
+                    pipe.Start();
+                }, TimeSpan.FromMilliseconds(1300)));
+                string code = null, message = null;
+                Thread caller = Call(reg, "edit", d, (r, e) => { code = (e as RpcException)?.Code; message = e?.Message; });
+                SpinWait.SpinUntil(() => d.PendingCount >= 1, 2000);
+                d.Drain(10, 100);
+                while (caller.IsAlive)
+                {
+                    pipe?.Tick(); // waits for a baseline that does not come
+                    Thread.Sleep(10);
+                }
+                eh.Baseline = true; // too late
+                for (int i = 0; i < 5; i++)
+                {
+                    pipe.Tick();
+                    reg.WriteQueue.Pump();
+                }
+                Check("dispatch: pre-commit TIMEOUT says safe to retry; edit never ran later", code == ErrorCodes.Timeout && message.Contains("safe to retry") && applied == 0 && pipe.IsDone);
+                Check("dispatch: the write queue moved on", !reg.WriteQueue.IsBusy);
+            }
+
+            // 2. Deadline reached after commit: the caller waits (bounded) and gets the success result; applied once.
+            {
+                MainThreadDispatcher d = new MainThreadDispatcher(TimeSpan.FromSeconds(3));
+                ToolRegistry reg = new ToolRegistry(new WriteSafety(() => true, () => true, guardHost));
+                FakeEditHost eh = new FakeEditHost { Selected = true, Baseline = true };
+                EditPipeline pipe = null;
+                int applied = 0;
+                reg.Register(ToolDefinition.Write("edit", WriteGuard.OpenMod(), null, inv =>
+                {
+                    pipe = new EditPipeline(eh, inv.Completion, true, () => { applied++; return new EditOutcome { Changed = true, Then = PostEditWait.AwaitPush, BuildResult = r => r }; })
+                    {
+                        PushTimeout = TimeSpan.FromMilliseconds(300),
+                        CommitMargin = TimeSpan.Zero,
+                    };
+                    pipe.Start(); // applies at once (selected + baseline), then waits for the push
+                }, TimeSpan.FromMilliseconds(1200)));
+                object result = null;
+                Exception error = null;
+                Stopwatch sw = Stopwatch.StartNew();
+                Thread caller = Call(reg, "edit", d, (r, e) => { result = r; error = e; });
+                SpinWait.SpinUntil(() => d.PendingCount >= 1, 2000);
+                d.Drain(10, 100);
+                bool appliedBeforeDeadline = applied == 1 && pipe.IsCommitted;
+                Thread.Sleep(1700); // "frame stall" past the caller's deadline; the push never comes
+                bool stillWaiting = caller.IsAlive;
+                pipe.Tick();
+                caller.Join(5000);
+                EditReport rep = result as EditReport;
+                Check("dispatch: committed call is not cancelled at its deadline (caller still waiting)", appliedBeforeDeadline && stillWaiting);
+                Check($"dispatch: deadline after commit -> success result (undoPending), applied exactly once ({sw.Elapsed.TotalSeconds:0.0} s)",
+                    error == null && rep != null && rep.Changed && rep.UndoPending && applied == 1 && sw.Elapsed.TotalMilliseconds > 1200);
+            }
+
+            // 3. Queued call that cannot start in time: fails before touching anything; the body never runs.
+            {
+                MainThreadDispatcher d = new MainThreadDispatcher(TimeSpan.FromSeconds(3));
+                ToolRegistry reg = new ToolRegistry(new WriteSafety(() => true, () => true, guardHost));
+                WriteInvocation held = null;
+                int secondRuns = 0;
+                reg.Register(ToolDefinition.Write("slow", WriteGuard.OpenMod(), null, inv => held = inv, TimeSpan.FromSeconds(10)));
+                reg.Register(ToolDefinition.Write("second", WriteGuard.OpenMod(), null, inv => { secondRuns++; inv.Complete("ran"); }, TimeSpan.FromMilliseconds(1600)));
+                object slowResult = null;
+                string secondCode = null, secondMessage = null;
+                Thread t1 = Call(reg, "slow", d, (r, e) => slowResult = r);
+                SpinWait.SpinUntil(() => d.PendingCount >= 1, 2000);
+                d.Drain(10, 100);
+                Thread t2 = Call(reg, "second", d, (r, e) => { secondCode = (e as RpcException)?.Code; secondMessage = e?.Message; });
+                SpinWait.SpinUntil(() => d.PendingCount >= 1, 2000);
+                d.Drain(10, 100); // second joins the write queue behind slow
+                Thread.Sleep(800); // second now has < 1 s (WriteQueue.MinStartBudget) left
+                held.Complete("slow done");
+                t1.Join(2000);
+                t2.Join(3000);
+                Check("dispatch: queued call without enough time left -> TIMEOUT 'not started', body never ran",
+                    secondCode == ErrorCodes.Timeout && secondMessage.Contains("write queue") && secondRuns == 0 && (string)slowResult == "slow done");
+
+                // A body's own commit point refuses when its budget does not fit (e.g. a create/open load).
+                int sideEffects = 0;
+                reg.Register(ToolDefinition.Write("needs_time", WriteGuard.OpenMod(), null, inv =>
+                {
+                    inv.Commit(TimeSpan.FromSeconds(5));
+                    sideEffects++;
+                    inv.Complete("done");
+                }, TimeSpan.FromSeconds(2)));
+                string code = null;
+                Thread t3 = Call(reg, "needs_time", d, (r, e) => code = (e as RpcException)?.Code);
+                SpinWait.SpinUntil(() => d.PendingCount >= 1, 2000);
+                d.Drain(10, 100);
+                t3.Join(3000);
+                Check("dispatch: WriteInvocation.Commit with too little time left -> TIMEOUT, no side effect", code == ErrorCodes.Timeout && sideEffects == 0);
+            }
+        }
+
+        private static Thread Call(ToolRegistry reg, string name, IMainThreadDispatcher d, Action<object, Exception> done)
+        {
+            reg.TryGet(name, out RegisteredTool tool);
+            Thread t = new Thread(() =>
+            {
+                try
+                {
+                    done(tool.Invoke(new ToolContext(name, new JObject(), d, TimeSpan.FromSeconds(10))), null);
+                }
+                catch (Exception e)
+                {
+                    done(null, e);
+                }
+            }) { IsBackground = true };
+            t.Start();
+            return t;
+        }
+
+        // ================================================================== reference rules (M2)
+
+        private static RefComponent RC(string type, string guid, bool matches) => new RefComponent { TypeName = type, Guid = guid, Matches = matches };
+
+        private static void ReferenceRuleTests()
+        {
+            Console.WriteLine("-- unit: reference rules (object guid vs component guid)");
+            const string obj = "0b6d0000-0000-0000-0000-000000000001", tr = "0b6d0000-0000-0000-0000-00000000000a";
+            const string audio = "0b6d0000-0000-0000-0000-00000000000b", audio2 = "0b6d0000-0000-0000-0000-00000000000c";
+            Func<IList<RefComponent>> speaker = () => new List<RefComponent> { RC("ModTransform", tr, false), RC("ModAudioSource", audio, true) };
+            int calls = 0;
+            Func<IList<RefComponent>> counted = () => { calls++; return speaker(); };
+
+            RefDecision d = ReferenceRules.Decide(obj, true, obj, "Speaker", ExpectedRefKind.Other, false, speaker, "AudioSource", "targets[0]");
+            Check("object guid (registered ModTransform asset), AudioSource expected -> the object's AudioSource component",
+                d.Source == RefSource.ObjectComponent && d.ComponentIndex == 1);
+            Check("object guid compared case-insensitively",
+                ReferenceRules.Decide(obj, true, obj.ToUpperInvariant(), "Speaker", ExpectedRefKind.Other, false, speaker, "AudioSource", "p").Source == RefSource.ObjectComponent);
+            d = ReferenceRules.Decide(audio, true, null, null, ExpectedRefKind.Other, false, counted, "AudioSource", "targets[0]");
+            Check("component guid -> its registered asset, components not searched", d.Source == RefSource.Asset && calls == 0);
+            d = ReferenceRules.Decide(obj, true, obj, "Speaker", ExpectedRefKind.Transform, true, counted, "Transform", "m_transformToMatch");
+            Check("object guid, Transform expected -> the object's own asset (Transform)", d.Source == RefSource.Asset && calls == 0);
+            d = ReferenceRules.Decide(obj, true, obj, "Speaker", ExpectedRefKind.GameObject, false, counted, "GameObject", "p");
+            Check("object guid, GameObject expected -> the object's own asset (its GameObject)", d.Source == RefSource.Asset && calls == 0);
+            d = ReferenceRules.Decide(obj, true, obj, "Speaker", ExpectedRefKind.Other, true, counted, "Component", "targets[0]");
+            Check("object guid, Component expected (Transform fits) -> the Transform, as before", d.Source == RefSource.Asset && calls == 0);
+            d = ReferenceRules.Decide(obj, false, null, "Speaker", ExpectedRefKind.Other, false, speaker, "AudioSource", "p");
+            Check("unregistered object guid -> component search", d.Source == RefSource.ObjectComponent && d.ComponentIndex == 1);
+
+            string missing = Msg(() => ReferenceRules.Decide(obj, true, obj, "Cube", ExpectedRefKind.Other, false,
+                () => new List<RefComponent> { RC("ModTransform", tr, false), RC("ModProp", audio2, false) }, "AudioSource", "targets[0]"));
+            Check("object without the component -> INVALID_PARAMS naming the type and listing components with guids",
+                Code(() => ReferenceRules.Decide(obj, true, obj, "Cube", ExpectedRefKind.Other, false, () => new List<RefComponent> { RC("ModTransform", tr, false) }, "AudioSource", "p")) == ErrorCodes.InvalidParams
+                && missing.Contains("targets[0]") && missing.Contains("no component of type AudioSource") && missing.Contains("ModTransform " + tr) && missing.Contains("ModProp " + audio2));
+            string ambiguous = Msg(() => ReferenceRules.Decide(obj, true, obj, "Speaker", ExpectedRefKind.Other, false,
+                () => new List<RefComponent> { RC("ModTransform", tr, false), RC("ModAudioSource", audio, true), RC("ModAudioSource", audio2, true) }, "AudioSource", "p"));
+            Check("several matching components -> refused, both guids listed", ambiguous != null && ambiguous.Contains(audio) && ambiguous.Contains(audio2) && ambiguous.Contains("2 components"));
+            Check("neither asset nor object -> INVALID_PARAMS 'no asset or object'",
+                Msg(() => ReferenceRules.Decide(obj, false, null, null, ExpectedRefKind.Other, false, speaker, "AudioSource", "p"))?.Contains("no asset or object") == true);
+            Check("asset whose value is another object's Transform (guid differs) -> plain asset path",
+                ReferenceRules.Decide(obj, true, tr, null, ExpectedRefKind.Other, false, counted, "AudioSource", "p").Source == RefSource.Asset && calls == 0);
         }
 
         // ================================================================== reparent rules

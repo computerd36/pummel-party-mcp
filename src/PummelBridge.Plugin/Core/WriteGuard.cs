@@ -45,6 +45,8 @@ namespace PummelBridge.Core
         public bool ModLoaded;
         /// <summary>Meta.json name of the open mod (in memory).</summary>
         public string ModName;
+        /// <summary>Set when the mod name could not be read because a game member is missing (game version changed?); the guard still refuses.</summary>
+        public string ModNameError;
         /// <summary>Leaf folder name of the open mod.</summary>
         public string FolderName;
         /// <summary>EditorState == Editing.</summary>
@@ -163,7 +165,15 @@ namespace PummelBridge.Core
             }
         }
 
-        private static RpcException NotTestMod(EditorSnapshot snap, string message) => new RpcException(ErrorCodes.GuardNotTestMod, message);
+        private static RpcException NotTestMod(EditorSnapshot snap, string message)
+        {
+            if (snap != null && snap.ModNameError != null)
+            {
+                // Still a refusal (fail closed), but say why: the name is unreadable, not "not a test mod".
+                return new RpcException(ErrorCodes.Internal, "cannot read the open mod's name: " + snap.ModNameError + "; refusing the write");
+            }
+            return new RpcException(ErrorCodes.GuardNotTestMod, message);
+        }
 
         private static bool SafeCall(Func<bool> f)
         {
@@ -197,6 +207,27 @@ namespace PummelBridge.Core
         }
 
         public T ArgsAs<T>() where T : class => (T)Args;
+
+        /// <summary>
+        /// Commit point of a body that changes the editor/mod outside <see cref="EditPipeline"/> (save, create/open, undo):
+        /// call it right before the first change. Throws TIMEOUT (nothing changed, safe to retry) when the caller already
+        /// gave up or less than <paramref name="needed"/> is left until the deadline; afterwards the caller waits for the
+        /// body's own result (see <see cref="IWorkCompletion.TryCommit"/>).
+        /// </summary>
+        public void Commit(TimeSpan needed)
+        {
+            TimeSpan left = Completion.Remaining;
+            if (left < needed)
+            {
+                throw new RpcException(ErrorCodes.Timeout,
+                    $"not enough of the call's time limit left to finish it ({Math.Max(0, left.TotalSeconds):0.#} s left, {needed.TotalSeconds:0.#} s needed; " +
+                    "it waited behind other write calls); nothing was changed (safe to retry)");
+            }
+            if (!Completion.TryCommit())
+            {
+                throw new RpcException(ErrorCodes.Timeout, "the call timed out before it changed anything; nothing was changed (safe to retry)");
+            }
+        }
 
         public void Complete(object result) => Completion.SetResult(result);
 

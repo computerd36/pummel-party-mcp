@@ -79,6 +79,19 @@ namespace PummelBridge.PatchTests
         }
     }
 
+    /// <summary>Stand-ins for the live publish-block check (patched, then unpatched by "another plugin").</summary>
+    public static class MonitoredTargets
+    {
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static int Publish() => 1;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static int Delete() => 1;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static int Optional() => 1;
+    }
+
     public sealed class FakePopup
     {
         public int Saves;
@@ -181,6 +194,12 @@ namespace PummelBridge.PatchTests
             Check("a patch that throws (even optional) -> incomplete, reported", !abstractFail.Complete && abstractFail.Missing.Count == 1 && abstractFail.Missing[0].Contains("patch failed"));
             Check("nothing patched -> not complete", !PublishBlocker.Apply(new Harmony("pummelbridge.patchtests.4"), new BlockTarget[0]).Complete);
 
+            // ---- live publish-block check (PublishBlockMonitor) ----
+            MonitorTests();
+
+            // ---- offline drift test against the real game assemblies (reflection only, no patch applied) ----
+            GameDriftTest.Run(Check);
+
             // ---- SaveWatch (postfix on SaveCurrentMod that only records) ----
             MethodInfo save = typeof(FakeEditor).GetMethod("SaveCurrentMod", new[] { typeof(bool) });
             Check("SaveWatch.Install with null target reports an error", SaveWatch.Install(new Harmony("pummelbridge.patchtests.sw0"), null) != null && !SaveWatch.Installed);
@@ -209,6 +228,50 @@ namespace PummelBridge.PatchTests
                 Console.WriteLine("  FAILED: " + f);
             }
             return s_failed == 0 ? 0 : 1;
+        }
+
+        private static void MonitorTests()
+        {
+            ListLog log = new ListLog();
+            PublishBlocker.Configure(log, null);
+            Type m = typeof(MonitoredTargets);
+            MethodInfo publish = m.GetMethod("Publish"), delete = m.GetMethod("Delete"), optional = m.GetMethod("Optional");
+            List<BlockTarget> targets = new List<BlockTarget> { T(publish, true), T(delete, true), T(optional, false) };
+            const string id = "pummelbridge.patchtests.monitor";
+            Harmony h = new Harmony(id);
+            PublishBlockStatus installed = PublishBlocker.Apply(h, targets);
+            PublishBlockMonitor monitor = new PublishBlockMonitor(installed, targets, id, log);
+            Check("monitor: watches the required targets only", monitor.RequiredCount == 2);
+            Check("monitor: complete while every required prefix is in place", installed.Complete && monitor.IsComplete() && monitor.Current().Missing.Count == 0);
+            Check("monitor: only this plugin's Harmony id counts",
+                PublishBlocker.HasBlockingPrefix(publish, id) && !PublishBlocker.HasBlockingPrefix(publish, "someone.else"));
+
+            h.Unpatch(optional, HarmonyPatchType.Prefix, id);
+            Check("monitor: unpatching an optional target keeps it complete", monitor.IsComplete());
+
+            h.Unpatch(delete, HarmonyPatchType.Prefix, id);
+            Check("monitor: unpatched original runs again (stand-in sanity)", MonitoredTargets.Delete() == 1);
+            PublishBlockStatus lost = monitor.Current();
+            string deleteName = PublishBlocker.Describe(delete);
+            Check("monitor: required prefix removed after startup -> incomplete, named in missing",
+                !lost.Complete && lost.Missing.Count == 1 && lost.Missing[0].StartsWith(deleteName) && lost.Missing[0].Contains("removed after startup"));
+            Check("monitor: Error logged naming the target", log.Errors.Count(e => e.Contains(deleteName)) == 1);
+            monitor.Current();
+            monitor.IsComplete();
+            Check("monitor: the Error is logged once, not per check", log.Errors.Count(e => e.Contains(deleteName)) == 1);
+
+            h.Patch(delete, prefix: new HarmonyMethod(typeof(PublishBlocker).GetMethod(nameof(PublishBlocker.PrefixWithResult))));
+            Check("monitor: stays incomplete (sticky) even if the prefix comes back", !monitor.IsComplete());
+
+            Harmony.UnpatchID(id); // what another plugin can do to our id (or Harmony.UnpatchAll() to every id)
+            PublishBlockStatus all = monitor.Current();
+            Check("monitor: UnpatchID by another plugin -> every required target listed, one more Error for the new one",
+                !all.Complete && all.Missing.Count == 2 && log.Errors.Count(e => e.Contains(PublishBlocker.Describe(publish))) == 1);
+
+            PublishBlockStatus failed = new PublishBlockStatus(true, false, 1, new[] { "Game.Gone(): method not found" });
+            PublishBlockMonitor startupFailed = new PublishBlockMonitor(failed, targets, id, log);
+            Check("monitor: an incomplete install stays incomplete with its own missing list",
+                !startupFailed.IsComplete() && startupFailed.Current().Missing[0].StartsWith("Game.Gone()"));
         }
 
         private static BlockTarget T(MethodBase m, bool required) =>
