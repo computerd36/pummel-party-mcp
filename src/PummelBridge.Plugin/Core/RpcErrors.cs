@@ -27,9 +27,21 @@ namespace PummelBridge.Core
     {
         public string Code { get; }
 
+        /// <summary>
+        /// Optional structured detail, returned as <c>error.data</c> (a Newtonsoft JToken or any JSON-serialisable object).
+        /// Typed as object so this file stays free of the JSON library (it is also compiled into the patch-test project).
+        /// </summary>
+        public object ErrorData { get; }
+
         public RpcException(string code, string message) : base(message)
         {
             Code = code;
+        }
+
+        public RpcException(string code, string message, object errorData) : base(message)
+        {
+            Code = code;
+            ErrorData = errorData;
         }
 
         public static RpcException InvalidParams(string message) => new RpcException(ErrorCodes.InvalidParams, message);

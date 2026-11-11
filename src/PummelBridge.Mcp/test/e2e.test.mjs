@@ -17,15 +17,17 @@ const EXPECTED = [
   "set_transform", "add_component", "remove_component", "set_property", "set_properties", "undo",
   "list_action_types", "list_trigger_types", "add_action", "remove_action", "move_action", "set_action",
   "add_trigger", "remove_trigger", "set_trigger",
+  "validate_mod", "start_playtest", "stop_playtest", "run_batch",
 ].sort();
 const WRITES = [
   "create_test_mod", "open_test_mod", "save_mod",
   "create_object", "duplicate_object", "delete_object", "reparent_object", "set_object", "set_transform",
   "add_component", "remove_component", "set_property", "set_properties", "undo",
   "add_action", "remove_action", "move_action", "set_action", "add_trigger", "remove_trigger", "set_trigger",
+  "start_playtest", "stop_playtest", "run_batch",
 ];
-const IDEMPOTENT = ["save_mod", "set_transform", "set_object", "set_property", "set_properties", "set_action", "set_trigger"];
-const DESTRUCTIVE = ["delete_object", "remove_component", "remove_action", "remove_trigger", "undo"];
+const IDEMPOTENT = ["save_mod", "set_transform", "set_object", "set_property", "set_properties", "set_action", "set_trigger", "stop_playtest"];
+const DESTRUCTIVE = ["delete_object", "remove_component", "remove_action", "remove_trigger", "undo", "run_batch"];
 
 test("end to end over stdio MCP", async () => {
   const dir = makeTempDir();
@@ -51,7 +53,7 @@ test("end to end over stdio MCP", async () => {
       assert.equal(t.inputSchema.type, "object");
       assert.ok(t.description && t.description.length > 20);
     }
-    assert.equal(tools.length, 35);
+    assert.equal(tools.length, 39);
     for (const t of tools) {
       if (WRITES.includes(t.name)) {
         assert.equal(t.annotations.readOnlyHint, false, t.name);

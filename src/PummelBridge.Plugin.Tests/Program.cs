@@ -36,6 +36,7 @@ namespace PummelBridge.Tests
             GuardTests.Run((name, ok) => Check(name, ok));
             EditCoreTests.Run((name, ok) => Check(name, ok));
             ActionCoreTests.Run((name, ok) => Check(name, ok));
+            PlaytestBatchTests.Run((name, ok) => Check(name, ok));
             AssetListingTests();
             ServerTests();
             Console.WriteLine();
@@ -71,41 +72,45 @@ namespace PummelBridge.Tests
                 TokenAuth.LoadOrCreate(path, out bool createdAgain);
                 Check("a valid token file is not rewritten", !createdAgain && File.GetLastWriteTimeUtc(path) == stamp && File.ReadAllText(path) == t3);
 
-                // Two (here: eight) starters at once on a fresh path: exactly one creates the file, all use the same token,
-                // and the file always holds one complete token.
-                string racePath = Path.Combine(dir, "race", "PummelBridge.token");
-                string[] tokens = new string[8];
-                bool[] createdFlags = new bool[8];
-                using (Barrier gate = new Barrier(8))
+                // 32 starters at once, 50 rounds, on a fresh path: exactly one creator, all use the same token (the file's),
+                // and no temp files remain. Then the same race over a malformed file (replace path).
+                const int N = 32;
+                bool freshOk = true, badOk = true;
+                for (int round = 0; round < 50; round++)
                 {
-                    Task[] racers = Enumerable.Range(0, 8).Select(i => Task.Run(() =>
+                    string racePath = Path.Combine(dir, "race" + round, "PummelBridge.token");
+                    string[] tokens = new string[N];
+                    bool[] createdFlags = new bool[N];
+                    using (Barrier gate = new Barrier(N))
                     {
-                        gate.SignalAndWait();
-                        tokens[i] = TokenAuth.LoadOrCreate(racePath, out createdFlags[i]);
-                    })).ToArray();
-                    Task.WaitAll(racers);
-                }
-                Check("concurrent first starts: one creator, one shared well-formed token",
-                    createdFlags.Count(c => c) == 1 && tokens.Distinct().Count() == 1 && TokenAuth.IsWellFormed(tokens[0]) && File.ReadAllText(racePath) == tokens[0]);
-                Check("concurrent first starts leave no temp files", Directory.GetFiles(Path.GetDirectoryName(racePath)).Length == 1);
+                        Task[] racers = Enumerable.Range(0, N).Select(i => Task.Factory.StartNew(() =>
+                        {
+                            gate.SignalAndWait();
+                            tokens[i] = TokenAuth.LoadOrCreate(racePath, out createdFlags[i]);
+                        }, TaskCreationOptions.LongRunning)).ToArray();
+                        Task.WaitAll(racers);
+                    }
+                    freshOk &= createdFlags.Count(c => c) == 1 && tokens.Distinct().Count() == 1 && TokenAuth.IsWellFormed(tokens[0])
+                        && File.ReadAllText(racePath) == tokens[0] && Directory.GetFiles(Path.GetDirectoryName(racePath)).Length == 1;
 
-                // Same race, but over a malformed file (replace path): everybody ends with a well-formed token that matches the
-                // file once the dust settles; no temp files remain.
-                string badPath = Path.Combine(dir, "bad", "PummelBridge.token");
-                Directory.CreateDirectory(Path.GetDirectoryName(badPath));
-                File.WriteAllText(badPath, "garbage");
-                string[] badTokens = new string[6];
-                using (Barrier gate = new Barrier(6))
-                {
-                    Task[] racers = Enumerable.Range(0, 6).Select(i => Task.Run(() =>
+                    string badPath = Path.Combine(dir, "bad" + round, "PummelBridge.token");
+                    Directory.CreateDirectory(Path.GetDirectoryName(badPath));
+                    File.WriteAllText(badPath, "garbage");
+                    string[] badTokens = new string[N];
+                    using (Barrier gate = new Barrier(N))
                     {
-                        gate.SignalAndWait();
-                        badTokens[i] = TokenAuth.LoadOrCreate(badPath, out bool _);
-                    })).ToArray();
-                    Task.WaitAll(racers);
+                        Task[] racers = Enumerable.Range(0, N).Select(i => Task.Factory.StartNew(() =>
+                        {
+                            gate.SignalAndWait();
+                            badTokens[i] = TokenAuth.LoadOrCreate(badPath, out bool _);
+                        }, TaskCreationOptions.LongRunning)).ToArray();
+                        Task.WaitAll(racers);
+                    }
+                    string fileText = File.ReadAllText(badPath);
+                    badOk &= TokenAuth.IsWellFormed(fileText) && badTokens.All(t => t == fileText) && Directory.GetFiles(Path.GetDirectoryName(badPath)).Length == 1;
                 }
-                Check("concurrent starts over a malformed file: all tokens well-formed, file complete, no temp files",
-                    badTokens.All(TokenAuth.IsWellFormed) && TokenAuth.IsWellFormed(File.ReadAllText(badPath)) && Directory.GetFiles(Path.GetDirectoryName(badPath)).Length == 1);
+                Check("concurrent first starts (32 x 50): one creator, one shared well-formed token, no temp files", freshOk);
+                Check("concurrent starts over a malformed file (32 x 50): all tokens equal the complete file, no temp files", badOk);
             }
             finally
             {

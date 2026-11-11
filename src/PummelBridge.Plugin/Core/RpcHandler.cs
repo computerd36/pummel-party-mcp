@@ -120,6 +120,17 @@ namespace PummelBridge.Core
                         m_log.Debug($"rpc {method}: {rpc.Code}: {rpc.Message}");
                     }
                     envelope = Error(rpc.Code, rpc.Message);
+                    if (rpc.ErrorData != null)
+                    {
+                        try
+                        {
+                            ((JObject)envelope["error"])["data"] = rpc.ErrorData as JToken ?? JToken.FromObject(rpc.ErrorData);
+                        }
+                        catch (Exception de)
+                        {
+                            m_log.Warning($"rpc {method}: error data could not be serialised: {de.Message}");
+                        }
+                    }
                 }
                 else
                 {

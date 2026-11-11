@@ -14,6 +14,7 @@ const entry = join(here, "..", "dist", "index.js");
 const READ_TOOLS = [
   "bridge_guide", "ping", "get_status", "get_open_mod", "get_hierarchy", "get_object", "get_action_graph",
   "list_assets", "list_component_types", "list_action_types", "list_trigger_types", "get_log", "screenshot", "list_mods",
+  "validate_mod",
 ];
 const SIZE_LIMIT = 40000;
 

@@ -95,6 +95,14 @@ export function defaultHandler(method, params) {
     case "set_trigger":
       // edit tools: echo the received params so tests can check pass-through
       return { ok: true, result: { echoed: params, changed: true, undoable: true, undoStackLength: 1 } };
+    case "validate_mod":
+      return { ok: true, result: { mod: "PB_TEST_a", valid: true, errorCount: 0, issues: [] } };
+    case "start_playtest":
+      return { ok: true, result: { playing: true, saved: true, echoed: params } };
+    case "stop_playtest":
+      return { ok: true, result: { stopped: true, alreadyStopped: false, state: "Editing" } };
+    case "run_batch":
+      return { ok: true, result: { completed: params.steps.length, total: params.steps.length, echoed: params } };
     case "list_action_types":
     case "list_trigger_types":
     case "get_action_graph":

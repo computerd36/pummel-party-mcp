@@ -63,7 +63,12 @@ namespace PummelBridge.Tools
                 }
             }
 
-            return AssetListing.Query(rows, typeFilter, search, limit, offset);
+            JObject result = AssetListing.Query(rows, typeFilter, search, limit, offset);
+            if (ed.State != EditorState.Editing)
+            {
+                result["playMode"] = true; // the editor mod's asset list (unchanged during a playtest)
+            }
+            return result;
         }
 
         private static void AddRow(List<AssetEntry> rows, ModAsset a, string modRoot)

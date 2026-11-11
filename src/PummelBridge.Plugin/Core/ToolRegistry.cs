@@ -144,22 +144,37 @@ namespace PummelBridge.Core
         {
             object args = tool.ParseArgs?.Invoke(ctx);
             TimeSpan timeout = tool.Timeout ?? ctx.MainThreadTimeout;
-            return ctx.InvokeOnMainThread(outer => WriteQueue.Enqueue(tool.Name, outer, completion =>
-            {
-                EditorSnapshot snap = m_safety.Host.Capture();
-                RpcException denied = WriteGuardEvaluator.Evaluate(m_safety, tool.Guard, args, snap);
-                if (denied != null)
-                {
-                    completion.SetException(denied);
-                    return;
-                }
-                if (snap.ModOpen && snap.ModLoaded && snap.OpenModIsTestMod)
-                {
-                    m_safety.Host.EnforceDefaultWorkshopId();
-                }
-                tool.Body(new WriteInvocation(ctx, args, completion, snap, m_safety));
-            }), timeout);
+            return ctx.InvokeOnMainThread(outer => WriteQueue.Enqueue(tool.Name, outer, completion => StartGuarded(tool, ctx, args, completion)), timeout);
         }
+
+        /// <summary>
+        /// Main thread: evaluates the tool's guard and, if it passes, applies the Workshop id hygiene and starts the body,
+        /// all in one unit of work. Used for every write call (inside its write-queue turn) and for each write step of
+        /// run_batch (inside the batch's turn). The body completes <paramref name="completion"/> (now or later).
+        /// </summary>
+        internal void StartGuarded(ToolDefinition tool, ToolContext ctx, object args, IWorkCompletion completion)
+        {
+            if (tool == null || !tool.IsWrite || tool.Guard == null || tool.Body == null || m_safety == null)
+            {
+                completion.SetException(new RpcException(ErrorCodes.Internal, "write tool without guard configuration"));
+                return;
+            }
+            EditorSnapshot snap = m_safety.Host.Capture();
+            RpcException denied = WriteGuardEvaluator.Evaluate(m_safety, tool.Guard, args, snap);
+            if (denied != null)
+            {
+                completion.SetException(denied);
+                return;
+            }
+            if (snap.ModOpen && snap.ModLoaded && snap.OpenModIsTestMod)
+            {
+                m_safety.Host.EnforceDefaultWorkshopId();
+            }
+            tool.Body(new WriteInvocation(ctx, args, completion, snap, m_safety));
+        }
+
+        /// <summary>Parses a write tool's params (no game access; may throw INVALID_PARAMS). Null when the tool has no parser.</summary>
+        internal static object ParseWriteArgs(ToolDefinition tool, ToolContext ctx) => tool.ParseArgs?.Invoke(ctx);
     }
 
     public sealed class ToolContext

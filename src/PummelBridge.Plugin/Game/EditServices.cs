@@ -14,6 +14,9 @@ namespace PummelBridge.Game
         public EditTracker Tracker { get; } = new EditTracker();
         public IBridgeLog Log { get; }
 
+        /// <summary>Playtest timeline (get_status.playtest), fed by <see cref="Observe"/>.</summary>
+        public PlaytestClock Playtest { get; } = new PlaytestClock();
+
         /// <summary>Reused every frame by <see cref="Observe"/> (the tracker copies what it keeps).</summary>
         private readonly UndoSignature m_scratch = new UndoSignature();
 
@@ -29,6 +32,7 @@ namespace PummelBridge.Game
             try
             {
                 EditorSystem ed = EditorAccess.EditorOrNull();
+                Playtest.Observe(PlaytestAccess.StateOf(ed), DateTime.UtcNow);
                 PummelMod mod = ed?.CurrentMod;
                 if (ed == null || mod == null)
                 {

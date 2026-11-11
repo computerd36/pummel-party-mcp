@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 
 namespace PummelBridge.Core
 {
@@ -14,9 +15,11 @@ namespace PummelBridge.Core
         /// <summary>
         /// Reads the token file, or creates it (and its directory) if missing or malformed. The file is never written in
         /// place: the token goes to a temp file in the same directory which is then moved (missing target) or replaced
-        /// (malformed target) atomically, so a reader never sees a half-written token. Two processes starting at once
-        /// converge: the one whose move loses re-reads the file and uses the winner's token (<paramref name="created"/>
-        /// false). The file's ACL is not changed (see docs/bridge-api.md, Safety).
+        /// (malformed target) atomically, so a reader never sees a half-written token. Starters are serialised with a
+        /// named mutex, and a lost race (move/replace failing with IOException or a sharing violation) never throws:
+        /// the temp file is deleted, the file is re-read with a short bounded retry and the winner's token is used
+        /// (<paramref name="created"/> false). After a successful write the file is re-read and what it holds is returned,
+        /// so all callers agree with the file. The file's ACL is not changed (see docs/bridge-api.md, Safety).
         /// </summary>
         public static string LoadOrCreate(string path, out bool created)
         {
@@ -27,18 +30,72 @@ namespace PummelBridge.Core
                 return existing;
             }
 
-            string token = Generate();
+            Mutex gate = null;
+            bool locked = false;
+            try
+            {
+                gate = new Mutex(false, "PummelBridge.Token." + PathKey(path));
+                try { locked = gate.WaitOne(5000); }
+                catch (AbandonedMutexException) { locked = true; }
+            }
+            catch (Exception)
+            {
+                gate = null; // named mutexes unavailable: the lock-free retry logic below still copes with races
+            }
+            try
+            {
+                return CreateLocked(path, out created);
+            }
+            finally
+            {
+                if (gate != null)
+                {
+                    if (locked)
+                    {
+                        try { gate.ReleaseMutex(); } catch (Exception) { }
+                    }
+                    gate.Dispose();
+                }
+            }
+        }
+
+        private static string PathKey(string path)
+        {
+            using (SHA256 sha = SHA256.Create())
+            {
+                byte[] h = sha.ComputeHash(Encoding.UTF8.GetBytes(Path.GetFullPath(path).ToLowerInvariant()));
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < 16; i++)
+                {
+                    sb.Append(h[i].ToString("x2"));
+                }
+                return sb.ToString();
+            }
+        }
+
+        private static string CreateLocked(string path, out bool created)
+        {
+            created = false;
+            string existing = TryRead(path);
+            if (existing != null)
+            {
+                return existing;
+            }
+
             string dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir))
             {
                 Directory.CreateDirectory(dir);
             }
-            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
+
+            Exception last = null;
+            for (int attempt = 0; attempt < 2; attempt++)
             {
-                File.WriteAllText(temp, token, Encoding.ASCII);
+                string token = Generate();
+                string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 try
                 {
+                    File.WriteAllText(temp, token, Encoding.ASCII);
                     if (File.Exists(path))
                     {
                         ReplaceFile(temp, path); // malformed file
@@ -47,31 +104,51 @@ namespace PummelBridge.Core
                     {
                         File.Move(temp, path); // fails if another process created the file meanwhile
                     }
-                }
-                catch (IOException)
-                {
-                    // Lost a race (or the target was locked for a moment): a valid token written by someone else wins.
-                    string other = TryRead(path);
-                    if (other != null)
+                    // Re-read: use what is on disk so every starter agrees with the file.
+                    string onDisk = ReadWithRetry(path);
+                    if (onDisk != null)
                     {
-                        return other;
+                        created = onDisk == token;
+                        return onDisk;
                     }
-                    throw;
+                }
+                catch (IOException ex)
+                {
+                    last = ex;
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    last = ex; // sharing violation while another starter holds the file
+                }
+                finally
+                {
+                    try { File.Delete(temp); } catch (Exception) { /* already moved, or best effort */ }
+                }
+
+                // Lost a race (or target momentarily locked / mid-replace): a valid token from the winner wins.
+                string other = ReadWithRetry(path);
+                if (other != null)
+                {
+                    created = false;
+                    return other;
                 }
             }
-            finally
-            {
-                try { File.Delete(temp); } catch { /* already moved, or best effort */ }
-            }
+            throw new IOException("Could not create or read a valid token file at '" + path + "' after retrying.", last);
+        }
 
-            // Re-read: if another process replaced the file after us, use what is on disk now so both sides agree.
-            string onDisk = TryRead(path);
-            if (onDisk != null && onDisk != token)
+        /// <summary>Bounded retry (~1 s) for a file that may be briefly locked or mid-replace.</summary>
+        private static string ReadWithRetry(string path)
+        {
+            for (int i = 0; i < 40; i++)
             {
-                return onDisk;
+                string t = TryRead(path);
+                if (t != null)
+                {
+                    return t;
+                }
+                Thread.Sleep(i < 10 ? 5 : 25);
             }
-            created = true;
-            return token;
+            return null;
         }
 
         /// <summary>The well-formed token in the file, or null (missing, unreadable or malformed).</summary>

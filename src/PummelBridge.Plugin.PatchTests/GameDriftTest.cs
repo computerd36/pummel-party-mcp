@@ -53,6 +53,7 @@ namespace PummelBridge.PatchTests
                     distinct == ExpectedTargetCount && targets.All(t => t.Method != null));
                 check("every target belongs to the game or Steamworks.NET assembly", targets.Where(t => t.Method != null)
                     .All(t => t.Method.DeclaringType.Assembly == game || t.Method.DeclaringType.Assembly == steam));
+                ReflectedMembers(game, check);
             }
             catch (Exception e)
             {
@@ -62,6 +63,36 @@ namespace PummelBridge.PatchTests
             {
                 AppDomain.CurrentDomain.ReflectionOnlyAssemblyResolve -= resolver;
             }
+        }
+
+        /// <summary>
+        /// Private game fields the plugin reads/writes by name (playtest and validator tools, increment 4). Public members
+        /// are checked by the compiler; these are not, so a game update renaming one would only show up at runtime.
+        /// </summary>
+        private static void ReflectedMembers(Assembly game, Action<string, bool> check)
+        {
+            const BindingFlags any = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+            (string type, string field, string fieldType, bool isStatic)[] fields =
+            {
+                ("EditorSystem", "m_toolbarWidget", "ToolbarWidget", false),
+                ("ToolbarWidget", "m_playerCountChoice", "System.Int32", false),
+                ("ToolbarWidget", "m_aiOnly", "System.Boolean", false),
+                ("ToolbarWidget", "m_backgroundModLoadTimer", "System.Single", false),
+                ("ToolbarWidget", "m_playerCount", "System.String[]", false),
+                ("ModValidationSystem", "m_validators", "System.Collections.Generic.List`1[ModValidationCallbackReceiver]", true),
+                ("MinigameController", "round", "System.Int32", false),
+            };
+            foreach (var f in fields)
+            {
+                Type t = game.GetType(f.type, false);
+                FieldInfo fi = t?.GetField(f.field, any);
+                check($"reflected field {f.type}.{f.field} exists ({f.fieldType}{(f.isStatic ? ", static" : "")})",
+                    fi != null && fi.FieldType.ToString() == f.fieldType && fi.IsStatic == f.isStatic);
+            }
+            Type modWorkshopController = game.GetType("WorkshopController", false);
+            check("WorkshopController.CurrentBackgroundLoadMod / CurrentActiveMod are static properties",
+                modWorkshopController?.GetProperty("CurrentBackgroundLoadMod", BindingFlags.Public | BindingFlags.Static) != null
+                && modWorkshopController.GetProperty("CurrentActiveMod", BindingFlags.Public | BindingFlags.Static) != null);
         }
 
         /// <summary>GameDir as the project file saw it at build time (same property the plugin csproj uses).</summary>

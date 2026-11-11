@@ -51,6 +51,7 @@ namespace PummelBridge.Tools
                 JObject node = Node(mt.transform, mt, 0, state);
                 node["truncated"] = state.Truncated;
                 node["nodeCount"] = state.Nodes;
+                MarkPlayMode(ed, node);
                 return node;
             }
 
@@ -75,7 +76,21 @@ namespace PummelBridge.Tools
                 ["truncated"] = state.Truncated,
                 ["nodeCount"] = state.Nodes,
             };
+            MarkPlayMode(ed, result);
             return result;
+        }
+
+        /// <summary>
+        /// During a playtest the edit-time hierarchy persists unchanged but deactivated (EditorSystem.SetActive(false));
+        /// the playtest runs on a separate copy. The result describes the edit-time scene and says so.
+        /// </summary>
+        private static void MarkPlayMode(EditorSystem ed, JObject result)
+        {
+            if (ed.State != EditorState.Editing)
+            {
+                result["playMode"] = true;
+                result["playModeNote"] = "a playtest is running: this is the edit-time scene (unchanged, hidden while playing), not the running copy";
+            }
         }
 
         /// <summary>A get_hierarchy node (with its whole subtree up to <paramref name="maxDepth"/>) for one object. Main thread.</summary>

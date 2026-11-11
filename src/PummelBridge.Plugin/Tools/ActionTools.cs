@@ -54,6 +54,7 @@ namespace PummelBridge.Tools
         {
             EditorSystem ed = EditorAccess.RequireEditor();
             PummelMod mod = EditorAccess.RequireLoadedMod(ed);
+            PlaytestAccess.RequireEditMode(ed, "get_action_graph");
             ValueConverter conv = new ValueConverter(mod, summarizeTriggers: false, maxDepth: 12);
             JArray result = new JArray();
 
@@ -165,6 +166,11 @@ namespace PummelBridge.Tools
         {
             EditorSystem ed = EditorAccess.RequireEditor();
             PummelMod mod = EditorAccess.RequireLoadedMod(ed);
+            if (addr != null)
+            {
+                // The trigger entry carries action targets (references); without an address the palette is static.
+                PlaytestAccess.RequireEditMode(ed, "list_action_types with a trigger address");
+            }
             ResolvedTrigger r = addr != null ? ActionModel.Resolve(ed, mod, addr, forWrite: false) : null;
             CallSite site = r?.Site;
             ValueConverter conv = new ValueConverter(mod, summarizeTriggers: false, maxDepth: 12);
@@ -223,6 +229,10 @@ namespace PummelBridge.Tools
                 result["trigger"] = Entry(conv, r);
             }
             result["actionTypes"] = rows;
+            if (ed.State != EditorState.Editing)
+            {
+                result["playMode"] = true;
+            }
             return result;
         }
 
@@ -264,7 +274,12 @@ namespace PummelBridge.Tools
                 }
                 rows.Add(row);
             }
-            return new JObject { ["modType"] = modType, ["triggerTypes"] = rows };
+            JObject result = new JObject { ["modType"] = modType, ["triggerTypes"] = rows };
+            if (ed.State != EditorState.Editing)
+            {
+                result["playMode"] = true;
+            }
+            return result;
         }
     }
 }

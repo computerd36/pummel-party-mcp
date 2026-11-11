@@ -18,6 +18,7 @@ export class BridgeError extends Error {
   }
 }
 
+export const MAX_ERROR_DATA_CHARS = 4000;
 export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 export const WRITE_AMBIGUITY_NOTE =
   "The edit may or may not have been applied; check with get_status/get_object/get_hierarchy before retrying.";
@@ -96,6 +97,10 @@ export const TOOL_TIMEOUTS_MS: Record<string, number> = {
   add_trigger: 20000,
   remove_trigger: 20000,
   set_trigger: 20000,
+  // playtest/batch: the plugin's own limits are 60 / 30 / 120 s, plus up to 4 s commit grace and network margin
+  start_playtest: 70000,
+  stop_playtest: 40000,
+  run_batch: 130000,
 };
 
 /** Same rule the plugin enforces for sandbox mod names. */
@@ -285,7 +290,13 @@ ${WRITE_AMBIGUITY_NOTE}`, e.code, true);
       const code = text(envErr.code ?? "INTERNAL") || "INTERNAL";
       const hint = HINTS[code] ?? HTTP_HINTS[res.status];
       // An ok:false envelope from the plugin means it answered; nothing is left ambiguous.
-      throw new BridgeError(`${code}: ${text(envErr.message)}${hint ? `
+      // error.data (e.g. the validator issues of a refused start_playtest) is appended as compact JSON.
+      const data = envErr.data === undefined || envErr.data === null ? "" : this.scrub(JSON.stringify(envErr.data) ?? "");
+      const dataLine = data
+        ? `
+Data: ${data.length > MAX_ERROR_DATA_CHARS ? `${data.slice(0, MAX_ERROR_DATA_CHARS)}[truncated: ${data.length} chars]` : data}`
+        : "";
+      throw new BridgeError(`${code}: ${text(envErr.message)}${dataLine}${hint ? `
 Hint: ${hint}` : ""}`, code);
     }
     if (res.status !== 200) {

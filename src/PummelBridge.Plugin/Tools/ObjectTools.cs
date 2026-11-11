@@ -21,7 +21,8 @@ namespace PummelBridge.Tools
         {
             EditorSystem ed = EditorAccess.RequireEditor();
             PummelMod mod = EditorAccess.RequireLoadedMod(ed);
-            ModTransform mt = EditorAccess.FindByGuid(ed, guid, out Transform root);
+            PlaytestAccess.RequireEditMode(ed, "get_object");
+            ModTransform mt =EditorAccess.FindByGuid(ed, guid, out Transform root);
             if (mt == null)
             {
                 throw RpcException.NotFound($"no object with guid {guid}");

@@ -1,12 +1,14 @@
-# PummelBridge HTTP API (api v2, Phase 2 increment 3, plugin 0.4.2)
+# PummelBridge HTTP API (api v2, Phase 2 increment 4, plugin 0.5.0)
 
 The BepInEx plugin `PummelBridge.Plugin` runs inside Pummel Party and exposes the mod editor's state on a
 local HTTP endpoint. api v2 adds the guard layer, the always-on Workshop publish block and four mod lifecycle
 tools (`list_mods`, `create_test_mod`, `open_test_mod`, `save_mod`). Increment 2 (still api v2, all changes are
 additive) adds object, transform, component and property editing plus `undo`; see [Editing](#editing). Increment 3
 (still api v2, additive) adds editing of the Action Editor model (triggers and their action lists); see
-[Action editing](#action-editing). Write tools only ever act on `PB_TEST_` mods; see [Safety](#safety). Playtest and
-batch tools come in a later increment.
+[Action editing](#action-editing). Increment 4 (still api v2, additive) adds `validate_mod`, `start_playtest`,
+`stop_playtest` and `run_batch`, structured error details (`error.data`) and play-mode rules for every tool; see
+[Validation, playtest and batch](#validation-playtest-and-batch). Write tools only ever act on `PB_TEST_` mods; see
+[Safety](#safety).
 
 ## Transport
 
@@ -70,6 +72,9 @@ Response (HTTP 200 for every well-formed, authenticated call):
 {"ok": false, "error": {"code": "NO_MOD_OPEN", "message": "no mod is open in the editor"}}
 ```
 
+An error may carry structured details in `error.data` (additive in increment 4; currently only `start_playtest`'s
+validator refusal: `{"validation": {...}}`). Clients that ignore `data` still get the essentials in `message`.
+
 | Code | Meaning |
 |---|---|
 | `UNKNOWN_METHOD` | no such method in this build |
@@ -83,7 +88,7 @@ Response (HTTP 200 for every well-formed, authenticated call):
 | `WRITES_DISABLED` | write tool called while `[Safety] EnableWrites = false` |
 | `PUBLISH_BLOCK_INCOMPLETE` | write tool called while the Workshop publish block is not complete (`get_status.publishBlock`) |
 | `GUARD_NOT_TEST_MOD` | the open mod (open-mod tools) or the target / open mod (lifecycle tools) is not a `PB_TEST_` mod; the message names it |
-| `INVALID_STATE` | editor state forbids the call: play mode, unsaved changes, a prefab being edited, an open editor dialog, a broken editor mod list, an object outside the current editing context, the left mouse button held in the game window, the open mod changed while an edit was pending (the message says what to do) |
+| `INVALID_STATE` | editor state forbids the call: play mode (also the transitional states `EnteringPlayMode` / `ExitingPlayMode`), a mod that fails the validator (`start_playtest`), unsaved changes, a prefab being edited, an open editor dialog, a broken editor mod list, an object outside the current editing context, the left mouse button held in the game window, the open mod changed while an edit was pending (the message says what to do) |
 | `ALREADY_EXISTS` | `create_test_mod`: a folder or a mod (Meta name) with that name exists, case-insensitive |
 
 Edit tools additionally use `NOT_FOUND` (object / component / the edited object was deleted meanwhile),
@@ -100,7 +105,10 @@ as strings. Asset or object references are objects (see "References").
 `ping` and `get_log` (without `includeEditor`) are answered on the HTTP thread and work even while the game's
 main thread is busy. Everything else is queued to the plugin's `Update()` (max 16 items / 8 ms per frame) and
 waits up to 10 s (`create_test_mod` / `open_test_mod`: 35 s, with their own 30 s load limit inside; edit tools
-of increments 2 and 3: 15 s).
+of increments 2 and 3: 15 s; `start_playtest` 60 s, `stop_playtest` 30 s, `run_batch` 120 s). A committed write call
+may take up to 4 s past its limit (commit grace, below), so **an MCP client must allow at least limit + 4 s + network
+margin per call**: 64 s for `start_playtest`, 34 s for `stop_playtest`, 124 s for `run_batch` (the MCP server's
+default 20 s request timeout is too short for these three).
 
 Write tools: params are type-checked on the HTTP thread (`INVALID_PARAMS`). On the main thread every write tool
 joins one **write queue**: only one write tool body runs at a time, later calls wait in arrival order. When a
@@ -118,14 +126,17 @@ between frames as before.
 Every write tool has a **commit point**: the moment right before its first change to the editor or the mod (edit
 tools: step 3 of the edit sequence in [Editing](#editing), when the edit is applied; `undo`: before the first undo
 step; `save_mod`: before saving; `create_test_mod` / `open_test_mod`: before the mod list entry is added /
-`OpenMod` is called). Reaching it and the caller's timeout are decided atomically: either the timeout wins and the
+`OpenMod` is called; `start_playtest`: before the toolbar choices are applied and Play is pressed; `stop_playtest`:
+before Stop is pressed; `run_batch`: the first commit of any of its steps). Reaching it and the caller's timeout are decided atomically: either the timeout wins and the
 body changes nothing, or the body commits and the caller no longer times out.
 
 - **Before the commit point** a call ends with `TIMEOUT` when its time limit runs out (while queued, while the edit
   waits for the editor's undo snapshot, ...), and it is also refused with `TIMEOUT` instead of starting when too
   little of its time limit is left after waiting in the write queue behind other writes: less than 1 s for any
   write tool; less than the post-edit wait (3 s) + 0.5 s for an edit tool, checked at the start and again right before
-  the edit is applied; less than 3 s for `undo`, 10 s for `create_test_mod` / `open_test_mod`, 1 s for `save_mod`.
+  the edit is applied; less than 3 s for `undo`, 10 s for `create_test_mod` / `open_test_mod`, 1 s for `save_mod`,
+  20 s for `start_playtest`, 10 s for `stop_playtest`; a `run_batch` step is not started with less than 4 s of the
+  batch's limit left.
   Such a `TIMEOUT` says "nothing was changed" / "safe to retry": nothing was applied (an edit tool may have selected
   the target object) and the call never runs later. **The caller may simply retry it.**
 - **After the commit point** the call always returns its own outcome, normally the regular success result. Edit tools
@@ -150,12 +161,13 @@ body changes nothing, or the body commits and the caller no longer times out.
 Works with the editor closed. No params.
 
 ```json
-{"pong": true, "pluginVersion": "0.4.2", "gameVersion": "1.15.2", "unityVersion": "2021.3.45f2",
- "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions"]}
+{"pong": true, "pluginVersion": "0.5.0", "gameVersion": "1.15.2", "unityVersion": "2021.3.45f2",
+ "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions", "playtest", "batch"]}
 ```
 
 `readOnlyBuild` was removed in api v2. `capabilities` lists what this build implements (`edit` = the object,
-component, property and undo tools of increment 2; `actions` = the action/trigger tools of increment 3); whether
+component, property and undo tools of increment 2; `actions` = the action/trigger tools of increment 3; `playtest` =
+`validate_mod`, `start_playtest`, `stop_playtest`; `batch` = `run_batch`); whether
 writes are currently allowed is in `get_status`
 (`writesEnabled`, `publishBlock.complete`).
 
@@ -170,7 +182,11 @@ No params. Never fails because of editor state.
  "modName": "PB_TEST_Arena", "modType": "Minigame", "modLoaded": true, "isDirty": true,
  "hasUnsavedEdits": false, "unsavedEditsSource": "tracker",
  "undoStackLength": 1, "prefabContext": null, "playMode": false,
- "activeScene": "ModEditorScene", "capabilities": ["read", "write", "edit", "actions"], "writesEnabled": true,
+ "activeScene": "ModEditorScene",
+ "playtest": {"state": "Editing", "running": false, "startedAt": null, "playModeSince": null, "endedAt": null,
+              "playSeconds": null, "startedByBridge": false, "players": "4 Players", "playerCount": 4, "teams": null,
+              "aiOnly": false},
+ "capabilities": ["read", "write", "edit", "actions", "playtest", "batch"], "writesEnabled": true,
  "publishBlock": {"active": true, "complete": true, "patchedCount": 59, "missing": []}}
 ```
 
@@ -186,6 +202,14 @@ No params. Never fails because of editor state.
 
 - `editorState`: `Editing | EnteringPlayMode | PlayMode | ExitingPlayMode` (null when the editor is closed).
 - `playMode`: `editorState != "Editing"` (a playtest is starting, running or ending).
+- `playtest` (increment 4; null while the editor is closed): `state` (= `editorState`), `running` (= `playMode`);
+  `startedAt` / `playModeSince` / `endedAt` (UTC ISO times seen by the plugin's per-frame observer for the current or
+  last playtest: left Editing / reached PlayMode / back in Editing; reset when the editor closes); `playSeconds`
+  (seconds in PlayMode, frozen at the end); `startedByBridge` (that playtest was started by `start_playtest`);
+  `players`, `playerCount`, `teams`, `aiOnly`: the toolbar's current dropdown / checkbox (see `start_playtest`).
+  While a playtest runs (`running: true`) also: `paused` (`Time.timeScale == 0`, the toolbar's Pause button),
+  `minigame` `{state, round, rounds}` (`GameManager.Minigame`: `MinigameControllerState` name, 1-based round as the
+  round UI shows it, rounds) and `board` `{state}` (`GameManager.Board.BoardState`) when those controllers exist.
 - `isDirty`: the editor's own dirty flag of the current undo context (scene, or the open prefab), read from fields.
   It is set by every undo push, including the initial snapshot the editor pushes on the first frame after any load,
   so it is `true` for an untouched mod (confirmed in-game). `null` if the field layout changed or no mod is open.
@@ -198,7 +222,8 @@ No params. Never fails because of editor state.
 
 ### `get_open_mod`
 
-No params. Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`.
+No params. Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`, `INVALID_STATE` while a playtest is starting,
+running or ending (see [Play-mode behaviour](#play-mode-behaviour-of-every-tool)).
 
 ```json
 {
@@ -228,7 +253,9 @@ No params. Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`.
 | `maxDepth` | int 0-64 | 64 | levels of children below the first returned mod-object level |
 | `includeInactive` | bool | true | false skips inactive objects and their subtrees |
 
-Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`, `NOT_FOUND`, `INVALID_PARAMS`.
+Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`, `NOT_FOUND`, `INVALID_PARAMS`. Works during a playtest: it then
+lists the edit-time scene and adds `"playMode": true` and `playModeNote` to the returned root (see
+[Play-mode behaviour](#play-mode-behaviour-of-every-tool)).
 
 Without `rootGuid` the result is a synthetic node for the current context root (scene hierarchy, or the prefab
 root while a prefab is edited). Its direct children are level 0. With `rootGuid` the given object is level 0.
@@ -258,7 +285,8 @@ root while a prefab is edited). Its direct children are level 0. With `rootGuid`
 
 ### `get_object`
 
-Params: `guid` (required, the object's `ModTransform` guid). Errors: as above + `NOT_FOUND`.
+Params: `guid` (required, the object's `ModTransform` guid). Errors: as above + `NOT_FOUND`; `INVALID_STATE` while a
+playtest is starting, running or ending.
 
 Search order: current context root, then the other root (scene vs. prefab objects); children of
 "hides-children" objects are not addressable.
@@ -315,7 +343,8 @@ Search order: current context root, then the other root (scene vs. prefab object
 | `scope` | `"object"` (default) or `"playerSettings"` | `"playerSettings"`: list the minigame's player-settings triggers instead (no `guid`/`component`) |
 
 `trigger` and `path` are refused (this tool lists all triggers). Errors: as above + `NOT_FOUND` (object, or no
-component matches the filter), `INVALID_PARAMS` (`scope: "playerSettings"` in a non-Minigame mod).
+component matches the filter), `INVALID_PARAMS` (`scope: "playerSettings"` in a non-Minigame mod), `INVALID_STATE`
+while a playtest is starting, running or ending.
 
 Result: an **array** with one entry per trigger slot of the object's components (reflected properties of type
 `ModLogicTrigger` / `ModLogicTrigger[]`: `ModLogic.Triggers[i]`, `ModTrigger.OnEnterActions`, `ModItem.OnUseTrigger`,
@@ -373,7 +402,8 @@ no triggers. With `scope: "playerSettings"`: six entries, one per trigger the Mi
 | `limit` | int | 100 | page size, 1..500 |
 | `offset` | int | 0 | number of matching assets to skip, >= 0 |
 
-Errors: `INVALID_PARAMS` (bad `limit`/`offset`), `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`.
+Errors: `INVALID_PARAMS` (bad `limit`/`offset`), `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`. During a playtest
+the result additionally has `"playMode": true` (the editor mod's asset list, unchanged by the playtest).
 
 Result: an object. `assets` is sorted by `type`, then `name`, then `guid` (ordinal, ignore case) before paging.
 `total` and `hasMore` describe the filtered set; `typeCounts` counts assets per type after `includeBuiltIn` and
@@ -1167,7 +1197,8 @@ changed while the call waited for the editor's snapshot; nothing was changed), `
 |---|---|---|
 | (address) | see [Addressing a trigger](#addressing-a-trigger) | optional: `guid` + `trigger` (+ `component`, `path`), or `scope: "playerSettings"` + `trigger`; then gate 2 and the call-site fields are evaluated for that trigger. Any address key present makes `trigger` required |
 
-Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`, address errors. Works on any open mod.
+Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`, address errors; with an address `INVALID_STATE` while a playtest is
+starting, running or ending (without an address it works and the result has `"playMode": true`). Works on any open mod.
 
 ```json
 {"modType": "Minigame",
@@ -1203,7 +1234,7 @@ Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`, address errors. Works 
 
 ### `list_trigger_types` (read)
 
-No params. Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`.
+No params. Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`. During a playtest the result has `"playMode": true`.
 
 ```json
 {"modType": "Minigame", "triggerTypes": [
@@ -1328,6 +1359,316 @@ Params: (address), and `type` and/or `parameters`.
 Result: the trigger as a `get_action_graph` entry plus `guid` (object scope), `clamped`, `previousTriggerType` and a
 `note` when the type changed, and the edit fields.
 
+## Validation, playtest and batch
+
+Increment 4. Read tool `validate_mod`; write tools `start_playtest`, `stop_playtest`, `run_batch`.
+
+### `validate_mod` (read)
+
+No params. Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`, `INVALID_STATE` (a playtest is starting, running or
+ending), `INTERNAL` (the validator threw, or its validator list is incomplete, see below). Works on any open mod.
+
+Runs the editor's own Mod Validator: `EditorSystem.ValidateCurrentMod()` → `ModValidationSystem.ValidateCurrentMod()`,
+which calls every `ModValidationCallbackReceiver` (`ModMinigameValidator` for Minigame mods, `ModBoardValidator` for
+Board mods; Item and BoardSpace mods have no validator and are always valid). This is the same call behind
+File > Validate Mod, the toolbar's Play button and the Publish dialog (which enables its publish button only if the
+result has no errors).
+
+```json
+{"mod": "PB_TEST_Arena", "modType": "Minigame", "valid": false, "canPlaytest": false, "canPublishPerValidator": false,
+ "errorCount": 1, "warningCount": 2, "infoCount": 0,
+ "issues": [
+   {"severity": "error", "message": "There are no player spawns in your map.",
+    "description": "Every minigame map is required to have at least enough player spawns to support 8 players.", "fixable": true},
+   {"severity": "warning", "message": "Empty minigame description.", "description": "The minigame description has not been set. ...", "fixable": false},
+   {"severity": "warning", "message": "Missing minigame preview image.", "description": "...", "fixable": false}],
+ "validators": ["ModBoardValidator", "ModMinigameValidator"]}
+```
+
+- `valid`: no errors (`ModValidationResult.IsModValid`). `canPlaytest`: `valid` and the mod type has a playtest (not
+  BoardSpace; then `canPlaytestReason`); the Play button would start without the validator popup.
+  `canPublishPerValidator`: `valid` (the Publish dialog's other conditions, e.g. Steam online, are not checked).
+- `issues`: errors, then warnings, then info, each in the validator's order (the popup's order). `severity`
+  `error | warning | info`; `message` = the issue title; `description` only when it differs from the title; `helpLink`
+  only when set (the validators set none); `fixable`: the editor offers a "Fix" button (the bridge never runs fixes).
+  The editor records **no object reference** for an issue, so there is no `objectGuid` / `objectName` / `component`;
+  board messages list the affected spaces inside `description` as `- <name> at (<x>, <y>, <z>)`.
+- `validators`: class names in the editor's cached validator list (diagnostic).
+- `note`: when a prefab is being edited (the scene root is inactive, so the validator, which uses
+  `FindObjectsOfType`, sees no scene objects; the Play button leaves the prefab first), or on the session's first
+  validation.
+
+**Side effects (from the source):** none on the mod or the editor UI. The validators only read (settings,
+`FindObjectsOfType`, `Physics.Raycast` / `CheckCapsule`, board node connections, Move To Space targets), select nothing,
+open no popup, push no undo step, write no file and store their fix actions without running them. Harmless residue:
+each validator instance keeps a reference to the last mod/result until the next validation; `ModPlayerSpawn.DetermineRespawnPoint`
+logs `Failed to get spawn point for player index N` (Unity error log) when respawning is enabled and a player has no
+respawn spawn. The only global state is the static validator list, which the first validation of the session builds with
+an AppDomain-wide type scan (as the editor's own first Validate/Play does). If that scan threw, the list would stay
+incomplete for the whole session (also for the editor's own Play/Publish checks); the bridge therefore checks after
+every run that both validators are listed and otherwise returns `INTERNAL` ("restart the game"). Hence a read tool that
+works on any open mod.
+
+#### What a Minigame mod needs to pass the validator (`ModMinigameValidator`)
+
+Errors (block Play without "Run With Errors", and publishing):
+
+1. Minigame Settings `NumberOfRounds` > 0 (default 1).
+2. At least one **active** Player Spawn (`kind: "playerSpawn"`) in the scene (inactive objects and deleted objects are
+   not seen; the validator also sees active spawns anywhere in the loaded scenes).
+3. For every player count 1..8: an initial-spawn Player Spawn whose `PlayerCountMask` includes it.
+4. For every player 1..8: an initial-spawn Player Spawn whose `AllowedPlayers` includes that player.
+5. At least one initial spawn with `SharedSpawn` true, or at least 8 non-shared initial spawns.
+6. If player settings `respawnEnabled` (default true): at least one spawn with `SpawnUsageType` `Respawn`, and for every
+   player 1..8 a respawn spawn that allows that player.
+
+A single Player Spawn with its defaults (`SharedSpawn` true, `SpawnUsageType` `InitialSpawn, Respawn`, all players, all
+counts) satisfies 2-6. Warnings (do not block): empty minigame description; no preview image (both only settable by
+hand in Minigame Settings > Minigame Details); end condition `RemainingPlayersAlive` while respawning is enabled
+(never ends); an initial spawn without a collider below it (raycast straight down from 0.25 above the spawn, any
+collider: a cube/plane/prop object has a Mesh collider by default, Prop `collisionType` `Mesh`).
+
+#### What a Board mod needs (`ModBoardValidator`), briefly
+
+Errors: at least one board space (the message asks for three in a circuit); exactly one space of type Start; every space
+has at least one enabled (not "Start Disabled") Forward/Both connection to an active space (no dead ends); every space
+reachable from Start/Graveyard through forward connections or Move To Space actions; no disconnected groups; spaces
+reachable only through Move To Space must have Supports Goal disabled; at least two spaces that can hold the trophy
+chest (not an intersection, not Pathing, not Graveyard/Weapon/Trophy, Supports Goal on, not start-disabled, no incoming
+random teleport). Warnings: description, preview image, music/ambience volume very low, no Graveyard, spaces without a
+`WorldGround`-layer collider below them. The bridge cannot edit board connections yet, so a Board mod cannot be made
+valid through the bridge.
+
+### `start_playtest` (write)
+
+| Param | Type | Default | |
+|---|---|---|---|
+| `players` | integer 2-8, or string | the toolbar's current choice | the toolbar's player-count dropdown: `"2 Players"` ... `"8 Players"`, `"2v2 Teams"`, `"2v2v2 Teams"`, `"2v2v2v2 Teams"`, `"3v3 Teams"`, `"4v4 Teams"` (case-insensitive), also `"2"`..`"8"` and `"2v2"`, `"2v2v2"`, `"2v2v2v2"`, `"3v3"`, `"4v4"` |
+| `aiOnly` | bool | the toolbar's current checkbox | the toolbar's "AI Only" checkbox: every player is an AI |
+| `validateFirst` | bool | `true` | refuse when the validator reports errors; `false` = the validator popup's "Run With Errors" |
+
+Limit 60 s (commit grace 4 s on top; the MCP client needs ≥ 64 s). Guard: OpenMod (loaded test mod, state `Editing`), so
+a call while a playtest is starting, running or ending is refused with `INVALID_STATE`.
+
+**What the Play button does** (`ToolbarWidget.Draw`): if a prefab is open, `CurrentPrefab = null` (saves the prefab and
+returns to the scene); `ValidateCurrentMod()`; if valid → `SetEditorState(EnteringPlayMode)`, else the validator popup
+(whose "Run With Errors" calls `SetEditorState(EnteringPlayMode)`). The button is disabled without a mod, when the
+editor is not in `Editing` (and not paused) and for 1 s after a background (Workshop) mod load. The dropdown and
+checkbox are drawn every frame and their `Draw` writes `GameManager.TeamMode`, `NumTestPlayers`,
+`TestPlayersTeamComposition` (team choices only) and `AIOnlyTest` from the widget's fields; a dropdown change is stored in
+`PlayerPrefs` `ModEditorPlayerCountChoice`. `SetEditorState(EnteringPlayMode)` sets the state first, then
+`GameManager.partyGameMode = BoardGame`, `CurMap = null` (Minigame), **`CurrentMod.Save()`**, and, only if no background
+mod load is running, `WorkshopController.AddModInBackground(modPath)` (a second, runtime copy of the mod loaded from the
+just-saved files) → `OnEditorPlay()` (opens `WorkshopMinigame_Scene` / `WorkshopMap_Scene` / `PirateMap_Scene` for
+Item mods) and `SetActive(false)` (hides the editor's hierarchy/camera); on a load failure it reverts to `Editing` and
+shows its error popup. `PlayMode` is set later by the play scene (`GameBoardController`, or `sceneLoaded` for Item
+mods).
+
+**The tool, in order** (all before the commit point refuse with nothing changed):
+
+1. Refusals: a create/open load pending (`BUSY_LOADING`); an editor dialog open; a prefab being edited (the bridge never
+   saves a prefab implicitly: return to the scene by hand); a BoardSpace mod (it has no play scene: the editor would
+   hide itself and stay in `EnteringPlayMode`); `WorkshopController.CurrentBackgroundLoadMod != null` or the toolbar's
+   1 s background-load timer running ("Subscribed mods are being installed in the background", as the disabled button's
+   tooltip; calling `SetEditorState` then would leave the editor stuck in `EnteringPlayMode`);
+   `WorkshopController.CurrentActiveMod == null` (dereferenced by `SetEditorState`). All `INVALID_STATE`.
+2. `ValidateCurrentMod()` (always, as the button). With errors and `validateFirst` true: `INVALID_STATE`, message
+   `the mod does not pass the editor's validator (N validator errors: <titles>) ...`, `error.data.validation` = the
+   `validate_mod` counts + issues block (`valid`, `errorCount`, `warningCount`, `infoCount`, `issues`).
+3. Commit point (needs ≥ 20 s of the limit left, else `TIMEOUT`, nothing changed).
+4. Apply the toolbar choices exactly as the dropdown/checkbox do (widget fields, `PlayerPrefs` when the choice changes,
+   the `GameManager` values), then `SetEditorState(EnteringPlayMode)`. **This saves the test mod** (see below).
+5. Wait (frame by frame) until `PlayMode`; the reply is sent then. If the editor went back to `Editing` at once:
+   `INTERNAL` (playtest copy failed to load; the editor shows its popup; the mod was saved). If it returns to edit mode
+   before `PlayMode`: `INVALID_STATE`. If `PlayMode` is not reached 1 s before the deadline: `TIMEOUT` saying the mod
+   was saved and the playtest is starting (check `get_status`, then `stop_playtest`; do not retry blindly).
+
+```json
+{"playing": true, "saved": true, "state": "PlayMode", "mod": "PB_TEST_Arena", "modType": "Minigame",
+ "players": "4 Players", "playerCount": 4, "teams": null, "aiOnly": true, "validated": true,
+ "validation": {"valid": true, "errorCount": 0, "warningCount": 2, "infoCount": 0, "issues": ["..."]},
+ "secondsToPlayMode": 3.4, "note": "Entering play mode saved the mod's files ..."}
+```
+
+`teams`: the team composition array for team choices (`[0,0,1,1]` for 2v2), else null. Input: with `aiOnly` every
+player is an AI and the rounds run by themselves; otherwise player 1 is played by a human at the keyboard/gamepad. The
+bridge sends **no input**. Errors: guard codes, `INVALID_STATE`, `BUSY_LOADING`, `TIMEOUT`, `INTERNAL`.
+
+### `stop_playtest` (write)
+
+No params. Limit 30 s (MCP client ≥ 34 s). Guard: OpenMod **with `allowPlayMode`** (loaded test mod, writes enabled,
+publish block complete; any editor state).
+
+**What the Stop button does** (enabled only in `PlayMode`): `Time.timeScale = 1`, `GameManager.disconnectUserEvent =
+LeftGame`, `NetSystem.OnDisconnect(DisconnectReasonLeft)`. That starts the disconnect coroutine, which raises
+`DisconnectStarted` → `GameNetworkManager.Disconnect` → `SetEditorState(ExitingPlayMode)` (`FocusSceneView`, open
+`ModEditorEmptyScene`, `WorkshopController.RemoveMod(CurrentMod)` drops the runtime copy, reinstall-on-exit queued only for
+a published id ≠ 256) and then shuts the local game server down (`NetGameServer.ShutdownServer`) and marks the network
+status disconnected; when the empty scene has loaded, `SetEditorState(Editing)` → `SetActive(true)` restores the
+hierarchy, camera and gizmos and reloads the lighting. (The coroutine's final cleanup waits for the main menu, i.e. until
+the editor is left.) Calling `SetEditorState(ExitingPlayMode)` directly, as doc 01 asked, would skip the server shutdown
+and the network status reset, so the next playtest's `GameNetworkManager.Awake` would see a still-connected session: the
+direct call leaks the session; the bridge uses the Stop button's path.
+
+**The tool:** `Editing` → success `alreadyStopped: true`, nothing done. `ExitingPlayMode` → waits for `Editing`
+(`alreadyStopping: true`, nothing pressed). `EnteringPlayMode` → waits up to 15 s for `PlayMode` (the Stop button is
+disabled until then), then stops; still entering → `INVALID_STATE` (nothing changed, retry later); back in `Editing` →
+`alreadyStopped`. `PlayMode` → commit point (≥ 10 s left, else `TIMEOUT`), the Stop button's three statements, wait
+until `Editing` with the hierarchy active again; not reached 1 s before the deadline → `TIMEOUT` ("the Stop sequence was
+sent ..."). An open editor dialog does not block stopping.
+
+```json
+{"stopped": true, "alreadyStopped": false, "state": "Editing", "playedSeconds": 41.2, "secondsToEditMode": 1.3,
+ "note": "back in edit mode: the edit-time scene was restored as it was before Play ..."}
+```
+
+Nothing is saved when stopping; the edit-time scene is exactly as before Play (the playtest ran on the separate copy;
+undo stacks and the dirty flag are untouched). Errors: guard codes, `INVALID_STATE`, `EDITOR_NOT_OPEN`, `TIMEOUT`.
+
+### What a playtest writes and what reaches Steam
+
+On disk (all inside the open test mod's folder unless noted):
+
+- At Play: `PummelMod.Save()` writes `Data/Meta.json` (new `LastModified`), `Data/WorkshopItem.json` (publishedFileId
+  256: the guard's id hygiene runs right before), `Lighting.json`, `PostProcessing.data`, `MainScene.scene`,
+  `ModSettings.json` and the minigame definition / map details, and every external asset's `.pmeta`. Unlike `save_mod`:
+  no `Preview.jpg`, the dirty flag is not cleared, the editor's mod list is not touched, and the bridge's
+  `hasUnsavedEdits` does not change (the save postfix only watches `SaveCurrentMod`).
+- While loading the runtime copy, the game may create missing `.pmeta` files in the mod folder and writes its texture
+  cache to `<persistentDataPath>/PummelModCache/256/` (harmless, re-creatable cache keyed by the publishedFileId).
+- `PlayerPrefs` `ModEditorPlayerCountChoice` (Windows registry, game preferences) when `players` changes the dropdown,
+  as the dropdown does. Log lines in the game's and BepInEx's logs.
+- At Stop or at the natural end: nothing (for id 256 no reinstall is queued).
+
+Steam / Workshop (checked in the source):
+
+- No Workshop write: Play/Stop reach none of the blocked publish/update/delete paths; `AddModInBackground` only reads.
+- Playtime tracking (`StartPlaytimeTracking` / `StopPlaytimeTracking`) runs only when `EditorSystem.Instance == null`,
+  i.e. never in the editor.
+- Vote popup (`WorkshopVotePopup`, doc 05 residual risk): it lives on a main-menu window and subscribes to
+  `GameBoardController.OnExitMinigame` / `OnEndBoardGame` and the main menu's `OnEnterMainMenu`. `OnExitMinigame` is
+  raised only when `EditorSystem.Instance == null`; the board path that raises `OnEndBoardGame` is not reached in the
+  editor (`OnTurnsEnd` goes to `ExitingPlayMode` instead); for minigames the popup also requires `MinigameID > 256`,
+  which a test mod (id 256) never has. When the user later leaves the editor for the main menu, `ReturnedToMainMenu` could
+  consider a Board test mod (`IsWorkshopNotInternal`, id 256): the popup would query Steam for item 256 (read) and, only
+  if a human clicks a vote button, call `SteamUGC.SetUserItemVote(256)` for a non-existent item. That call is **not**
+  covered by the publish block (votes are deliberately allowed) and is harmless (no item 256). Not verifiable statically:
+  whether the main-menu window carrying the popup is alive while the editor runs (it is in the main-menu UI).
+- Achievements: Workshop minigames skip the minigame achievements (`SetMinigameWon/Lost` return early); a Board playtest
+  with a human player could unlock `ACH_FIRST_GAME` (`SteamUserStats.SetAchievement` + `StoreStats`; not Workshop
+  related, not blocked). With `aiOnly` no human player exists.
+
+### Play-mode behaviour of every tool
+
+While a playtest starts, runs or ends (`editorState` ≠ `Editing`) the editor's hierarchy persists unchanged but
+deactivated (`SetActive(false)`), the playtest runs on a separate runtime copy loaded from the saved files, and
+`WorkshopController.CurrentActiveMod` is that runtime copy, so asset/object references of edit-time objects no longer
+resolve (they would read as `registered: false`).
+
+| Tool | During a playtest |
+|---|---|
+| `ping`, `get_log`, `screenshot` | work unchanged (`get_log` and `screenshot` are the way to observe a playtest; the screenshot shows the editor window with the play view) |
+| `get_status` | works; `playtest` block with `running: true`, times, `paused`, `minigame` / `board` state |
+| `get_hierarchy` | works; lists the **edit-time** scene and adds `playMode: true` + `playModeNote` (the synthetic root shows `active: false`) |
+| `list_assets`, `list_trigger_types`, `list_action_types` without an address | work; result has `playMode: true` (static or editor-mod data) |
+| `list_mods`, `list_component_types` | work (array results, no marker; `addable` describes edit mode) |
+| `get_object`, `get_action_graph`, `list_action_types` with an address, `get_open_mod`, `validate_mod` | `INVALID_STATE` (references would resolve against the runtime copy; the validator would see the runtime objects) |
+| every edit tool, `save_mod`, `undo`, `create_test_mod`, `open_test_mod`, `start_playtest`, `run_batch` | `INVALID_STATE` from the guard in every state except `Editing`, including `EnteringPlayMode` and `ExitingPlayMode` (edit pipelines also re-check each frame and stop if a playtest starts) |
+| `stop_playtest` | allowed (its purpose) |
+
+### `run_batch` (write)
+
+| Param | Type | Default | |
+|---|---|---|---|
+| `steps` | array of 1-100 `{tool, params?, id?}` | required | `tool`: tool name; `params`: object (omitted/null = `{}`); `id`: `[A-Za-z][A-Za-z0-9_-]{0,63}`, unique; no other keys |
+| `stopOnError` | bool | `true` | stop at the first failed step; `false` = attempt every step |
+
+Limit 120 s for the whole batch (commit grace 4 s; MCP client ≥ 124 s). Guard: OpenMod for the batch, then each write
+step's own guard.
+
+Allowed tools: `create_object`, `duplicate_object`, `delete_object`, `reparent_object`, `set_object`, `set_transform`,
+`add_component`, `remove_component`, `set_property`, `set_properties`, `add_action`, `remove_action`, `move_action`,
+`set_action`, `add_trigger`, `remove_trigger`, `set_trigger`, `undo`, `save_mod`, and the read tools `get_object`,
+`get_hierarchy`, `get_action_graph`, `list_mods`, `list_assets`, `list_component_types`, `list_action_types`,
+`list_trigger_types`. Refused: `run_batch`, `create_test_mod`, `open_test_mod`, `start_playtest`, `stop_playtest`,
+`screenshot` (named reason), and every other tool (`ping`, `get_status`, `get_log`, `get_open_mod`, `validate_mod`,
+unknown names).
+
+**Up-front validation** (any failure refuses the whole batch with `INVALID_PARAMS` naming the step, e.g.
+`steps[3] (id 'spawn', set_property): ...; nothing was run`): the shape of every step, unknown or refused tools, ids
+(syntax, duplicates), the syntax of every reference and that it points to an **earlier** step's id (unknown id, forward
+reference and self reference are refused), and the params of every write step without references, parsed with that
+tool's own parser (the same checks as a direct call before it reaches the main thread). Steps with references are parsed
+when they run; read tools validate their params when they run.
+
+**References.** Any JSON **string value** at any depth of a step's `params` (object keys are never touched) that starts
+with `$` is a reference and must match `$<id><accessor>{1,8}`; an accessor is `.name` (an object member,
+`[A-Za-z_][A-Za-z0-9_]{0,63}`) or `[n]` (an array element, `0`..`9999`, no leading zeros). The whole string is replaced
+by a copy of the JSON value at that path in the referenced step's `result` (any type: string, number, object, array),
+resolved right before the step runs and before its own param parsing. Examples: `"$floor.guid"`,
+`"$dup.objects[0].guid"`, `"$comp.component.guid"`, `"$t.triggerName"`, `"$graph[0].actions[1].index"`,
+`"$obj.transform.localPosition"`. A string starting with `$$` is a literal with one `$` removed (`"$$5"` → `"$5"`); any
+other string starting with `$` that is not a valid reference is refused up front. At run time a reference to a step that
+failed or whose result lacks the path fails **that step** with `INVALID_PARAMS` (it is not started).
+
+**Execution.** The batch is one turn of the write queue: no other write call interleaves. Steps run in order on the main
+thread. A write step runs exactly like a direct call inside that turn: guard evaluation (editor state, test mod, writes
+enabled, publish block), Workshop id hygiene, its body with its own time limit (its normal limit, e.g. 15 s for edit
+tools, capped at the batch's deadline minus 1 s) and its own commit point; each edit is its **own undo step** (undo steps
+are not merged). Read steps run synchronously. The batch commits when its first step commits. Before each step: if the
+caller gave up before anything was committed the batch stops (`cancelled`); with less than 4 s of the batch's limit left
+the step is **not started** and the batch returns the partial result (`timeBudget`). A step that does not finish within
+its limit + 2 s aborts the batch (`stepDidNotFinish`).
+
+**No rollback.** "Atomic where possible" in the plan cannot be met: object creation is not undoable in the editor, so a
+failed batch cannot be rolled back. With `stopOnError` the batch stops at the first failed step and `results` lists
+exactly what was applied; revert by hand with `delete_object` or one `undo` per step. Nothing is saved unless a
+`save_mod` step ran.
+
+```json
+{"completed": 2, "attempted": 3, "total": 5, "failedStep": 2, "stoppedEarly": true, "stopReason": "stepFailed",
+ "results": [
+   {"index": 0, "id": "floor", "tool": "create_object", "ok": true, "result": {"guid": "9b1e...", "...": "..."}},
+   {"index": 1, "id": "spawn", "tool": "create_object", "ok": true, "result": {"guid": "41c0...", "...": "..."}},
+   {"index": 2, "tool": "set_property", "ok": false, "error": {"code": "INVALID_PARAMS", "message": "..."}}],
+ "note": "Stopped at the first failed step (steps[2], stopOnError); steps[3] and later were not run. There is no rollback: ..."}
+```
+
+- `completed`: steps that succeeded; `attempted`: steps with a row in `results` (started, or failed while resolving
+  references); `total`: steps in the request; `failedStep`: index of the first failed step (absent when none failed);
+  `stoppedEarly`: not every step was attempted; `stopReason` (only then, or for `stepDidNotFinish`): `stepFailed`,
+  `timeBudget`, `cancelled`, `stepDidNotFinish`, `internalError`.
+- `results[i]`: `index`, `id` (when given), `tool`, `ok`, and `result` (the tool's normal result) or `error`
+  (`{code, message, data?}`, the tool's normal error).
+- Errors of the call itself: guard codes, `INVALID_PARAMS` (up-front validation), `TIMEOUT` (queued too long, before any
+  step). Step failures are reported in `results`, not as a call error.
+
+### End-to-end example
+
+```text
+1. create_test_mod {"name": "PB_TEST_E2E", "type": "Minigame"}
+2. run_batch {"steps": [
+     {"id": "floor", "tool": "create_object", "params": {"kind": "cube", "name": "Floor",
+        "position": {"x": 0, "y": -0.5, "z": 0}, "scale": {"x": 20, "y": 1, "z": 20}}},
+     {"id": "spawn", "tool": "create_object", "params": {"kind": "playerSpawn", "name": "Spawn",
+        "position": {"x": 0, "y": 0.1, "z": 0}}},
+     {"id": "hazard", "tool": "create_object", "params": {"kind": "trigger", "name": "Hazard",
+        "position": {"x": 4, "y": 0.5, "z": 0}}},
+     {"tool": "set_property", "params": {"guid": "$hazard.guid", "component": "Trigger",
+        "property": "TriggerOnEnter", "value": true}},
+     {"tool": "add_action", "params": {"guid": "$hazard.guid", "trigger": "OnEnterActions", "type": "ChangeHealth",
+        "parameters": {"m_operation": "Subtract", "m_value": 1}}},
+     {"id": "marker", "tool": "create_object", "params": {"kind": "sphere", "name": "Marker",
+        "parentGuid": "$floor.guid", "position": {"x": 0, "y": 1, "z": 0}}},
+     {"tool": "get_hierarchy"}]}
+   -> completed 7; results[0].result.guid is the floor's guid, referenced by steps[5] (`parentGuid`), and results[2].result.guid by steps[3] and steps[4]
+3. validate_mod -> valid: true (warnings: empty description, no preview image)
+4. save_mod
+5. start_playtest {"players": 4, "aiOnly": true} -> playing: true, saved: true
+6. get_status (playtest.running, playtest.minigame.round) / get_log {"sinceId": <nextId before step 5>} / screenshot
+7. stop_playtest -> stopped: true, state "Editing"
+```
+
 ---
 
 ## Safety
@@ -1372,9 +1713,12 @@ body, when the call's turn in the write queue comes (see [Threading](#threading)
 4. not loading → `BUSY_LOADING`
 5. kind **OpenMod** (`save_mod`, `create_object`, `duplicate_object`, `delete_object`, `reparent_object`,
    `set_object`, `set_transform`, `add_component`, `remove_component`, `set_property`, `set_properties`, `undo`,
-   `add_action`, `remove_action`, `move_action`, `set_action`, `add_trigger`, `remove_trigger`, `set_trigger`):
+   `add_action`, `remove_action`, `move_action`, `set_action`, `add_trigger`, `remove_trigger`, `set_trigger`,
+   `start_playtest`, `run_batch`, and every write step inside a batch; `stop_playtest` with the play-mode option):
    a mod is open (`NO_MOD_OPEN`) and loaded (`BUSY_LOADING`); its Meta name **and**
-   folder name pass the rule (`GUARD_NOT_TEST_MOD`, message names the mod); state is `Editing` (`INVALID_STATE`).
+   folder name pass the rule (`GUARD_NOT_TEST_MOD`, message names the mod); state is `Editing` (`INVALID_STATE`;
+   every state other than `Editing`, i.e. also `EnteringPlayMode` and `ExitingPlayMode`, is refused). Only
+   `stop_playtest` is declared `allowPlayMode`: it skips this last check, all other checks apply to it unchanged.
    Kind **Lifecycle** (`create_test_mod`, `open_test_mod`): the `name` param passes the rule; if any mod is open it
    is a test mod, else `GUARD_NOT_TEST_MOD` ("close <name> by hand first"); state is `Editing`.
 
@@ -1442,7 +1786,10 @@ Asset/object references (property values, action targets, settings) use one shap
 
 ## Not in this build
 
-No playtest or batch tools (later Phase 2 increment); no redo (the editor has none); no copy/paste/duplicate of
+No input injection for playtests (a human or AI-only mode drives them); no pause/resume tool; no editing of mod
+settings other than the player-settings triggers (description, preview image, rounds, end conditions are set by hand);
+no editing of board connections (`BoardNodeConnection[]`), so a Board mod cannot be made validator-clean through the
+bridge yet; no redo (the editor has none); no copy/paste/duplicate of
 actions (the Action Editor has none); no editing of Set Connection Active connection mappings or of the Display
 Popup's hidden timer fields; no prefab asset editing context switch (open/close a prefab by hand), no layer/tag or per-component enable
 editing, no asset creation, import or removal. No delete, rename or close of mods. No Workshop functionality of any

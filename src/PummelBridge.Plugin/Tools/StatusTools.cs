@@ -12,7 +12,7 @@ namespace PummelBridge.Tools
     {
         private static EditServices s_services;
 
-        public static readonly string[] Capabilities = { "read", "write", "edit", "actions" };
+        public static readonly string[] Capabilities = { "read", "write", "edit", "actions", "playtest", "batch" };
 
         /// <param name="publishBlock">Live publish-block status (re-verifies the required prefixes on every call).</param>
         public static void Register(ToolRegistry registry, BridgeRuntimeInfo info, Func<bool> writesEnabled, Func<PublishBlockStatus> publishBlock, EditServices services)
@@ -67,6 +67,7 @@ namespace PummelBridge.Tools
                 ["prefabContext"] = null,
                 ["playMode"] = false,
                 ["activeScene"] = SceneManager.GetActiveScene().name,
+                ["playtest"] = null,
             };
 
             EditorSystem ed = EditorAccess.EditorOrNull();
@@ -79,6 +80,7 @@ namespace PummelBridge.Tools
             result["editorState"] = state.ToString();
             result["isLoading"] = ed.IsLoading;
             result["playMode"] = state != EditorState.Editing;
+            result["playtest"] = PlaytestTools.StatusJson(ed, s_services);
 
             PummelMod mod = ed.CurrentMod;
             if (mod != null)
@@ -111,8 +113,9 @@ namespace PummelBridge.Tools
         {
             EditorSystem ed = EditorAccess.RequireEditor();
             PummelMod mod = EditorAccess.RequireLoadedMod(ed);
+            PlaytestAccess.RequireEditMode(ed, "get_open_mod"); // settings hold asset references (preview image, music)
 
-            object meta = GameReflection.RequireField(typeof(PummelMod), "m_metaData").GetValue(mod);
+            object meta =GameReflection.RequireField(typeof(PummelMod), "m_metaData").GetValue(mod);
             ValueConverter conv = new ValueConverter(mod, summarizeTriggers: false);
 
             ModSettings settings = mod.GetModSettings();
