@@ -89,7 +89,7 @@ namespace PummelBridge.Core
                 return BadRequest("'params' must be an object");
             }
 
-            if (!m_registry.TryGet(method, out ToolDefinition tool))
+            if (!m_registry.TryGet(method, out RegisteredTool tool))
             {
                 return Ok(Error(ErrorCodes.UnknownMethod, $"unknown method '{Truncate(method, 100)}'"));
             }
@@ -98,7 +98,7 @@ namespace PummelBridge.Core
             JObject envelope;
             try
             {
-                object result = tool.Handler(new ToolContext(method, parameters, m_dispatcher, m_mainThreadTimeout));
+                object result = tool.Invoke(new ToolContext(method, parameters, m_dispatcher, m_mainThreadTimeout));
                 JToken resultToken = result as JToken ?? (result == null ? JValue.CreateNull() : JToken.FromObject(result));
                 envelope = new JObject { ["ok"] = true, ["result"] = resultToken };
             }
@@ -110,6 +110,10 @@ namespace PummelBridge.Core
                     if (rpc.Code == ErrorCodes.Internal || rpc.Code == ErrorCodes.Timeout)
                     {
                         m_log.Error($"rpc {method} failed: {rpc.Code}: {rpc.Message}");
+                    }
+                    else if (rpc.Code == ErrorCodes.GuardNotTestMod || rpc.Code == ErrorCodes.WritesDisabled || rpc.Code == ErrorCodes.PublishBlockIncomplete)
+                    {
+                        m_log.Info($"rpc {method} refused: {rpc.Code}: {rpc.Message}");
                     }
                     else
                     {

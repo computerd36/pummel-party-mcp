@@ -13,6 +13,13 @@ namespace PummelBridge.Core
         public const string NotFound = "NOT_FOUND";
         public const string Timeout = "TIMEOUT";
         public const string Internal = "INTERNAL";
+
+        // write tools (api v2)
+        public const string WritesDisabled = "WRITES_DISABLED";
+        public const string PublishBlockIncomplete = "PUBLISH_BLOCK_INCOMPLETE";
+        public const string GuardNotTestMod = "GUARD_NOT_TEST_MOD";
+        public const string InvalidState = "INVALID_STATE";
+        public const string AlreadyExists = "ALREADY_EXISTS";
     }
 
     /// <summary>Thrown by tools to return a specific error code to the caller.</summary>

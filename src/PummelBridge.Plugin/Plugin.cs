@@ -1,9 +1,12 @@
 using System;
 using System.IO;
+using System.Linq;
 using BepInEx;
 using BepInEx.Logging;
+using HarmonyLib;
 using PummelBridge.Core;
 using PummelBridge.Game;
+using PummelBridge.Safety;
 using PummelBridge.Tools;
 using UnityEngine;
 
@@ -18,9 +21,9 @@ namespace PummelBridge
     }
 
     /// <summary>
-    /// Entry point. Phase 1: read-only view of the mod editor over a token-protected HTTP API on 127.0.0.1.
+    /// Entry point. Phase 2: token-protected HTTP API on 127.0.0.1 with read tools and guarded write tools
+    /// (PB_TEST_ mods only), plus an always-on Harmony block of every Workshop publish/update/delete path.
     /// The HTTP thread only parses requests; all Unity/game access is queued to Update() via the dispatcher.
-    /// No Harmony patches, no game method that mutates the editor, the mod, the scene or the disk.
     /// </summary>
     [BepInPlugin(PluginInfo.Guid, PluginInfo.Name, PluginInfo.Version)]
     public sealed class PummelBridgePlugin : BaseUnityPlugin
@@ -32,12 +35,20 @@ namespace PummelBridge
         private BridgeConfig m_config;
         private LogRingBuffer m_logRing;
         private MainThreadDispatcher m_dispatcher;
+        private FramePoller m_poller;
         private BridgeHttpServer m_server;
         private bool m_logHooked;
         private bool m_shutDown;
 
         private void Awake()
         {
+            m_config = new BridgeConfig(Config);
+            if (!m_config.PluginEnabled)
+            {
+                Logger.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} is disabled ([General] PluginEnabled = false): no RPC server, no Workshop publish block.");
+                return;
+            }
+
             BepInExBridgeLog log = new BepInExBridgeLog(Logger);
             GameReflection.Log = log;
 
@@ -52,16 +63,19 @@ namespace PummelBridge
                 UnityVersion = Application.unityVersion,
                 SessionId = Guid.NewGuid().ToString("N"),
             };
-            Logger.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} (read-only build, api v{PluginInfo.ApiVersion}); game version {info.GameVersion}, Unity {info.UnityVersion}");
+            Logger.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} (api v{PluginInfo.ApiVersion}); game version {info.GameVersion}, Unity {info.UnityVersion}");
 
             m_logRing = new LogRingBuffer(2000);
             Application.logMessageReceivedThreaded += OnUnityLog;
             m_logHooked = true;
 
-            m_config = new BridgeConfig(Config);
-            if (!m_config.Enabled)
+            // 1. Publish block first, before anything else can run. Never removed at runtime.
+            PublishBlockStatus block = InstallPublishBlock(log);
+
+            // 2. RPC server (optional).
+            if (!m_config.ServerEnabled)
             {
-                Logger.LogInfo("Server disabled in config ([Server] Enabled = false).");
+                Logger.LogInfo("RPC server disabled in config ([Server] Enabled = false); the Workshop publish block stays active.");
                 return;
             }
 
@@ -81,19 +95,24 @@ namespace PummelBridge
             try
             {
                 m_dispatcher = new MainThreadDispatcher();
-                ToolRegistry registry = new ToolRegistry();
-                StatusTools.Register(registry, info);
+                m_poller = new FramePoller(log);
+                BridgeConfig config = m_config;
+                WriteSafety safety = new WriteSafety(() => config.EnableWrites, () => block.Complete, new GameEditorGuardHost(log));
+                ToolRegistry registry = new ToolRegistry(safety);
+                StatusTools.Register(registry, info, () => config.EnableWrites, block);
                 HierarchyTools.Register(registry);
                 ObjectTools.Register(registry);
                 ActionTools.Register(registry);
                 AssetTools.Register(registry);
                 LogTools.Register(registry, m_logRing, info);
                 ScreenshotTool.Register(registry, this);
+                ModTools.Register(registry, m_poller, log);
 
                 RpcHandler handler = new RpcHandler(registry, m_dispatcher, log, MainThreadTimeout);
                 m_server = new BridgeHttpServer(new BridgeHttpServerOptions { Port = m_config.Port, Token = token }, handler.Handle, log);
                 m_server.Start();
-                Logger.LogInfo($"Listening on http://127.0.0.1:{m_server.Port}/rpc ({string.Join(", ", new System.Collections.Generic.List<string>(registry.Names).ToArray())})");
+                Logger.LogInfo($"Listening on http://127.0.0.1:{m_server.Port}/rpc ({string.Join(", ", new System.Collections.Generic.List<string>(registry.Names).ToArray())}); " +
+                               $"writes {(m_config.EnableWrites ? "enabled" : "disabled")}, publish block {(block.Complete ? "complete" : "INCOMPLETE")}");
             }
             catch (Exception e)
             {
@@ -102,10 +121,34 @@ namespace PummelBridge
             }
         }
 
+        private PublishBlockStatus InstallPublishBlock(IBridgeLog log)
+        {
+            try
+            {
+                PublishBlocker.Configure(log, message => Debug.LogWarning(message));
+                PublishBlockStatus status = PublishBlocker.Apply(new Harmony(PublishBlocker.HarmonyId), PublishBlockTargets.Build());
+                if (status.Complete)
+                {
+                    Logger.LogInfo($"Workshop publish block active: {status.PatchedCount} methods patched. Publishing to the Workshop is disabled while this plugin is enabled.");
+                }
+                else
+                {
+                    Logger.LogError($"Workshop publish block INCOMPLETE ({status.PatchedCount} methods patched; missing: {string.Join("; ", status.Missing.ToArray())}). All write tools are disabled.");
+                }
+                return status;
+            }
+            catch (Exception e)
+            {
+                Logger.LogError($"Installing the Workshop publish block failed: {e.GetType().Name}: {e.Message}. All write tools are disabled.");
+                return new PublishBlockStatus(false, false, 0, new[] { "installer failed: " + e.Message });
+            }
+        }
+
         private void Update()
         {
             // Drain never throws: tool exceptions are captured into the waiting request.
             m_dispatcher?.Drain(MaxWorkItemsPerFrame, MaxWorkMillisecondsPerFrame);
+            m_poller?.Tick();
         }
 
         private void OnDestroy() => Shutdown("OnDestroy");
@@ -114,7 +157,7 @@ namespace PummelBridge
 
         private void Shutdown(string reason)
         {
-            if (m_shutDown)
+            if (m_shutDown || m_config == null || !m_config.PluginEnabled)
             {
                 return;
             }

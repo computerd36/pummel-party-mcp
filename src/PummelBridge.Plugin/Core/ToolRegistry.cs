@@ -4,20 +4,34 @@ using Newtonsoft.Json.Linq;
 
 namespace PummelBridge.Core
 {
-    /// <summary>One RPC method. Handlers run on an HTTP worker thread and use ctx.OnMainThread for game access.</summary>
+    /// <summary>
+    /// One RPC method. Created only through <see cref="Read"/> or <see cref="Write"/>: a write tool cannot exist
+    /// without a <see cref="WriteGuard"/>, and its body is reachable only through the registry's guard wrapper.
+    /// </summary>
     public sealed class ToolDefinition
     {
         public string Name { get; }
 
-        /// <summary>
-        /// Write tools mutate the editor/mod. This build refuses to register them; Phase 2 will add a guard layer
-        /// (PB_TEST_ allowlist, publish blocklist) in front of every write tool before this can be enabled.
-        /// </summary>
+        /// <summary>Write tools mutate the editor/mod. They always run behind the guard layer (WriteGuardEvaluator).</summary>
         public bool IsWrite { get; }
 
-        public Func<ToolContext, object> Handler { get; }
+        /// <summary>Read tools: runs on an HTTP worker thread and uses ctx.OnMainThread for game access. Null for write tools.</summary>
+        public Func<ToolContext, object> ReadHandler { get; }
 
-        public ToolDefinition(string name, bool isWrite, Func<ToolContext, object> handler)
+        /// <summary>Write tools: guard declaration (never null for write tools).</summary>
+        public WriteGuard Guard { get; }
+
+        /// <summary>Write tools: parses/validates params on the HTTP thread (may throw INVALID_PARAMS). May be null.</summary>
+        internal Func<ToolContext, object> ParseArgs { get; }
+
+        /// <summary>Write tools: runs on the main thread after the guard passed, in the same unit of work.</summary>
+        internal Action<WriteInvocation> Body { get; }
+
+        /// <summary>Write tools: overall time limit (queueing + body + deferred completion). Null = default.</summary>
+        public TimeSpan? Timeout { get; }
+
+        private ToolDefinition(string name, bool isWrite, Func<ToolContext, object> readHandler, WriteGuard guard,
+            Func<ToolContext, object> parseArgs, Action<WriteInvocation> body, TimeSpan? timeout)
         {
             if (string.IsNullOrEmpty(name))
             {
@@ -25,18 +39,62 @@ namespace PummelBridge.Core
             }
             Name = name;
             IsWrite = isWrite;
-            Handler = handler ?? throw new ArgumentNullException(nameof(handler));
+            ReadHandler = readHandler;
+            Guard = guard;
+            ParseArgs = parseArgs;
+            Body = body;
+            Timeout = timeout;
         }
 
-        public static ToolDefinition Read(string name, Func<ToolContext, object> handler) => new ToolDefinition(name, false, handler);
+        public static ToolDefinition Read(string name, Func<ToolContext, object> handler) =>
+            new ToolDefinition(name, false, handler ?? throw new ArgumentNullException(nameof(handler)), null, null, null, null);
+
+        /// <summary>
+        /// Declares a write tool. <paramref name="guard"/> is mandatory. <paramref name="body"/> must complete the
+        /// invocation (inv.Complete / inv.Fail), either synchronously or from a later frame.
+        /// </summary>
+        public static ToolDefinition Write(string name, WriteGuard guard, Func<ToolContext, object> parseArgs,
+            Action<WriteInvocation> body, TimeSpan? timeout = null)
+        {
+            if (guard == null)
+            {
+                throw new ArgumentNullException(nameof(guard), $"write tool '{name}' must declare a WriteGuard");
+            }
+            if (body == null)
+            {
+                throw new ArgumentNullException(nameof(body));
+            }
+            if (timeout.HasValue && timeout.Value <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(timeout));
+            }
+            return new ToolDefinition(name, true, null, guard, parseArgs, body, timeout);
+        }
+    }
+
+    /// <summary>A tool as the RPC layer sees it: <see cref="Invoke"/> already includes the guard for write tools.</summary>
+    public sealed class RegisteredTool
+    {
+        public ToolDefinition Definition { get; }
+        public Func<ToolContext, object> Invoke { get; }
+
+        internal RegisteredTool(ToolDefinition definition, Func<ToolContext, object> invoke)
+        {
+            Definition = definition;
+            Invoke = invoke;
+        }
     }
 
     public sealed class ToolRegistry
     {
-        /// <summary>Phase 1 is read-only: write tools cannot be registered in this build.</summary>
-        public const bool WriteToolsAllowed = false;
+        private readonly Dictionary<string, RegisteredTool> m_tools = new Dictionary<string, RegisteredTool>(StringComparer.Ordinal);
+        private readonly WriteSafety m_safety;
 
-        private readonly Dictionary<string, ToolDefinition> m_tools = new Dictionary<string, ToolDefinition>(StringComparer.Ordinal);
+        /// <param name="safety">Required to register write tools; a registry without it accepts read tools only.</param>
+        public ToolRegistry(WriteSafety safety = null)
+        {
+            m_safety = safety;
+        }
 
         public void Register(ToolDefinition tool)
         {
@@ -44,20 +102,58 @@ namespace PummelBridge.Core
             {
                 throw new ArgumentNullException(nameof(tool));
             }
-            if (tool.IsWrite && !WriteToolsAllowed)
-            {
-                throw new InvalidOperationException($"Refusing to register write tool '{tool.Name}': this is a read-only build.");
-            }
             if (m_tools.ContainsKey(tool.Name))
             {
                 throw new InvalidOperationException($"Tool '{tool.Name}' is already registered.");
             }
-            m_tools.Add(tool.Name, tool);
+            Func<ToolContext, object> invoke;
+            if (tool.IsWrite)
+            {
+                if (tool.Guard == null || tool.Body == null)
+                {
+                    throw new InvalidOperationException($"Refusing to register write tool '{tool.Name}' without a guard.");
+                }
+                if (m_safety == null)
+                {
+                    throw new InvalidOperationException($"Refusing to register write tool '{tool.Name}': this registry has no write safety configured.");
+                }
+                invoke = ctx => InvokeWrite(tool, ctx);
+            }
+            else
+            {
+                invoke = tool.ReadHandler ?? throw new InvalidOperationException($"Read tool '{tool.Name}' has no handler.");
+            }
+            m_tools.Add(tool.Name, new RegisteredTool(tool, invoke));
         }
 
-        public bool TryGet(string name, out ToolDefinition tool) => m_tools.TryGetValue(name, out tool);
+        public bool TryGet(string name, out RegisteredTool tool) => m_tools.TryGetValue(name, out tool);
 
         public IEnumerable<string> Names => m_tools.Keys;
+
+        /// <summary>
+        /// Params are parsed on the calling (HTTP) thread; the guard and the body then run on the main thread in one
+        /// dispatched unit of work, so the editor state cannot change between check and action.
+        /// </summary>
+        private object InvokeWrite(ToolDefinition tool, ToolContext ctx)
+        {
+            object args = tool.ParseArgs?.Invoke(ctx);
+            TimeSpan timeout = tool.Timeout ?? ctx.MainThreadTimeout;
+            return ctx.InvokeOnMainThread(completion =>
+            {
+                EditorSnapshot snap = m_safety.Host.Capture();
+                RpcException denied = WriteGuardEvaluator.Evaluate(m_safety, tool.Guard, args, snap);
+                if (denied != null)
+                {
+                    completion.SetException(denied);
+                    return;
+                }
+                if (snap.ModOpen && snap.ModLoaded && snap.OpenModIsTestMod)
+                {
+                    m_safety.Host.EnforceDefaultWorkshopId();
+                }
+                tool.Body(new WriteInvocation(ctx, args, completion, snap, m_safety));
+            }, timeout);
+        }
     }
 
     public sealed class ToolContext
@@ -81,6 +177,8 @@ namespace PummelBridge.Core
 
         /// <summary>Starts work on the main thread that completes later (e.g. a coroutine).</summary>
         public object OnMainThreadDeferred(Action<IWorkCompletion> start) => m_dispatcher.Invoke(start, MainThreadTimeout);
+
+        internal object InvokeOnMainThread(Action<IWorkCompletion> start, TimeSpan timeout) => m_dispatcher.Invoke(start, timeout);
 
         // ---- parameter helpers (throw INVALID_PARAMS on type errors) ----
 

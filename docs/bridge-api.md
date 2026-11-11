@@ -1,8 +1,9 @@
-# PummelBridge HTTP API (api v1, Phase 1: read-only)
+# PummelBridge HTTP API (api v2, Phase 2 increment 1)
 
 The BepInEx plugin `PummelBridge.Plugin` runs inside Pummel Party and exposes the mod editor's state on a
-local HTTP endpoint. This build is **read-only**: it registers no write tools, installs no Harmony patches and
-calls no game method that changes the mod, the scene, the selection, the undo stack or the disk.
+local HTTP endpoint. api v2 adds the guard layer, the always-on Workshop publish block and four mod lifecycle
+tools (`list_mods`, `create_test_mod`, `open_test_mod`, `save_mod`). Write tools only ever act on `PB_TEST_`
+mods; see [Safety](#safety). Object/component/action editing comes in later increments.
 
 ## Transport
 
@@ -11,7 +12,7 @@ calls no game method that changes the mod, the scene, the selection, the undo st
 | Endpoint | `POST http://127.0.0.1:<port>/rpc` (only this path and verb exist) |
 | Bind address | `127.0.0.1` only (TCP listener on the loopback interface) |
 | Port | BepInEx config `BepInEx\config\com.pummelbridge.plugin.cfg`, section `[Server]`, `Port` (default `38917`, range 1024-65535) |
-| Enable/disable | same section, `Enabled` (default `true`) |
+| Enable/disable | `[General] PluginEnabled` (master switch) and `[Server] Enabled` (server only); see [Safety](#safety) |
 | Token file | `BepInEx\config\PummelBridge.token`: 64 lowercase hex chars (32 CSPRNG bytes), created on first start, reused afterwards, regenerated if malformed |
 | Connection | one request per connection; every response has `Connection: close` |
 | Request body | UTF-8 JSON, `Content-Type: application/json` (parameters such as `; charset=utf-8` allowed), `Content-Length` required, max 1 MB (1 048 576 bytes); chunked bodies are refused |
@@ -76,6 +77,11 @@ Response (HTTP 200 for every well-formed, authenticated call):
 | `NOT_FOUND` | object / component not found |
 | `TIMEOUT` | the Unity main thread did not service the call within 10 s (the queued work is discarded, it never runs later) |
 | `INTERNAL` | unexpected exception, or a game member the plugin needs is missing (`member X.Y not found — game version changed?`) |
+| `WRITES_DISABLED` | write tool called while `[Safety] EnableWrites = false` |
+| `PUBLISH_BLOCK_INCOMPLETE` | write tool called while the Workshop publish block is not complete (`get_status.publishBlock`) |
+| `GUARD_NOT_TEST_MOD` | the open mod (open-mod tools) or the target / open mod (lifecycle tools) is not a `PB_TEST_` mod; the message names it |
+| `INVALID_STATE` | editor state forbids the call: play mode, unsaved changes, a prefab being edited, an open editor dialog, a broken editor mod list (the message says what to do) |
+| `ALREADY_EXISTS` | `create_test_mod`: a folder or a mod (Meta name) with that name exists, case-insensitive |
 
 Values in results: enums as their names (flags as `"A, B"`), `Vector2/3/4` and `Quaternion` as `{x,y,z[,w]}`,
 `Color` as `{r,g,b,a}` (0-1 floats), `Color32` as 0-255 ints, GUIDs as lowercase `8-4-4-4-12` strings, NaN/Infinity
@@ -85,7 +91,10 @@ as strings. Asset or object references are objects (see "References").
 
 `ping` and `get_log` (without `includeEditor`) are answered on the HTTP thread and work even while the game's
 main thread is busy. Everything else is queued to the plugin's `Update()` (max 16 items / 8 ms per frame) and
-waits up to 10 s.
+waits up to 10 s (`create_test_mod` / `open_test_mod`: 35 s, with their own 30 s load limit inside).
+
+Write tools: params are type-checked on the HTTP thread (`INVALID_PARAMS`), then the guard checks and the tool
+body run on the main thread in **one** dispatched unit of work, so the editor state cannot change in between.
 
 ---
 
@@ -96,9 +105,12 @@ waits up to 10 s.
 Works with the editor closed. No params.
 
 ```json
-{"pong": true, "pluginVersion": "0.1.0", "gameVersion": "1.15.2", "unityVersion": "2021.3.45f2",
- "apiVersion": 1, "sessionId": "3b0f2c...e1", "readOnlyBuild": true}
+{"pong": true, "pluginVersion": "0.2.0", "gameVersion": "1.15.2", "unityVersion": "2021.3.45f2",
+ "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write"]}
 ```
+
+`readOnlyBuild` was removed in api v2. `capabilities` lists what this build implements; whether writes are
+currently allowed is in `get_status` (`writesEnabled`, `publishBlock.complete`).
 
 `sessionId` is random per game start; a change means the game restarted (log ids restart at 1).
 
@@ -110,8 +122,15 @@ No params. Never fails because of editor state.
 {"editorOpen": true, "editorState": "Editing", "isLoading": false, "modOpen": true,
  "modName": "PB_TEST_Arena", "modType": "Minigame", "modLoaded": true, "isDirty": true,
  "undoStackLength": 1, "prefabContext": null, "playMode": false,
- "activeScene": "ModEditorScene", "readOnlyBuild": true}
+ "activeScene": "ModEditorScene", "capabilities": ["read", "write"], "writesEnabled": true,
+ "publishBlock": {"active": true, "complete": true, "patchedCount": 59, "missing": []}}
 ```
+
+- `writesEnabled`: current value of `[Safety] EnableWrites`.
+- `publishBlock`: `active` = at least one blocking patch installed; `complete` = every required target patched
+  and no patch failed (write tools need this); `patchedCount` = methods patched (59 expected for game build
+  2025-10-16: 10 game methods, 25 `SteamUGC`, 24 `SteamRemoteStorage`); `missing` = `"<target>: <reason>"` for
+  each target that is missing (required) or whose patch failed. `readOnlyBuild` was removed in api v2.
 
 - `editorState`: `Editing | EnteringPlayMode | PlayMode | ExitingPlayMode` (null when the editor is closed).
 - `playMode`: `editorState != "Editing"` (a playtest is starting, running or ending).
@@ -340,6 +359,159 @@ Captured on the main thread after `WaitForEndOfFrame` with `ScreenCapture.Captur
 (keeping aspect ratio) when wider than `maxWidth`, PNG-encoded; all temporary textures are destroyed. The capture
 is not written to disk.
 
+### `list_mods`
+
+No params. Errors: `EDITOR_NOT_OPEN`. Read-only.
+
+```json
+[{"name": "My Real Mod", "folderName": "My Real Mod", "type": "Minigame", "isTestMod": false, "isOpen": false},
+ {"name": "PB_TEST_Sandbox", "folderName": "PB_TEST_Sandbox", "type": "Minigame", "isTestMod": true, "isOpen": true}]
+```
+
+- Source: the editor's cached mod list (`EditorAvailableModManager`), not a rescan (`ReadListOfAvailableMods` would
+  rebuild the editor's list). The list is built when the editor opens and updated by the editor's own
+  create/rename and by `create_test_mod`; folders added on disk afterwards appear after re-entering the editor.
+  Sorted by `folderName` (ordinal, ignore case). No absolute paths.
+- `isTestMod`: both `name` (Meta.json) and `folderName` pass the test-mod rule. `isOpen`: it is the editor's current mod.
+
+### `create_test_mod` (write, lifecycle)
+
+| Param | Type | Default | |
+|---|---|---|---|
+| `name` | string, required | - | must pass the test-mod rule; becomes folder name and Meta name |
+| `type` | `"Minigame"` or `"Board"` | `"Minigame"` | exact spelling |
+| `discardUnsaved` | bool | false | additive extra (the MCP server does not send it): allow dropping unsaved changes of the open test mod |
+
+Creates a blank mod the way File > New Mod > "Empty" does (`EditorSystem.CreateNewMod(path, type)` with no
+template, plus `AddAvailableMod`) and opens it. Besides the guard it checks: the game's filename rule
+(`EditorPopup.IsValidFilenameInput`, which the popup applies and `CreateNewMod` skips); no folder and no mod
+(editor list and every `Data/Meta.json` on disk) with that name, case-insensitive (`ALREADY_EXISTS`); leaving
+the open mod is allowed (rules under `open_test_mod`). Completes from a later frame once the mod is loaded and its
+delayed first save has written `Data/Meta.json` and `Data/WorkshopItem.json`; `TIMEOUT` after 30 s.
+
+```json
+{"name": "PB_TEST_Arena", "folderName": "PB_TEST_Arena", "type": "Minigame", "publishedFileId": "256"}
+```
+
+Errors: guard codes, `INVALID_PARAMS`, `ALREADY_EXISTS`, `INVALID_STATE`, `BUSY_LOADING` (another create/open is
+still waiting for its load), `TIMEOUT`, `INTERNAL` (load failed; the editor shows its own error popup).
+
+### `open_test_mod` (write, lifecycle)
+
+| Param | Type | Default | |
+|---|---|---|---|
+| `name` | string, required | - | folder name, matched exactly (case-sensitive) among the folders in the mod folder |
+| `discardUnsaved` | bool | false | allow dropping unsaved changes of the open test mod |
+
+Opens an existing test mod with `EditorSystem.OpenMod` (what File > Open Mod ends in, minus its popup).
+Refused if the name fails the rule even when such a folder exists; `NOT_FOUND` if there is no such folder or it has
+no `Data/Meta.json`; `GUARD_NOT_TEST_MOD` if its Meta.json name is not a test-mod name. If that mod is already open
+and loaded: success without reloading, `alreadyOpen: true`. Completes after the asynchronous load; `TIMEOUT`
+after 30 s.
+
+```json
+{"name": "PB_TEST_Arena", "folderName": "PB_TEST_Arena", "type": "Minigame", "publishedFileId": "256", "alreadyOpen": false}
+```
+
+Leaving the open mod (create and open) gives `INVALID_STATE` unless:
+- no editor dialog is open (`EditorPopupManager.CurrentPopup == null`);
+- no prefab is being edited (leaving the prefab context would save that prefab);
+- the editor's dirty flag is false, or `discardUnsaved: true`. This mirrors the editor's own "unsaved changes"
+  popup, which uses `EditorSystem.IsModDirty` (current undo context). That flag is set by the first undo snapshot
+  after any load, so it is **already true for an untouched, freshly opened or created mod** (confirmed in-game):
+  expect to call `save_mod` first (harmless on a test mod) or pass `discardUnsaved: true`. The bridge never
+  auto-saves.
+
+### `save_mod` (write, open mod)
+
+No params. The editor's own save (`EditorSystem.SaveCurrentMod`: all mod files, `Data/Preview.jpg`, clears the
+current dirty flag), after the guard (loaded test mod, not loading, edit mode) and the Workshop id hygiene. If the
+mod's Meta name is missing from the editor's mod list, the entry is added first (otherwise the editor's
+`UpdateLoadedModLastModifiedTime` would insert a broken nameless entry).
+Saving while a prefab is being edited is allowed, as with Ctrl+S: the scene file stores each object's own active
+flag, so the deactivated scene root does not change it, and the prefab is saved with the other assets. In that
+case the scene's dirty flag stays set and `Preview.jpg` shows the prefab view.
+
+```json
+{"saved": true, "name": "PB_TEST_Arena", "isDirty": false}
+```
+
+`isDirty`: dirty flag of the current undo context right after the save (same source as `get_status.isDirty`).
+
+---
+
+## Safety
+
+### Config switches (`BepInEx\config\com.pummelbridge.plugin.cfg`)
+
+| Key | Default | Effect |
+|---|---|---|
+| `[General] PluginEnabled` | `true` | Read at game start. `false`: the plugin does nothing at all (no server, no patches, one log line). Use this to publish by hand. |
+| `[Safety] EnableWrites` | `true` | Read on every write call. `false`: every write tool returns `WRITES_DISABLED`. Does not affect the publish block. |
+| `[Server] Enabled` | `true` | `false`: no RPC server; the publish block stays active. |
+| `[Server] Port` | `38917` | |
+
+### Test-mod rule
+
+A name is a test-mod name iff it starts with the exact, case-sensitive prefix `PB_TEST_`, has at least one more
+character, is at most 64 characters long, consists only of ASCII `A-Z a-z 0-9 _ -` and spaces, and has no leading
+or trailing space. `pb_test_x`, `PB_TEST_`, `PB_TEST_a.b`, `PB_TEST_../x` and non-ASCII look-alikes are not. The
+prefix is hardcoded; there is no configuration, allowlist or bypass.
+
+### Guard (central, in the tool registry)
+
+A write tool cannot be registered without a guard kind (`ToolDefinition.Write` requires one, a registry without
+`WriteSafety` refuses write tools). Checks, in order, on the main thread in the same unit of work as the body:
+
+1. `[Safety] EnableWrites` → `WRITES_DISABLED`
+2. publish block complete → `PUBLISH_BLOCK_INCOMPLETE`
+3. editor open → `EDITOR_NOT_OPEN`
+4. not loading → `BUSY_LOADING`
+5. kind **OpenMod** (`save_mod`): a mod is open (`NO_MOD_OPEN`) and loaded (`BUSY_LOADING`); its Meta name **and**
+   folder name pass the rule (`GUARD_NOT_TEST_MOD`, message names the mod); state is `Editing` (`INVALID_STATE`).
+   Kind **Lifecycle** (`create_test_mod`, `open_test_mod`): the `name` param passes the rule; if any mod is open it
+   is a test mod, else `GUARD_NOT_TEST_MOD` ("close <name> by hand first"); state is `Editing`.
+
+Workshop id hygiene: whenever the guard passes with a loaded test mod open, before every bridge save and after
+create/open, an in-memory `workshopItem.publishedFileId` other than 256 (`ModWorkshopItem.DefaultWorkshopID`) is
+reset to 256 with a warning in the BepInEx and Unity logs. This is the only workshop-item field the bridge writes.
+
+### Workshop publish block
+
+While the plugin is enabled, Harmony prefixes installed in `Awake` (before the server starts; never removed) skip
+every Workshop create/update/delete path and return a safe default: the type's `Invalid` handle where one exists
+(`UGCUpdateHandle_t.Invalid` = `ulong.MaxValue`, `SteamAPICall_t.Invalid` = 0), else `false` / 0 / null.
+
+- Game layer (all required): `WorkshopModInstaller.PublishItem`, `.SubmitItemUpdate(UGCQueryHandle_t)`,
+  `.BeginUGCItemContentUpdate`, `.OnCreateItem`, `.OnSteamUpdateUGCQuery`, `.SetUGCPreviewFiles`;
+  `WorkshopPopup.PublishMod`, `.ResetPublishFileIdAndRetryPublish`, `.DeleteBlankWorkshopItemOnFailedPublish`;
+  `WorkshopBrowserItem.Delete`.
+- `Steamworks.SteamUGC`: `CreateItem`, `StartItemUpdate`, `SubmitItemUpdate`, `DeleteItem` (required); every
+  public static method whose first parameter is `UGCUpdateHandle_t` except the getter `GetItemUpdateProgress`
+  (enumerated at startup); `AddDependency`, `RemoveDependency`, `AddAppDependency`, `RemoveAppDependency`.
+- `Steamworks.SteamRemoteStorage`: every method whose name contains `FileWrite` or starts with
+  `UpdatePublishedFile`, plus `FileDelete`, `FileForget`, `FileShare`, `SetSyncPlatforms`, `PublishWorkshopFile`,
+  `PublishVideo`, `CreatePublishedFileUpdateRequest`, `CommitPublishedFileUpdate`, `DeletePublishedFile`.
+- Not blocked (normal play keeps working): queries, `Get*`, `Release*`, `DownloadItem`, `SubscribeItem`,
+  `UnsubscribeItem`, `SetUserItemVote`, favourites, playtime tracking, `UGCDownload`, `UGCRead`, `FileRead`,
+  `FileExists`.
+- Fail closed: if a required target is missing or any patch fails, an Error is logged, `publishBlock.complete` is
+  false and every write tool returns `PUBLISH_BLOCK_INCOMPLETE`. Read tools keep working.
+- Each blocked call logs a Warning (first call at once, then at most once per method per 10 s with the number of
+  calls not logged) to the BepInEx log and to the Unity log, so the editor's Log window shows it:
+  `[PummelBridge] Workshop publishing is blocked while the PummelBridge plugin is enabled. Blocked call: WorkshopPopup.PublishMod(PummelMod). Nothing was sent to Steam. To publish, set [General] PluginEnabled = false in BepInEx\config\com.pummelbridge.plugin.cfg and restart the game.`
+
+**What the author sees when clicking Publish with the plugin loaded:** File > Publish Mod to Workshop still opens
+the dialog (its read-only Workshop details query is allowed). Clicking "Publish mod to workshop" / "Publish update
+to workshop" does nothing visible in the dialog: `WorkshopPopup.PublishMod` is skipped as a whole, so the mod is
+**not saved**, no reinstall-on-exit is queued, nothing is sent to Steam, no progress bar appears and the button
+stays enabled. The Log window shows the line above (per click, at most once per 10 s). The dialog closes normally
+and the editor keeps working. Note: opening the dialog on a published mod copies the remote title, description and
+visibility into the in-memory mod; that is game behaviour, unchanged by the bridge.
+
+**How to publish by hand:** quit the game, set `[General] PluginEnabled = false`, start the game, publish from the
+editor as usual, quit, set it back to `true`.
+
 ---
 
 ## References
@@ -358,5 +530,5 @@ Asset/object references (property values, action targets, settings) use one shap
 
 ## Not in this build
 
-No write methods (create/delete/set/save/playtest/undo) and no Workshop functionality of any kind. The tool registry
-refuses to register write tools in this build; Phase 2 adds them behind a guard layer (`PB_TEST_` allowlist).
+No object/component/property/action editing, undo, playtest or batch tools (later Phase 2 increments). No delete,
+rename or close of mods. No Workshop functionality of any kind; publishing is blocked (see [Safety](#safety)).

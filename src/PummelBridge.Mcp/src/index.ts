@@ -3,17 +3,23 @@ import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { BridgeClient, BridgeError, optionsFromEnv } from "./client.js";
+import { BridgeClient, BridgeError, optionsFromEnv, TOOL_TIMEOUTS_MS, isValidTestModName } from "./client.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 const opts = optionsFromEnv();
 const client = new BridgeClient(opts);
 
-const server = new McpServer({ name: "pummelbridge", version: pkg.version });
+const INSTRUCTIONS =
+  "PummelBridge connects to the Pummel Party Mod Editor. Nearly all tools are read-only inspection tools; list_mods is read-only too. Only three tools write: create_test_mod, open_test_mod, save_mod. " +
+  "Safety model: write tools only ever act on sandbox mods whose name starts with PB_TEST_; the plugin refuses anything else. The bridge cannot open, modify, rename or delete the author's real mods, and Workshop publishing is blocked entirely while the plugin is loaded (there is no tool for it). " +
+  "If a real (non-sandbox) mod is open in the editor, create_test_mod/open_test_mod are refused until the human closes it by hand.";
+
+const server = new McpServer({ name: "pummelbridge", version: pkg.version }, { instructions: INSTRUCTIONS });
 
 const RO =
-  "Read-only. Needs Pummel Party running with the PummelBridge plugin and the Mod Editor open with a mod loaded.";
+  "Read-only; never changes anything. Needs Pummel Party running with the PummelBridge plugin and the Mod Editor open with a mod loaded.";
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 
 type ToolResult = { content: Array<any>; isError?: boolean };
 
@@ -29,14 +35,14 @@ function register(
   name: string,
   description: string,
   shape: z.ZodRawShape,
-  extra: { timeoutMs?: number; format?: (r: any) => ToolResult } = {},
+  extra: { format?: (r: any) => ToolResult; annotations?: typeof READ_ONLY } = {},
 ): void {
   server.registerTool(
     name,
-    { description, inputSchema: shape, annotations: READ_ONLY },
+    { description, inputSchema: shape, annotations: extra.annotations ?? READ_ONLY },
     async (args: Record<string, unknown>): Promise<ToolResult> => {
       try {
-        const result = await client.call(name, args ?? {}, extra.timeoutMs);
+        const result = await client.call(name, args ?? {}, TOOL_TIMEOUTS_MS[name]);
         if (extra.format) return extra.format(result);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) ?? "null" }] };
       } catch (e) {
@@ -49,12 +55,12 @@ function register(
 
 register(
   "ping",
-  "Check that the PummelBridge plugin inside Pummel Party is reachable. Returns { pong, pluginVersion, gameVersion, unityVersion, apiVersion }. Use first to verify the connection. Read-only; works whenever the game is running with the plugin loaded (the Mod Editor does not need to be open).",
+  "Check that the PummelBridge plugin inside Pummel Party is reachable. Returns { pong, pluginVersion, gameVersion, unityVersion, apiVersion } (apiVersion 2 includes the write tools). Use first to verify the connection. Read-only; works whenever the game is running with the plugin loaded (the Mod Editor does not need to be open).",
   {},
 );
 register(
   "get_status",
-  `Returns the current editor/mod status (whether the Mod Editor is open, which mod is loaded, loading state). Use to find out why other tools fail or whether the game is ready. ${RO}`,
+  `Returns the current editor/mod status (whether the Mod Editor is open, which mod is loaded, loading state), plus publishBlock (state of the plugin's Workshop-publish safety patches) and writesEnabled (whether write tools are enabled in the plugin config, Safety.EnableWrites). Use to find out why other tools fail or whether the game is ready. ${RO}`,
   {},
 );
 register(
@@ -108,7 +114,6 @@ register(
   `Captures the game's current view as a PNG image (returned as image content). Use to see what the editor or scene currently looks like. Optionally downscale with maxWidth. ${RO}`,
   { maxWidth: z.number().int().min(64).max(3840).optional().describe("Maximum image width in pixels (64..3840); downscaled if wider.") },
   {
-    timeoutMs: 30000,
     format: (r) => {
       if (!r || typeof r.pngBase64 !== "string") {
         return errorResult(new BridgeError("INTERNAL: screenshot response did not contain pngBase64."));
@@ -121,6 +126,47 @@ register(
       };
     },
   },
+);
+
+const NAME_RULE = "Must match ^PB_TEST_[A-Za-z0-9_ -]+$, at most 64 characters, no leading or trailing space.";
+const nameSchema = z
+  .string()
+  .refine(isValidTestModName, { message: `Invalid sandbox mod name. ${NAME_RULE}` })
+  .describe(`Sandbox mod name. ${NAME_RULE}`);
+
+const SAFETY =
+  "Safety model: write tools only ever act on sandbox mods whose name starts with PB_TEST_; the plugin refuses anything else (GUARD_NOT_TEST_MOD). The bridge cannot open, modify, rename or delete the author's real mods, and Workshop publishing is blocked entirely while the plugin is loaded; there is no tool for it.";
+const WRITE_REQ =
+  "Needs Pummel Party running with the PummelBridge plugin and the Mod Editor open, and writes enabled in the plugin config (Safety.EnableWrites).";
+
+register(
+  "list_mods",
+  "Lists the local mod projects the editor knows, as [{ name, folderName, type, isTestMod, isOpen }]. isTestMod is true for sandbox mods (name starts with PB_TEST_), the only ones the write tools can touch. Read-only; never changes anything. Needs Pummel Party running with the PummelBridge plugin.",
+  {},
+);
+register(
+  "create_test_mod",
+  `Creates a new blank sandbox mod and opens it in the editor (asynchronous load, waits up to 45 s). ${SAFETY} Refused while a non-sandbox mod is open in the editor; the human must close it by hand. Refused if the name already exists (ALREADY_EXISTS). ${WRITE_REQ}`,
+  {
+    name: nameSchema,
+    type: z.enum(["Minigame", "Board"]).optional().describe("Mod type (plugin default if omitted)."),
+  },
+  { annotations: WRITE },
+);
+register(
+  "open_test_mod",
+  `Opens an existing sandbox mod in the editor (asynchronous load, waits up to 45 s). ${SAFETY} Refused while a non-sandbox mod is open in the editor; the human must close it by hand. Refuses to discard unsaved changes of the currently open sandbox mod unless discardUnsaved is true; prefer save_mod first. ${WRITE_REQ}`,
+  {
+    name: nameSchema,
+    discardUnsaved: z.boolean().optional().describe("Allow discarding unsaved changes of the currently open sandbox mod (default false)."),
+  },
+  { annotations: WRITE },
+);
+register(
+  "save_mod",
+  `Saves the open sandbox mod to disk (waits up to 30 s). Only works while a PB_TEST_ sandbox mod is open. ${SAFETY} ${WRITE_REQ}`,
+  {},
+  { annotations: { ...WRITE, idempotentHint: true } },
 );
 
 await server.connect(new StdioServerTransport());

@@ -58,11 +58,18 @@ export async function startFake({ token, handler, delayMs = 0 }) {
 export function defaultHandler(method, params) {
   switch (method) {
     case "ping":
-      return { ok: true, result: { pong: true, pluginVersion: "0.0.1", gameVersion: "g", unityVersion: "u", apiVersion: 1 } };
+      return { ok: true, result: { pong: true, pluginVersion: "0.0.1", gameVersion: "g", unityVersion: "u", apiVersion: 2 } };
     case "get_object":
       return { ok: true, result: { guid: params.guid, components: [] } };
     case "screenshot":
       return { ok: true, result: { pngBase64: PNG_B64, width: 1, height: 1 } };
+    case "list_mods":
+      return { ok: true, result: [{ name: "PB_TEST_a", folderName: "PB_TEST_a", type: "Minigame", isTestMod: true, isOpen: false }] };
+    case "create_test_mod":
+    case "open_test_mod":
+      return { ok: true, result: { name: params.name } };
+    case "save_mod":
+      return { ok: true, result: { saved: true } };
     default:
       return { ok: false, error: { code: "UNKNOWN_METHOD", message: method } };
   }

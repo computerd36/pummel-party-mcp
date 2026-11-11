@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using PummelBridge.Core;
 using PummelBridge.Game;
@@ -8,7 +10,7 @@ namespace PummelBridge.Tools
     /// <summary>ping, get_status, get_open_mod.</summary>
     internal static class StatusTools
     {
-        public static void Register(ToolRegistry registry, BridgeRuntimeInfo info)
+        public static void Register(ToolRegistry registry, BridgeRuntimeInfo info, Func<bool> writesEnabled, PublishBlockStatus publishBlock)
         {
             // Answered on the HTTP thread from values cached at startup: works with the editor closed and even
             // while the main thread is busy (e.g. during a scene load).
@@ -20,10 +22,23 @@ namespace PummelBridge.Tools
                 ["unityVersion"] = info.UnityVersion,
                 ["apiVersion"] = PluginInfo.ApiVersion,
                 ["sessionId"] = info.SessionId,
-                ["readOnlyBuild"] = true,
+                ["capabilities"] = new JArray("read", "write"),
             }));
 
-            registry.Register(ToolDefinition.Read("get_status", ctx => ctx.OnMainThread(GetStatus)));
+            registry.Register(ToolDefinition.Read("get_status", ctx => ctx.OnMainThread(() =>
+            {
+                JObject status = GetStatus();
+                status["capabilities"] = new JArray("read", "write");
+                status["writesEnabled"] = writesEnabled();
+                status["publishBlock"] = new JObject
+                {
+                    ["active"] = publishBlock.Active,
+                    ["complete"] = publishBlock.Complete,
+                    ["patchedCount"] = publishBlock.PatchedCount,
+                    ["missing"] = new JArray(publishBlock.Missing.ToArray()),
+                };
+                return status;
+            })));
             registry.Register(ToolDefinition.Read("get_open_mod", ctx => ctx.OnMainThread(GetOpenMod)));
         }
 
@@ -43,7 +58,6 @@ namespace PummelBridge.Tools
                 ["prefabContext"] = null,
                 ["playMode"] = false,
                 ["activeScene"] = SceneManager.GetActiveScene().name,
-                ["readOnlyBuild"] = true,
             };
 
             EditorSystem ed = EditorAccess.EditorOrNull();

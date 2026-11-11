@@ -34,7 +34,27 @@ const HINTS: Record<string, string> = {
   EDITOR_NOT_OPEN: "Open the Mod Editor from the game's main menu, then retry.",
   NO_MOD_OPEN: "The editor is open but no mod is loaded; open a mod in the editor, then retry.",
   BUSY_LOADING: "The game is still loading; retry in a few seconds.",
+  WRITES_DISABLED: "Write tools are switched off in the plugin config (Safety.EnableWrites); the human must enable it and restart the game.",
+  PUBLISH_BLOCK_INCOMPLETE:
+    "The plugin could not install its Workshop safety patches (probably after a game update), so write tools stay disabled. Tell the human.",
+  GUARD_NOT_TEST_MOD: "Only mods whose name starts with PB_TEST_ can be modified; do not retry with a different name for a real mod.",
+  INVALID_STATE: "See the message for the required state (e.g. save first, or leave play mode), then retry.",
+  ALREADY_EXISTS: "A mod with that name already exists; choose another name or use open_test_mod.",
 };
+
+/** Per-tool request timeouts (ms); tools not listed use the client default. */
+export const TOOL_TIMEOUTS_MS: Record<string, number> = {
+  screenshot: 30000,
+  create_test_mod: 45000,
+  open_test_mod: 45000,
+  save_mod: 30000,
+};
+
+/** Same rule the plugin enforces for sandbox mod names. */
+export const TEST_MOD_NAME_RE = /^PB_TEST_[A-Za-z0-9_ -]+$/;
+export function isValidTestModName(name: string): boolean {
+  return name.length <= 64 && TEST_MOD_NAME_RE.test(name) && !name.startsWith(" ") && !name.endsWith(" ");
+}
 
 export class BridgeClient {
   private token: string | undefined;

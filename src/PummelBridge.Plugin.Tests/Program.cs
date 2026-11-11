@@ -33,6 +33,7 @@ namespace PummelBridge.Tests
         {
             Console.WriteLine("PummelBridge core test harness");
             UnitTests();
+            GuardTests.Run((name, ok) => Check(name, ok));
             AssetListingTests();
             ServerTests();
             Console.WriteLine();
@@ -70,18 +71,6 @@ namespace PummelBridge.Tests
             Check("FixedTimeEquals: equal", TokenAuth.FixedTimeEquals(tok, tok));
             Check("FixedTimeEquals: different/shorter/longer/null", !TokenAuth.FixedTimeEquals(tok, tok.Substring(0, 63) + (tok[63] == 'a' ? 'b' : 'a'))
                 && !TokenAuth.FixedTimeEquals(tok, tok.Substring(0, 10)) && !TokenAuth.FixedTimeEquals(tok, tok + "0") && !TokenAuth.FixedTimeEquals(tok, null));
-
-            ToolRegistry reg = new ToolRegistry();
-            bool refused = false;
-            try
-            {
-                reg.Register(new ToolDefinition("save_mod", true, _ => null));
-            }
-            catch (InvalidOperationException)
-            {
-                refused = true;
-            }
-            Check("registry refuses write tools in this build", refused && !reg.TryGet("save_mod", out _));
 
             LogRingBuffer ring = new LogRingBuffer(5);
             for (int i = 1; i <= 8; i++)

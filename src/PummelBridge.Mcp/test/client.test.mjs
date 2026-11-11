@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
 import { join } from "node:path";
-import { BridgeClient } from "../dist/client.js";
+import { BridgeClient, TOOL_TIMEOUTS_MS, isValidTestModName } from "../dist/client.js";
 import { startFake, makeTempDir, removeDir, writeToken } from "./fake-plugin.mjs";
 
 async function freePort() {
@@ -148,4 +148,49 @@ test("timeout", async () => {
     await fake.close();
     removeDir(dir);
   }
+});
+
+test("new error codes map to hints", async () => {
+  const dir = makeTempDir();
+  const tf = join(dir, "tok");
+  writeToken(tf, "t");
+  let code = "";
+  const fake = await startFake({ token: "t", handler: () => ({ ok: false, error: { code, message: "m" } }) });
+  const expected = {
+    WRITES_DISABLED: /Safety\.EnableWrites/,
+    PUBLISH_BLOCK_INCOMPLETE: /safety patches/,
+    GUARD_NOT_TEST_MOD: /do not retry with a different name/,
+    INVALID_STATE: /required state/,
+    ALREADY_EXISTS: /already exists/,
+  };
+  try {
+    const c = new BridgeClient({ port: fake.port, tokenFile: tf });
+    for (const [k, re] of Object.entries(expected)) {
+      code = k;
+      await assert.rejects(c.call("save_mod"), (e) => {
+        assert.equal(e.code, k);
+        assert.ok(e.message.startsWith(`${k}: m\nHint: `), e.message);
+        assert.match(e.message, re);
+        return true;
+      });
+    }
+  } finally {
+    await fake.close();
+    removeDir(dir);
+  }
+});
+
+test("per-tool timeouts", () => {
+  assert.equal(TOOL_TIMEOUTS_MS.create_test_mod, 45000);
+  assert.equal(TOOL_TIMEOUTS_MS.open_test_mod, 45000);
+  assert.equal(TOOL_TIMEOUTS_MS.save_mod, 30000);
+  assert.equal(TOOL_TIMEOUTS_MS.screenshot, 30000);
+  assert.equal(TOOL_TIMEOUTS_MS.ping, undefined);
+});
+
+test("name rule", () => {
+  for (const n of ["MyMod", "pb_test_x", "PB_TEST_", "PB_TEST_a/b", "PB_TEST_" + "a".repeat(62), "PB_TEST_a ", "PB_TEST_a\n"]) {
+    assert.equal(isValidTestModName(n), false, JSON.stringify(n));
+  }
+  for (const n of ["PB_TEST_x", "PB_TEST_a b-c_1", "PB_TEST_" + "a".repeat(56)]) assert.equal(isValidTestModName(n), true, n);
 });

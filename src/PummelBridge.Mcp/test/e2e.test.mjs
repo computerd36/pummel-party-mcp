@@ -12,7 +12,9 @@ const entry = join(here, "..", "dist", "index.js");
 const EXPECTED = [
   "get_action_graph", "get_hierarchy", "get_log", "get_object", "get_open_mod",
   "get_status", "list_assets", "ping", "screenshot",
-];
+  "list_mods", "create_test_mod", "open_test_mod", "save_mod",
+].sort();
+const WRITES = ["create_test_mod", "open_test_mod", "save_mod"];
 
 test("end to end over stdio MCP", async () => {
   const dir = makeTempDir();
@@ -35,6 +37,18 @@ test("end to end over stdio MCP", async () => {
     for (const t of tools) {
       assert.equal(t.inputSchema.type, "object");
       assert.ok(t.description && t.description.length > 20);
+    }
+    assert.equal(tools.length, 13);
+    for (const t of tools) {
+      if (WRITES.includes(t.name)) {
+        assert.equal(t.annotations.readOnlyHint, false, t.name);
+        assert.equal(t.annotations.destructiveHint, false, t.name);
+        assert.equal(t.annotations.idempotentHint, t.name === "save_mod", t.name);
+        assert.match(t.description, /PB_TEST_/);
+        assert.match(t.description, /Workshop publishing is blocked/);
+      } else {
+        assert.equal(t.annotations.readOnlyHint, true, t.name);
+      }
     }
     const obj = tools.find((t) => t.name === "get_object");
     assert.deepEqual(obj.inputSchema.required, ["guid"]);
@@ -63,6 +77,33 @@ test("end to end over stdio MCP", async () => {
     assert.equal(shot.content[0].mimeType, "image/png");
     assert.equal(shot.content[0].data, PNG_B64);
     assert.match(shot.content[1].text, /1 x 1/);
+
+    // client-side name validation: invalid names never reach the plugin
+    const badNames = ["MyMod", "pb_test_x", "PB_TEST_", "PB_TEST_a/b", "PB_TEST_" + "a".repeat(62), "PB_TEST_a ", "PB_TEST_a\n"];
+    for (const name of badNames) {
+      for (const tool of ["create_test_mod", "open_test_mod"]) {
+        const n0 = fake.requests.length;
+        let rej = false;
+        try {
+          rej = (await client.callTool({ name: tool, arguments: { name } })).isError === true;
+        } catch {
+          rej = true;
+        }
+        assert.ok(rej, `${tool} ${JSON.stringify(name)} should be rejected`);
+        assert.equal(fake.requests.length, n0, "must not reach plugin");
+      }
+    }
+    const create = await client.callTool({ name: "create_test_mod", arguments: { name: "PB_TEST_My Mod-1", type: "Board" } });
+    assert.notEqual(create.isError, true);
+    assert.deepEqual(JSON.parse(fake.requests.at(-1).body), { method: "create_test_mod", params: { name: "PB_TEST_My Mod-1", type: "Board" } });
+    await client.callTool({ name: "open_test_mod", arguments: { name: "PB_TEST_x", discardUnsaved: true } });
+    assert.deepEqual(JSON.parse(fake.requests.at(-1).body), { method: "open_test_mod", params: { name: "PB_TEST_x", discardUnsaved: true } });
+    await client.callTool({ name: "save_mod", arguments: {} });
+    assert.deepEqual(JSON.parse(fake.requests.at(-1).body), { method: "save_mod", params: {} });
+    const lm = await client.callTool({ name: "list_mods", arguments: {} });
+    assert.equal(JSON.parse(lm.content[0].text)[0].isTestMod, true);
+    const max = await client.callTool({ name: "create_test_mod", arguments: { name: "PB_TEST_" + "a".repeat(56) } });
+    assert.notEqual(max.isError, true, "64-char name is valid");
 
     // plugin error becomes isError result
     const bad = await client.callTool({ name: "get_status", arguments: {} });
