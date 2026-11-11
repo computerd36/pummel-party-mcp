@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
 import { join } from "node:path";
-import { BridgeClient, TOOL_TIMEOUTS_MS, isValidTestModName } from "../dist/client.js";
+import { BridgeClient, isValidTestModName } from "../dist/client.js";
 import { startFake, makeTempDir, removeDir, writeToken } from "./fake-plugin.mjs";
 
 async function freePort() {
@@ -178,18 +178,6 @@ test("new error codes map to hints", async () => {
     await fake.close();
     removeDir(dir);
   }
-});
-
-test("per-tool timeouts", () => {
-  assert.equal(TOOL_TIMEOUTS_MS.create_test_mod, 45000);
-  assert.equal(TOOL_TIMEOUTS_MS.open_test_mod, 45000);
-  assert.equal(TOOL_TIMEOUTS_MS.save_mod, 30000);
-  assert.equal(TOOL_TIMEOUTS_MS.screenshot, 30000);
-  assert.equal(TOOL_TIMEOUTS_MS.ping, undefined);
-  for (const n of ["create_object", "duplicate_object", "delete_object", "reparent_object", "set_object", "set_transform", "add_component", "remove_component", "set_property", "set_properties"]) {
-    assert.equal(TOOL_TIMEOUTS_MS[n], 20000, n);
-  }
-  assert.equal(TOOL_TIMEOUTS_MS.undo, 30000);
 });
 
 test("name rule", () => {

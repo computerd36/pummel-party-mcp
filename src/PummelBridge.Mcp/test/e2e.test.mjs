@@ -10,19 +10,22 @@ const here = dirname(fileURLToPath(import.meta.url));
 const entry = join(here, "..", "dist", "index.js");
 
 const EXPECTED = [
-  "get_action_graph", "get_hierarchy", "get_log", "get_object", "get_open_mod",
+  "bridge_guide", "get_action_graph", "get_hierarchy", "get_log", "get_object", "get_open_mod",
   "get_status", "list_assets", "ping", "screenshot",
   "list_mods", "create_test_mod", "open_test_mod", "save_mod",
   "list_component_types", "create_object", "duplicate_object", "delete_object", "reparent_object", "set_object",
   "set_transform", "add_component", "remove_component", "set_property", "set_properties", "undo",
+  "list_action_types", "list_trigger_types", "add_action", "remove_action", "move_action", "set_action",
+  "add_trigger", "remove_trigger", "set_trigger",
 ].sort();
 const WRITES = [
   "create_test_mod", "open_test_mod", "save_mod",
   "create_object", "duplicate_object", "delete_object", "reparent_object", "set_object", "set_transform",
   "add_component", "remove_component", "set_property", "set_properties", "undo",
+  "add_action", "remove_action", "move_action", "set_action", "add_trigger", "remove_trigger", "set_trigger",
 ];
-const IDEMPOTENT = ["save_mod", "set_transform", "set_object", "set_property", "set_properties"];
-const DESTRUCTIVE = ["delete_object", "remove_component"];
+const IDEMPOTENT = ["save_mod", "set_transform", "set_object", "set_property", "set_properties", "set_action", "set_trigger"];
+const DESTRUCTIVE = ["delete_object", "remove_component", "remove_action", "remove_trigger", "undo"];
 
 test("end to end over stdio MCP", async () => {
   const dir = makeTempDir();
@@ -33,8 +36,10 @@ test("end to end over stdio MCP", async () => {
     command: process.execPath,
     args: [entry],
     env: { ...process.env, PUMMELBRIDGE_PORT: String(fake.port), PUMMELBRIDGE_TOKEN_FILE: tf },
-    stderr: "ignore",
+    stderr: "pipe",
   });
+  let stderrText = "";
+  transport.stderr?.on("data", (d) => (stderrText += d));
   const client = new Client({ name: "test", version: "0.0.0" });
   try {
     await client.connect(transport);
@@ -46,14 +51,13 @@ test("end to end over stdio MCP", async () => {
       assert.equal(t.inputSchema.type, "object");
       assert.ok(t.description && t.description.length > 20);
     }
-    assert.equal(tools.length, 25);
+    assert.equal(tools.length, 35);
     for (const t of tools) {
       if (WRITES.includes(t.name)) {
         assert.equal(t.annotations.readOnlyHint, false, t.name);
         assert.equal(t.annotations.destructiveHint, DESTRUCTIVE.includes(t.name), t.name);
         assert.equal(t.annotations.idempotentHint, IDEMPOTENT.includes(t.name), t.name);
-        assert.match(t.description, /PB_TEST_/);
-        assert.match(t.description, /Workshop publishing is blocked/);
+        assert.match(t.description, /bridge_guide/);
       } else {
         assert.equal(t.annotations.readOnlyHint, true, t.name);
       }
@@ -202,6 +206,111 @@ test("end to end over stdio MCP", async () => {
     await client.callTool({ name: "add_component", arguments: { guid: "g", type: "Light" } });
     assert.deepEqual(lastReq().params, { guid: "g", type: "Light" });
 
+    // ---- action / trigger tools ----
+    for (const t of tools) assert.equal(t.inputSchema.type, "object", `${t.name} schema must be type object`);
+    for (const n of ["list_action_types", "list_trigger_types"]) assert.equal(byName[n].annotations.readOnlyHint, true, n);
+    assert.deepEqual([...byName.add_action.inputSchema.properties.path.items.required].sort(), ["action", "choice"]);
+    assert.equal(byName.add_action.inputSchema.properties.path.maxItems, 8);
+    assert.equal(byName.add_action.inputSchema.properties.index.minimum, 0);
+    assert.ok(byName.add_action.inputSchema.required.includes("type"));
+    assert.match(byName.add_action.description, /list_action_types/);
+    assert.match(byName.add_action.description, /bridge_guide/);
+    const instructions = client.getInstructions();
+    assert.match(instructions, /APPEND only/);
+    assert.match(instructions, /editable/);
+    assert.match(instructions, /NOT undoable/);
+    assert.match(instructions, /PB_TEST_/);
+    assert.match(instructions, /Workshop publishing is blocked/);
+
+    const objAddr = { guid: "g", component: "ModTrigger", trigger: "OnEnterActions" };
+    const psAddr = { scope: "playerSettings", trigger: "onDeathTrigger" };
+    const nestedParams = {
+      m_seconds: { valueType: "RandomBetweenTwoValues", min: 1, max: 2.5 },
+      m_choices: [{ m_buttonText: "Yes", m_costType: "Keys", m_costAmount: 3 }, null, { buttonText: "No" }],
+      m_color: { r: 1, g: 0.5, b: 0, a: 1 },
+      list: [1, "two", { three: [3, null] }],
+      flag: false,
+    };
+
+    // both address forms validate and arrive unchanged
+    const aaArgs = { ...objAddr, type: "Wait", index: 0, parameters: nestedParams, targetFlags: "Source, Advanced", targets: ["a", { guid: "b" }, null] };
+    const aa = await client.callTool({ name: "add_action", arguments: aaArgs });
+    assert.notEqual(aa.isError, true);
+    assert.deepEqual(lastReq(), { method: "add_action", params: aaArgs });
+    assert.deepEqual(echoed(aa).parameters, nestedParams);
+    await client.callTool({ name: "add_action", arguments: { ...psAddr, type: "Wait" } });
+    assert.deepEqual(lastReq().params, { ...psAddr, type: "Wait" });
+    const steps8 = Array.from({ length: 8 }, (_, i) => ({ action: i, choice: 0 }));
+    await client.callTool({ name: "set_action", arguments: { ...objAddr, path: steps8, index: 2, targetFlags: ["Source", "Advanced"] } });
+    assert.deepEqual(lastReq().params, { ...objAddr, path: steps8, index: 2, targetFlags: ["Source", "Advanced"] });
+    await client.callTool({ name: "set_action", arguments: { ...psAddr, index: 0, parameters: nestedParams } });
+    assert.deepEqual(lastReq().params.parameters, nestedParams);
+    await client.callTool({ name: "set_action", arguments: { ...objAddr, index: 1, targetFlags: 5 } });
+    assert.equal(lastReq().params.targetFlags, 5);
+    await client.callTool({ name: "remove_action", arguments: { ...objAddr, index: 1 } });
+    assert.deepEqual(lastReq(), { method: "remove_action", params: { ...objAddr, index: 1 } });
+    await client.callTool({ name: "move_action", arguments: { ...psAddr, index: 2, newIndex: 0 } });
+    assert.deepEqual(lastReq(), { method: "move_action", params: { ...psAddr, index: 2, newIndex: 0 } });
+    await client.callTool({ name: "add_trigger", arguments: { guid: "g", type: "Timer", parameters: { m_interval: 2 } } });
+    assert.deepEqual(lastReq(), { method: "add_trigger", params: { guid: "g", type: "Timer", parameters: { m_interval: 2 } } });
+    await client.callTool({ name: "remove_trigger", arguments: { guid: "g", trigger: "Triggers[1]" } });
+    assert.deepEqual(lastReq(), { method: "remove_trigger", params: { guid: "g", trigger: "Triggers[1]" } });
+    const stArgs = { guid: "g", trigger: "Triggers[0]", type: "Hit", parameters: { hitType: "CollisionEnter, CollisionStay" } };
+    await client.callTool({ name: "set_trigger", arguments: stArgs });
+    assert.deepEqual(lastReq().params, stArgs);
+    await client.callTool({ name: "set_trigger", arguments: { scope: "playerSettings", trigger: "tickTrigger", parameters: { m_interval: { min: 0.5 } } } });
+    assert.deepEqual(lastReq().params.parameters, { m_interval: { min: 0.5 } });
+
+    // list tools: with and without address
+    await client.callTool({ name: "list_action_types", arguments: {} });
+    assert.deepEqual(lastReq(), { method: "list_action_types", params: {} });
+    await client.callTool({ name: "list_action_types", arguments: objAddr });
+    assert.deepEqual(lastReq().params, objAddr);
+    await client.callTool({ name: "list_action_types", arguments: psAddr });
+    assert.deepEqual(lastReq().params, psAddr);
+    await client.callTool({ name: "list_trigger_types", arguments: {} });
+    assert.deepEqual(lastReq(), { method: "list_trigger_types", params: {} });
+    await rejects("list_action_types", { guid: "g" }, "address key without trigger");
+    await rejects("list_action_types", { scope: "playerSettings" }, "scope without trigger");
+    await rejects("list_action_types", { trigger: "OnEnterActions" }, "trigger without guid or scope");
+
+    // get_action_graph: both forms
+    await client.callTool({ name: "get_action_graph", arguments: { guid: "g" } });
+    assert.deepEqual(lastReq(), { method: "get_action_graph", params: { guid: "g" } });
+    await client.callTool({ name: "get_action_graph", arguments: { guid: "g", component: "ModLogic" } });
+    assert.deepEqual(lastReq().params, { guid: "g", component: "ModLogic" });
+    await client.callTool({ name: "get_action_graph", arguments: { scope: "playerSettings" } });
+    assert.deepEqual(lastReq().params, { scope: "playerSettings" });
+    await rejects("get_action_graph", {}, "neither form");
+    await rejects("get_action_graph", { scope: "object" }, "object scope without guid");
+    await rejects("get_action_graph", { scope: "playerSettings", guid: "g" }, "playerSettings with guid");
+    await rejects("get_action_graph", { scope: "bogus" }, "bad scope");
+
+    // rejected before reaching the plugin
+    await rejects("add_action", { type: "Wait" }, "no address at all");
+    await rejects("add_action", { guid: "g", type: "Wait" }, "guid without trigger");
+    await rejects("add_action", { trigger: "OnEnterActions", type: "Wait" }, "trigger without guid or scope");
+    await rejects("add_action", { scope: "playerSettings", guid: "g", trigger: "tickTrigger", type: "Wait" }, "both address forms mixed");
+    await rejects("add_action", { ...objAddr }, "missing type");
+    await rejects("add_action", { ...objAddr, type: "" }, "empty type");
+    await rejects("add_action", { ...objAddr, type: "Wait", index: -1 }, "negative index");
+    await rejects("add_action", { ...objAddr, type: "Wait", index: 1.5 }, "fractional index");
+    await rejects("add_action", { ...objAddr, type: "Wait", path: [...steps8, { action: 0, choice: 0 }] }, "path of 9 steps");
+    await rejects("add_action", { ...objAddr, type: "Wait", path: [{ action: 0 }] }, "path step without choice");
+    await rejects("add_action", { ...objAddr, type: "Wait", path: [{ action: -1, choice: 0 }] }, "negative path action");
+    await client.callTool({ name: "add_action", arguments: { ...objAddr, type: "Wait", parameters: {} } });
+    assert.deepEqual(lastReq().params.parameters, {}, "empty parameters object is allowed");
+    await rejects("add_action", { ...objAddr, type: "Wait", targetFlags: 8 }, "targetFlags 8");
+    await rejects("remove_action", { ...objAddr }, "remove_action without index");
+    await rejects("remove_action", { ...objAddr, index: -1 }, "remove_action negative index");
+    await rejects("move_action", { ...objAddr, index: 0 }, "move_action without newIndex");
+    await rejects("move_action", { ...objAddr, index: 0, newIndex: -1 }, "move_action negative newIndex");
+    await rejects("set_action", { ...objAddr, index: 0 }, "set_action with nothing to set");
+    await rejects("set_action", { ...objAddr, parameters: { a: 1 } }, "set_action without index");
+    await rejects("add_trigger", {}, "add_trigger without guid");
+    await rejects("remove_trigger", { guid: "g" }, "remove_trigger without trigger");
+    await rejects("set_trigger", { guid: "g", trigger: "Triggers[0]" }, "set_trigger with nothing to set");
+
     // plugin error becomes isError result
     const bad = await client.callTool({ name: "get_status", arguments: {} });
     assert.equal(bad.isError, true);
@@ -217,6 +326,8 @@ test("end to end over stdio MCP", async () => {
     await fake.close();
     removeDir(dir);
   }
+  assert.ok(!stderrText.includes("e2etoken") && !stderrText.includes("rotated"), "token must not appear on stderr");
+  assert.match(stderrText, /ready/);
 });
 
 test("plugin down yields isError result, process survives", async () => {
