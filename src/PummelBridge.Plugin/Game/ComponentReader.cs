@@ -54,6 +54,12 @@ namespace PummelBridge.Game
 
         private static readonly ConcurrentDictionary<Type, bool> s_usesComponentWrapper = new ConcurrentDictionary<Type, bool>();
 
+        /// <summary>
+        /// ModParticleSystem properties whose setters dereference the renderer field without initialising it (the getters
+        /// initialise it; "Prop" has a plain getter but its setter dereferences the field too).
+        /// </summary>
+        internal static bool ParticleSetterNeedsRenderer(string property) => s_particleRendererProps.Contains(property) || property == "Prop";
+
         public static JObject Read(ModBehaviour component, ModReflectedType reflected, ValueConverter converter)
         {
             JObject entry = new JObject

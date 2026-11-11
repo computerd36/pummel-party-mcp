@@ -70,6 +70,21 @@ export function defaultHandler(method, params) {
       return { ok: true, result: { name: params.name } };
     case "save_mod":
       return { ok: true, result: { saved: true } };
+    case "list_component_types":
+      return { ok: true, result: [{ type: "ModTransform", uiName: "Transform", addable: false }] };
+    case "create_object":
+    case "duplicate_object":
+    case "delete_object":
+    case "reparent_object":
+    case "set_object":
+    case "set_transform":
+    case "add_component":
+    case "remove_component":
+    case "set_property":
+    case "set_properties":
+    case "undo":
+      // edit tools: echo the received params so tests can check pass-through
+      return { ok: true, result: { echoed: params, changed: true, undoable: true, undoStackLength: 1 } };
     default:
       return { ok: false, error: { code: "UNKNOWN_METHOD", message: method } };
   }

@@ -34,8 +34,11 @@ namespace PummelBridge.Tools
             public bool DiscardUnsaved;
         }
 
-        public static void Register(ToolRegistry registry, FramePoller poller, IBridgeLog log)
+        private static EditServices s_services;
+
+        public static void Register(ToolRegistry registry, FramePoller poller, IBridgeLog log, EditServices services)
         {
+            s_services = services;
             registry.Register(ToolDefinition.Read("list_mods", ctx => ctx.OnMainThread(ListMods)));
 
             registry.Register(ToolDefinition.Write("create_test_mod",
@@ -282,13 +285,16 @@ namespace PummelBridge.Tools
             // activeSelf, so the (deactivated) hierarchy root does not change the saved scene; the edited prefab is
             // saved with the other assets. Only the hierarchy's dirty flag stays set and Preview.jpg shows the prefab view.
             ed.SaveCurrentMod();
+            s_services?.OnSaved(); // also done by the SaveCurrentMod postfix; idempotent
             log.Info($"save_mod: saved '{EditorAccess.ModFolderName(mod)}'");
             bool? dirty = EditorAccess.IsDirty(ed);
+            bool? unsaved = s_services?.HasUnsavedEdits(ed);
             inv.Complete(new JObject
             {
                 ["saved"] = true,
                 ["name"] = EditorAccess.ModName(mod),
                 ["isDirty"] = dirty.HasValue ? new JValue(dirty.Value) : JValue.CreateNull(),
+                ["hasUnsavedEdits"] = unsaved.HasValue ? new JValue(unsaved.Value) : JValue.CreateNull(),
             });
         }
 
@@ -358,10 +364,13 @@ namespace PummelBridge.Tools
             }
         }
 
+        internal static void RefuseIfLifecyclePendingPublic() => RefuseIfLifecyclePending();
+
         /// <summary>
-        /// Rules for leaving the open mod (create/open). Mirrors the editor's unsaved-changes popup, which is driven by
-        /// EditorSystem.IsModDirty (undo manager of the current context; set by the first undo snapshot after any load,
-        /// so it is already true for an untouched, freshly opened mod).
+        /// Rules for leaving the open mod (create/open). Mirrors the editor's unsaved-changes popup, but uses the bridge's
+        /// own unsaved-edits tracking (EditServices.HasUnsavedEdits: undo-stack changes and bridge edits since load/save,
+        /// ignoring the editor's initial snapshot after a load) instead of EditorSystem.IsModDirty, which is already true
+        /// for an untouched, freshly opened mod. Falls back to the editor's flag when the tracker has no baseline.
         /// </summary>
         private static void CheckCanSwitchAway(EditorSystem ed, bool discardUnsaved)
         {
@@ -381,11 +390,13 @@ namespace PummelBridge.Tools
                 throw new RpcException(ErrorCodes.InvalidState,
                     $"a prefab ('{ed.CurrentPrefab.name}') is being edited in '{EditorAccess.ModFolderName(current)}'; return to the scene first");
             }
-            bool? dirty = EditorAccess.IsDirty(ed);
+            bool? dirty = s_services != null ? s_services.HasUnsavedEdits(ed) : EditorAccess.IsDirty(ed);
             if (dirty != false && !discardUnsaved)
             {
+                string source = s_services?.Source(ed) == "tracker" ? "edits since it was opened or saved" : "editor dirty flag";
+                string why = s_services?.Tracker.DirtyReason;
                 throw new RpcException(ErrorCodes.InvalidState,
-                    $"the open mod '{EditorAccess.ModFolderName(current)}' has unsaved changes (editor dirty flag{(dirty == null ? " unreadable" : "")}); " +
+                    $"the open mod '{EditorAccess.ModFolderName(current)}' has unsaved changes ({source}{(dirty == null ? " unreadable" : "")}{(why != null && source != "editor dirty flag" ? ": " + why : "")}); " +
                     "call save_mod first, or pass discardUnsaved: true to drop them");
             }
         }

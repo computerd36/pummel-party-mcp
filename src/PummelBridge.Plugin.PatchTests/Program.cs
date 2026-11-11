@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
 using PummelBridge.Core;
+using PummelBridge.Hooks;
 using PummelBridge.Safety;
 
 namespace PummelBridge.PatchTests
@@ -57,6 +58,25 @@ namespace PummelBridge.PatchTests
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         public static bool NotPatched() { OriginalRuns++; return true; }
+    }
+
+    /// <summary>Like EditorSystem.SaveCurrentMod(bool): instance method, records its own runs and arguments.</summary>
+    public sealed class FakeEditor
+    {
+        public int Saves;
+        public bool LastDelayed;
+        public bool Throw;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void SaveCurrentMod(bool delayed = false)
+        {
+            if (Throw)
+            {
+                throw new InvalidOperationException("save failed");
+            }
+            Saves++;
+            LastDelayed = delayed;
+        }
     }
 
     public sealed class FakePopup
@@ -160,6 +180,27 @@ namespace PummelBridge.PatchTests
             });
             Check("a patch that throws (even optional) -> incomplete, reported", !abstractFail.Complete && abstractFail.Missing.Count == 1 && abstractFail.Missing[0].Contains("patch failed"));
             Check("nothing patched -> not complete", !PublishBlocker.Apply(new Harmony("pummelbridge.patchtests.4"), new BlockTarget[0]).Complete);
+
+            // ---- SaveWatch (postfix on SaveCurrentMod that only records) ----
+            MethodInfo save = typeof(FakeEditor).GetMethod("SaveCurrentMod", new[] { typeof(bool) });
+            Check("SaveWatch.Install with null target reports an error", SaveWatch.Install(new Harmony("pummelbridge.patchtests.sw0"), null) != null && !SaveWatch.Installed);
+            Check("SaveWatch installs", SaveWatch.Install(new Harmony("pummelbridge.patchtests.sw"), save) == null && SaveWatch.Installed);
+            int observed = 0, savesSeenByCallback = -1;
+            FakeEditor editor = new FakeEditor();
+            SaveWatch.OnSaved = () => { observed++; savesSeenByCallback = editor.Saves; };
+            int before = SaveWatch.SaveCount;
+            editor.SaveCurrentMod(true);
+            Check("original runs unchanged (argument passed through)", editor.Saves == 1 && editor.LastDelayed);
+            Check("postfix runs after the original and records the save", observed == 1 && savesSeenByCallback == 1 && SaveWatch.SaveCount == before + 1);
+            SaveWatch.OnSaved = () => throw new Exception("callback bug");
+            editor.SaveCurrentMod();
+            Check("a throwing callback never propagates into the save", editor.Saves == 2 && SaveWatch.SaveCount == before + 2);
+            SaveWatch.OnSaved = () => observed++;
+            editor.Throw = true;
+            bool threw = false;
+            try { editor.SaveCurrentMod(); } catch (InvalidOperationException) { threw = true; }
+            Check("failed save: exception propagates unchanged, postfix not run", threw && observed == 1 && SaveWatch.SaveCount == before + 2);
+            SaveWatch.OnSaved = null;
 
             Console.WriteLine();
             Console.WriteLine($"RESULT: {s_passed} passed, {s_failed} failed");

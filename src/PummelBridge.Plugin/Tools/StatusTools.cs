@@ -10,8 +10,13 @@ namespace PummelBridge.Tools
     /// <summary>ping, get_status, get_open_mod.</summary>
     internal static class StatusTools
     {
-        public static void Register(ToolRegistry registry, BridgeRuntimeInfo info, Func<bool> writesEnabled, PublishBlockStatus publishBlock)
+        private static EditServices s_services;
+
+        public static readonly string[] Capabilities = { "read", "write", "edit" };
+
+        public static void Register(ToolRegistry registry, BridgeRuntimeInfo info, Func<bool> writesEnabled, PublishBlockStatus publishBlock, EditServices services)
         {
+            s_services = services;
             // Answered on the HTTP thread from values cached at startup: works with the editor closed and even
             // while the main thread is busy (e.g. during a scene load).
             registry.Register(ToolDefinition.Read("ping", ctx => new JObject
@@ -22,13 +27,13 @@ namespace PummelBridge.Tools
                 ["unityVersion"] = info.UnityVersion,
                 ["apiVersion"] = PluginInfo.ApiVersion,
                 ["sessionId"] = info.SessionId,
-                ["capabilities"] = new JArray("read", "write"),
+                ["capabilities"] = new JArray(Capabilities),
             }));
 
             registry.Register(ToolDefinition.Read("get_status", ctx => ctx.OnMainThread(() =>
             {
                 JObject status = GetStatus();
-                status["capabilities"] = new JArray("read", "write");
+                status["capabilities"] = new JArray(Capabilities);
                 status["writesEnabled"] = writesEnabled();
                 status["publishBlock"] = new JObject
                 {
@@ -54,6 +59,8 @@ namespace PummelBridge.Tools
                 ["modType"] = null,
                 ["modLoaded"] = false,
                 ["isDirty"] = null,
+                ["hasUnsavedEdits"] = null,
+                ["unsavedEditsSource"] = null,
                 ["undoStackLength"] = null,
                 ["prefabContext"] = null,
                 ["playMode"] = false,
@@ -80,6 +87,12 @@ namespace PummelBridge.Tools
                 result["modLoaded"] = mod.IsLoaded;
                 bool? dirty = EditorAccess.IsDirty(ed);
                 result["isDirty"] = dirty.HasValue ? new JValue(dirty.Value) : JValue.CreateNull();
+                if (s_services != null)
+                {
+                    bool? unsaved = s_services.HasUnsavedEdits(ed);
+                    result["hasUnsavedEdits"] = unsaved.HasValue ? new JValue(unsaved.Value) : JValue.CreateNull();
+                    result["unsavedEditsSource"] = s_services.Source(ed);
+                }
                 int? undo = EditorAccess.UndoStackLength(ed);
                 result["undoStackLength"] = undo.HasValue ? new JValue(undo.Value) : JValue.CreateNull();
             }

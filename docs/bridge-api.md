@@ -1,9 +1,11 @@
-# PummelBridge HTTP API (api v2, Phase 2 increment 1)
+# PummelBridge HTTP API (api v2, Phase 2 increment 2, plugin 0.3.0)
 
 The BepInEx plugin `PummelBridge.Plugin` runs inside Pummel Party and exposes the mod editor's state on a
 local HTTP endpoint. api v2 adds the guard layer, the always-on Workshop publish block and four mod lifecycle
-tools (`list_mods`, `create_test_mod`, `open_test_mod`, `save_mod`). Write tools only ever act on `PB_TEST_`
-mods; see [Safety](#safety). Object/component/action editing comes in later increments.
+tools (`list_mods`, `create_test_mod`, `open_test_mod`, `save_mod`). Increment 2 (still api v2, all changes are
+additive) adds object, transform, component and property editing plus `undo`; see [Editing](#editing). Write
+tools only ever act on `PB_TEST_` mods; see [Safety](#safety). Action editing, playtest and batch tools come in
+later increments.
 
 ## Transport
 
@@ -80,8 +82,12 @@ Response (HTTP 200 for every well-formed, authenticated call):
 | `WRITES_DISABLED` | write tool called while `[Safety] EnableWrites = false` |
 | `PUBLISH_BLOCK_INCOMPLETE` | write tool called while the Workshop publish block is not complete (`get_status.publishBlock`) |
 | `GUARD_NOT_TEST_MOD` | the open mod (open-mod tools) or the target / open mod (lifecycle tools) is not a `PB_TEST_` mod; the message names it |
-| `INVALID_STATE` | editor state forbids the call: play mode, unsaved changes, a prefab being edited, an open editor dialog, a broken editor mod list (the message says what to do) |
+| `INVALID_STATE` | editor state forbids the call: play mode, unsaved changes, a prefab being edited, an open editor dialog, a broken editor mod list, an object outside the current editing context, the left mouse button held in the game window, the open mod changed while an edit was pending (the message says what to do) |
 | `ALREADY_EXISTS` | `create_test_mod`: a folder or a mod (Meta name) with that name exists, case-insensitive |
+
+Edit tools additionally use `NOT_FOUND` (object / component / the edited object was deleted meanwhile),
+`INVALID_PARAMS` (bad value, refused property, a rule the editor's UI enforces) and `TIMEOUT` (the editor did not
+take its undo snapshot in time, or the call waited too long in the write queue).
 
 Values in results: enums as their names (flags as `"A, B"`), `Vector2/3/4` and `Quaternion` as `{x,y,z[,w]}`,
 `Color` as `{r,g,b,a}` (0-1 floats), `Color32` as 0-255 ints, GUIDs as lowercase `8-4-4-4-12` strings, NaN/Infinity
@@ -91,10 +97,19 @@ as strings. Asset or object references are objects (see "References").
 
 `ping` and `get_log` (without `includeEditor`) are answered on the HTTP thread and work even while the game's
 main thread is busy. Everything else is queued to the plugin's `Update()` (max 16 items / 8 ms per frame) and
-waits up to 10 s (`create_test_mod` / `open_test_mod`: 35 s, with their own 30 s load limit inside).
+waits up to 10 s (`create_test_mod` / `open_test_mod`: 35 s, with their own 30 s load limit inside; edit tools
+of increment 2: 15 s).
 
-Write tools: params are type-checked on the HTTP thread (`INVALID_PARAMS`), then the guard checks and the tool
-body run on the main thread in **one** dispatched unit of work, so the editor state cannot change in between.
+Write tools: params are type-checked on the HTTP thread (`INVALID_PARAMS`). On the main thread every write tool
+joins one **write queue**: only one write tool body runs at a time, later calls wait in arrival order. When a
+call's turn comes, the guard checks and the start of the body run in **one** unit of work, so the editor state
+cannot change in between; the guard is evaluated at that moment, not when the call arrived. A write body may span
+several frames (mod loads, the editor's undo snapshots); it re-validates the editor state every frame and fails
+with an error instead of touching a stale object if the mod is switched, unloaded or reloaded, a prefab is opened
+or closed, a playtest starts or the edited object disappears. The timeout covers the time spent waiting in the
+queue; a call that times out while still queued never runs. A `create_test_mod`/`open_test_mod` holds the queue
+until its load finishes, so other write calls wait (and may time out) meanwhile. Read tools are not queued and run
+between frames as before.
 
 ---
 
@@ -105,12 +120,13 @@ body run on the main thread in **one** dispatched unit of work, so the editor st
 Works with the editor closed. No params.
 
 ```json
-{"pong": true, "pluginVersion": "0.2.0", "gameVersion": "1.15.2", "unityVersion": "2021.3.45f2",
- "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write"]}
+{"pong": true, "pluginVersion": "0.3.0", "gameVersion": "1.15.2", "unityVersion": "2021.3.45f2",
+ "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit"]}
 ```
 
-`readOnlyBuild` was removed in api v2. `capabilities` lists what this build implements; whether writes are
-currently allowed is in `get_status` (`writesEnabled`, `publishBlock.complete`).
+`readOnlyBuild` was removed in api v2. `capabilities` lists what this build implements (`edit` = the object,
+component, property and undo tools of increment 2); whether writes are currently allowed is in `get_status`
+(`writesEnabled`, `publishBlock.complete`).
 
 `sessionId` is random per game start; a change means the game restarted (log ids restart at 1).
 
@@ -121,8 +137,9 @@ No params. Never fails because of editor state.
 ```json
 {"editorOpen": true, "editorState": "Editing", "isLoading": false, "modOpen": true,
  "modName": "PB_TEST_Arena", "modType": "Minigame", "modLoaded": true, "isDirty": true,
+ "hasUnsavedEdits": false, "unsavedEditsSource": "tracker",
  "undoStackLength": 1, "prefabContext": null, "playMode": false,
- "activeScene": "ModEditorScene", "capabilities": ["read", "write"], "writesEnabled": true,
+ "activeScene": "ModEditorScene", "capabilities": ["read", "write", "edit"], "writesEnabled": true,
  "publishBlock": {"active": true, "complete": true, "patchedCount": 59, "missing": []}}
 ```
 
@@ -134,9 +151,14 @@ No params. Never fails because of editor state.
 
 - `editorState`: `Editing | EnteringPlayMode | PlayMode | ExitingPlayMode` (null when the editor is closed).
 - `playMode`: `editorState != "Editing"` (a playtest is starting, running or ending).
-- `isDirty`: dirty flag of the current undo context (scene, or the open prefab), read from fields. It is set only by
-  undo-snapshot pushes; the editor probably pushes an initial snapshot right after a load, so `true` does not prove
-  the user edited anything. `null` if the field layout changed or no mod is open.
+- `isDirty`: the editor's own dirty flag of the current undo context (scene, or the open prefab), read from fields.
+  It is set by every undo push, including the initial snapshot the editor pushes on the first frame after any load,
+  so it is `true` for an untouched mod (confirmed in-game). `null` if the field layout changed or no mod is open.
+- `hasUnsavedEdits`: the bridge's view, used by `create_test_mod`/`open_test_mod` (see [Unsaved edits](#unsaved-edits)).
+  `null` when no mod is open.
+- `unsavedEditsSource`: `"tracker"` (the bridge's own tracking) or `"editorFlag"` (fallback to `isDirty`: the mod was
+  already open with a long undo history when the plugin first saw it, or the save watch could not be installed);
+  `null` when no mod is open.
 - `prefabContext`: `{"name": "Coin", "guid": "..."}` while a prefab asset is being edited, else null.
 
 ### `get_open_mod`
@@ -416,11 +438,11 @@ after 30 s.
 Leaving the open mod (create and open) gives `INVALID_STATE` unless:
 - no editor dialog is open (`EditorPopupManager.CurrentPopup == null`);
 - no prefab is being edited (leaving the prefab context would save that prefab);
-- the editor's dirty flag is false, or `discardUnsaved: true`. This mirrors the editor's own "unsaved changes"
-  popup, which uses `EditorSystem.IsModDirty` (current undo context). That flag is set by the first undo snapshot
-  after any load, so it is **already true for an untouched, freshly opened or created mod** (confirmed in-game):
-  expect to call `save_mod` first (harmless on a test mod) or pass `discardUnsaved: true`. The bridge never
-  auto-saves.
+- the open mod has no unsaved edits (`get_status.hasUnsavedEdits` is false), or `discardUnsaved: true`. This mirrors
+  the editor's own "unsaved changes" popup, but with the bridge's tracking (see [Unsaved edits](#unsaved-edits))
+  instead of the editor's flag, which is already true for an untouched, freshly opened mod. An untouched mod can now
+  be left without `save_mod`/`discardUnsaved`. The bridge never auto-saves. The error message names the first
+  reason (e.g. `scene undo stack changed`, `bridge: set_property`).
 
 ### `save_mod` (write, open mod)
 
@@ -433,10 +455,455 @@ flag, so the deactivated scene root does not change it, and the prefab is saved 
 case the scene's dirty flag stays set and `Preview.jpg` shows the prefab view.
 
 ```json
-{"saved": true, "name": "PB_TEST_Arena", "isDirty": false}
+{"saved": true, "name": "PB_TEST_Arena", "isDirty": false, "hasUnsavedEdits": false}
 ```
 
 `isDirty`: dirty flag of the current undo context right after the save (same source as `get_status.isDirty`).
+`hasUnsavedEdits`: the bridge's view right after the save (false; a save is a clean point for the whole mod).
+
+The scene file is written from the live hierarchy (`ModDataReaderWriter.SaveScene(m_hierarchyRoot)`), so every
+change is saved, also changes that are not on the undo stack (e.g. on objects that were never selected).
+
+### `list_component_types` (read)
+
+| Param | Type | Default | |
+|---|---|---|---|
+| `guid` | string (GUID) | - | optional object: also apply the per-object rules of `add_component` |
+
+Errors: `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`, `NOT_FOUND` (guid), `INVALID_PARAMS`. Works on any open
+mod (read-only; it evaluates the rules without touching the editor's state).
+
+Result: an **array** with one entry per registered mod component type, in registry order (Transform first):
+
+```json
+[{"type": "ModTransform", "uiName": "Transform", "category": "Default", "addable": false,
+  "reason": "Transform is not offered by the editor's Add Component picker",
+  "allowsMultiple": false, "supportsChildren": true, "modTypes": ["Minigame", "Board", "Item", "BoardSpace"]},
+ {"type": "ModLight", "uiName": "Light", "category": "Rendering", "addable": true,
+  "allowsMultiple": false, "supportsChildren": true, "modTypes": ["Minigame", "Board", "Item", "BoardSpace"]},
+ {"type": "ModTrigger", "uiName": "Trigger", "category": "Gameplay", "addable": false,
+  "reason": "Trigger is only available in Minigame mods (this is a Board mod)",
+  "allowsMultiple": false, "supportsChildren": true, "modTypes": ["Minigame"]}]
+```
+
+- `type`: class name (use it, or `uiName`, with `add_component`). `category`: the picker folder (`Default` = top level).
+- `addable`: the editor's Add Component picker would offer **and enable** it: the type is addable, allowed for this
+  mod type, allowed in the current context (prefab edit or scene) and, with `guid`, allowed on that object (see
+  `add_component`; an object outside the current editing context is never addable). `reason` (only when not
+  addable): the editor's own tooltip text where the editor has one, else the bridge's.
+- `allowsMultiple`: no `[DisallowMultipleComponent]` (more than one per object possible). `supportsChildren`:
+  false for types whose object cannot have children (Prefab Instance, Board Space, Item, Text). `modTypes`: the
+  type's mod-type flags (empty for RigidBody and Hittable: never offered).
+
+---
+
+## Editing
+
+Object, transform, component, property and undo tools (all write tools with guard kind **OpenMod**, except the read
+tool `list_component_types` above). They drive the editor through its own methods and its own undo system.
+
+### Common rules
+
+- **Guard** (see [Safety](#safety)): a loaded test mod is open (Meta and folder name pass the rule), not loading,
+  state `Editing`. Every edit tool also refuses with `INVALID_STATE` while an editor dialog is open and while a
+  selected asset has unapplied import settings (selecting an object would pop up the editor's "Unapplied Import
+  Settings" dialog), and with `BUSY_LOADING` while a `create_test_mod`/`open_test_mod` load is pending.
+- **Addressing**: objects by their `ModTransform` guid (`guid` in `get_hierarchy` / `get_object`); components by
+  component guid, class name (`ModLight`) or UI name (`Light`), case-insensitive. A name that matches several
+  components of the object is refused (`INVALID_PARAMS`; the message lists their guids).
+- **Editing context**: the scene (objects below the scene root) or, while a prefab is open in the editor, that
+  prefab's root object and its children. Objects of the other context give `INVALID_STATE` ("return to the scene
+  hierarchy first" / "open that prefab in the editor"); the bridge never opens or closes prefabs. Children of
+  objects that hide their children (prefab instances, board spaces, items, texts) are not addressable (`NOT_FOUND`).
+- **Undoable like a user's edit.** The editor's undo is a snapshot of the selected objects, taken every frame by
+  `EditorSystem.Update` while the left mouse button is up; an edit is undoable only if a snapshot of the object was
+  taken before the edit. An edit of an existing object therefore runs: (1) select the object if it is not already the
+  only selected object; (2) wait until the editor's undo baseline is a snapshot of exactly that object (checked every
+  frame, at most 5 s; normally the same or the next frame, depending on Unity's script order, provided the left mouse
+  button is up and has been up for 0.1 s); (3) apply the whole edit in one frame (all properties of one call = **one**
+  undo step); (4) wait until the editor has pushed the pre-edit snapshot as an undo step (at most 3 s, normally the
+  next frame); (5) reply. Structural edits (`duplicate_object`, `delete_object`, `reparent_object`) push their own
+  undo event exactly like the editor's Duplicate / Delete / hierarchy drag and drop.
+- **Mouse button held**: if the left mouse button is held in the game window during step 2, the call fails with
+  `INVALID_STATE` after 5 s and only the selection changed (never a silent non-undoable edit). If it is held during
+  step 4, the edit is done and undoable, but the editor records the step only when the button is released or the
+  selection changes: the reply then has `undoPending: true`.
+- **Selection side effect**: the edited object stays selected, as after editing it by hand (the previous selection
+  is replaced). `create_object` and `duplicate_object` select the new object(s); `delete_object` leaves nothing
+  selected (the editor's Delete deselects); `undo` restores the selection recorded with the undone step. A selection
+  change itself makes the editor push an undo step that only restores the previous selection, so one edit may add
+  two entries to `undoStackLength`; `undo` with `steps: 1` still reverts the edit itself.
+- **Common reply fields** of the editing write tools (except `undo`):
+
+  | Field | |
+  |---|---|
+  | `changed` | the call changed the object (false: e.g. the same value set again; then nothing is recorded) |
+  | `undoable` | the pre-edit state is (or, with `undoPending`, will be) on the editor's undo stack; always false for `create_object` |
+  | `undoPending` | only present when true, see above |
+  | `note` | only present when there is something to explain |
+  | `undoStackLength` | entries on the current context's undo stack after the call (scene, or the open prefab) |
+
+- Every successful edit marks the mod as having unsaved edits (see [Unsaved edits](#unsaved-edits)). Nothing is
+  saved automatically; call `save_mod`.
+- **No redo**: the editor has no redo stack or API (only Ctrl+Z and the Edit menu call `EditorUndo.Undo`), so the
+  bridge has no redo either.
+- Not undoable in the editor itself (so not via the bridge): object creation (Ctrl+Z after creating only re-selects
+  the previously selected object), and the destruction of generated children when a Prefab Instance / Board Space /
+  Item / Text component is removed.
+
+### Unsaved edits
+
+`get_status.hasUnsavedEdits` (and the create/open rule) reports whether the open mod changed since it was loaded or
+last saved. The bridge reads every undo stack of the open mod (the scene's and each prefab's) once per frame and
+latches "unsaved" when a stack changes, **except** for the editor's initial snapshot after a load (an empty stack
+getting its first entry) and an undo that pops that single entry again; every bridge edit latches it as well. The
+clean point moves at load completion and on every completed `EditorSystem.SaveCurrentMod` (Ctrl+S, File > Save, the
+unsaved-changes popup's Save button, `save_mod`), which a Harmony **postfix** observes; the postfix only records that
+a save happened. Consequences:
+
+- An untouched, freshly opened or created mod reports `false`.
+- Selecting objects in the editor counts as a change, because the editor records selection changes as undo steps.
+- Undoing everything does not make the mod clean again (latched until the next save).
+- Entering a playtest writes the mod files but does not count as a save (the editor does not clear its flag either).
+- Fallback to the editor's flag (`unsavedEditsSource: "editorFlag"`) when the plugin first saw the mod with more
+  than one undo entry on a stack (it was open before the plugin could watch it) until the next save, or when the save
+  postfix could not be installed (a warning is logged at startup).
+- An edit followed by an undo within the same frame is not seen (practically impossible by hand).
+
+### `create_object` (write)
+
+| Param | Type | Default | |
+|---|---|---|---|
+| `kind` | string | `"empty"`; `"prop"` if `prop` is given; `"prefabInstance"` if `prefab` is given | creation entry, see the table (case-insensitive) |
+| `name` | string, 1-256 chars, no control characters | the editor's default name | |
+| `parentGuid` | string (GUID) or null | null | parent object; null/omitted = top level of the scene, or the open prefab's root object |
+| `position` | Vector3 | (0,0,0) local | local position via `ModTransform.position` (clamped, see `set_transform`) |
+| `rotation` | Vector3 | (0,0,0) | local Euler angles via `ModTransform.rotation` |
+| `scale` | Vector3 | (1,1,1) | local scale via `ModTransform.scale` |
+| `prop` | string (GUID) | - | only with kind `prop`: a Prop asset (`list_assets` type `Prop`, built-in or mod) |
+| `prefab` | string (GUID) | - | only with kind `prefabInstance`: a Prefab asset of the mod (`list_assets` type `Prefab`) |
+
+Vector3 values are `{x, y, z}` (or `[x, y, z]`), finite numbers.
+
+Creates the object exactly like the editor's GameObject menu / hierarchy context menu
+(`EditorSystem.AddGameObject(type, parent)`, which names it, adds the components and selects it). With `prop` or
+`prefab` it does what dropping that asset onto a hierarchy item does (`ModAsset.OnSceneDragDropStart(parent)` and
+the drop end: a Prop object named after the asset with the prop assigned, or a Prefab Instance referencing the
+prefab). `name`, `position`, `rotation`, `scale` are applied in the same frame. Guids are assigned by the editor
+(each new component gets a fresh guid in its constructor).
+
+| `kind` | Editor menu entry | Components (besides Transform) | Offered |
+|---|---|---|---|
+| `empty` | Create Empty | - (named `GameObject`, `GameObject (n)`) | always |
+| `prefabInstance` | Prefab Instance | Prefab Instance | not while a prefab is edited |
+| `cube`, `sphere`, `plane` | 3D Object > Cube / Sphere / Plane | Prop (built-in cube/sphere/plane) | always |
+| `prop` | 3D Object > Prop | Prop (empty, or the `prop` asset) | always |
+| `particleSystem` | 3D Object > Particle System | Particle System | always |
+| `text` | 3D Object > Text | Text | always |
+| `lineRenderer` | 3D Object > Line Renderer | Line Renderer | always |
+| `playerSpawn` | Minigame Object > Player Spawn | Player Spawn | Minigame mods |
+| `item` | Minigame Object > Item | Item | Minigame mods |
+| `trigger` | Minigame Object > Trigger | Trigger | Minigame mods |
+| `logic` | Minigame Object > Logic | Logic | Minigame mods |
+| `weaponSource` | Minigame Object > Weapon Source | Weapon | Minigame mods |
+| `boardSpace` | Board Object > Board space | Board Space | Board mods, not while a prefab is edited |
+| `directionalLight`, `pointLight`, `spotLight` | Light > Directional / Point / Spot Light | Light (type set) | always |
+| `audioSource` | Audio > Audio Source | Audio Source | always |
+
+Also refused with `INVALID_PARAMS`, as the editor's menus are disabled there: a parent that does not support children
+(prefab instance, board space, item, text), and Item/BoardSpace mods without an open prefab (they have no scene
+hierarchy). The `ObjectType` members `NewPrefab`, `NewPlayer`, `Camera` have no menu entry and no implementation in
+`AddGameObject`; they are not exposed.
+
+Errors: guard codes, `INVALID_PARAMS`, `NOT_FOUND` (parent), `INVALID_STATE`, `BUSY_LOADING`, `TIMEOUT`, `INTERNAL`.
+
+Result: the new object as a `get_hierarchy` node plus `parentGuid` (null at top level), `siblingIndex`, `transform`
+(as in `get_object`), `kind`, `selected`, `undoable` (always **false**: creation is not undoable in the editor; remove
+the object with `delete_object`, which is undoable), `undoStackLength`, and a `note` if the editor had not yet taken
+a snapshot of the new object when the call returned (3 s bound).
+
+```json
+{"guid": "9b1e...", "name": "Crate", "active": true, "components": ["ModProp"], "childCount": 0, "children": [],
+ "parentGuid": null, "siblingIndex": 3,
+ "transform": {"localPosition": {"x": 0, "y": 1, "z": 0}, "localEulerAngles": {"x": 0, "y": 0, "z": 0},
+               "localScale": {"x": 1, "y": 1, "z": 1}},
+ "kind": "prop", "selected": true, "undoable": false, "undoStackLength": 4}
+```
+
+### `duplicate_object` (write)
+
+Params: `guid` (string GUID, required). The editor's Duplicate (Ctrl+D) = `Copy()` + `Paste()` on the selection, so
+the bridge selects the object first; the editor's copy clipboard (Ctrl+C/Ctrl+V) is replaced, as with Ctrl+D. The
+clone (with all its children) is placed next to the original (same parent; for the open prefab's root object: below
+it), keeps the name, is selected, and one `DuplicateGameObject` undo event is pushed (undo destroys the clone).
+Every component of the clone and of its children gets a fresh guid (the `ModBehaviour` constructor assigns one and
+the field is not serialized, so `Instantiate` does not copy it). The bridge checks this after every duplicate and,
+should a guid ever collide, undoes the duplicate and returns `INTERNAL`.
+
+```json
+{"sourceGuid": "0b6d...", "objects": [{"guid": "77aa...", "name": "Floor", "active": true, "components": ["ModProp"],
+  "childCount": 0, "children": [], "parentGuid": null, "siblingIndex": 5, "transform": {"...": "..."}}],
+ "changed": true, "undoable": true, "undoStackLength": 6}
+```
+
+`objects`: the clone(s) in the `create_object` result shape (node with subtree, `parentGuid`, `siblingIndex`,
+`transform`). Errors: guard codes, `NOT_FOUND`, `INVALID_STATE`, `TIMEOUT`, `INTERNAL`.
+
+### `delete_object` (write)
+
+Params: `guid` (string GUID, required). The editor's Delete on the selected object: a soft delete (the object and its
+children move under the editor's hidden, inactive `UndoDeletedObjects` root and their asset entries are disabled;
+nothing is destroyed) with one `DeleteGameObject` undo event (undo puts the object back at the same parent and
+index). The open prefab's root object cannot be deleted (`INVALID_PARAMS`). Afterwards nothing is selected.
+
+```json
+{"guid": "0b6d...", "name": "Arena", "deleted": 4, "changed": true, "undoable": true, "undoStackLength": 7}
+```
+
+`deleted`: the object plus its editor-visible descendants. Errors: guard codes, `NOT_FOUND`, `INVALID_PARAMS`,
+`INVALID_STATE`, `TIMEOUT`, `INTERNAL`.
+
+### `reparent_object` (write)
+
+| Param | Type | Default | |
+|---|---|---|---|
+| `guid` | string (GUID), required | | object to move |
+| `newParentGuid` | string (GUID) or null; the key is **required** | | new parent; null = top level of the scene, or directly below the open prefab's root object |
+| `siblingIndex` | int >= 0 | - | final index among the new parent's children; omitted = append as last child (like dropping onto the parent) |
+
+Replicates the hierarchy widget's drag and drop: push a `MoveGameObject` undo event, `ModTransform.SetParent` (world
+position, rotation and scale are kept and the local values recomputed, as in the editor), for `siblingIndex` then
+`SetAsLastSibling` + `SetSiblingIndex`, then re-baseline the undo snapshot. Refused with `INVALID_PARAMS`: moving an
+object into itself or its own descendant (cycle); a parent that does not support children (prefab instance, board
+space, item, text: the same rule `get_hierarchy` uses); a parent in another context (scene vs prefab, or another
+prefab); moving the open prefab's root object; a `siblingIndex` beyond the last index after the move (the message
+gives the range). Same parent and same or omitted index: `changed: false`, nothing is pushed.
+
+```json
+{"guid": "9c02...", "parentGuid": "77e1...", "siblingIndex": 0,
+ "transform": {"localPosition": {"x": -2, "y": 0, "z": 0}, "...": "..."},
+ "changed": true, "undoable": true, "undoStackLength": 8}
+```
+
+Errors: guard codes, `INVALID_PARAMS`, `NOT_FOUND`, `INVALID_STATE`, `TIMEOUT`.
+
+### `set_object` (write)
+
+| Param | Type | |
+|---|---|---|
+| `guid` | string (GUID), required | |
+| `name` | string, 1-256 chars, no control characters | the inspector's name field (`GameObject.name`) |
+| `active` | bool | the inspector's active checkbox (`GameObject.SetActive`) |
+
+At least one of `name`/`active`; both in one call = one undo step. Names need not be unique (address objects by guid).
+
+```json
+{"guid": "0b6d...", "name": "Floor", "active": false, "activeInHierarchy": false,
+ "changed": true, "undoable": true, "undoStackLength": 9}
+```
+
+Errors: guard codes, `INVALID_PARAMS`, `NOT_FOUND`, `INVALID_STATE`, `TIMEOUT`.
+
+### `set_transform` (write)
+
+| Param | Type | |
+|---|---|---|
+| `guid` | string (GUID), required | |
+| `position` | Vector3 | local position (`ModTransform.position`) |
+| `rotation` | Vector3 | local Euler angles in degrees (`ModTransform.rotation`) |
+| `scale` | Vector3 | local scale (`ModTransform.scale`) |
+
+At least one of them; one undo step. The values go through `ModTransform`'s own property setters (the inspector's
+path), which clamp:
+
+| Property | Limit (constants in `ModTransform`) |
+|---|---|
+| `position` | the resulting **world** position is clamped to -1000..1000 per axis (`maxPosition`); the local value follows |
+| `rotation` | each axis clamped to -3600..3600 (`maxRotation`); stored as the editor's rotation hint and written to `localEulerAngles` |
+| `scale` | each axis clamped to 0.001..1000 (`minScale`, `maxScale`) |
+
+```json
+{"guid": "0b6d...", "applied": {"position": {"x": 0, "y": 1000, "z": 0}, "rotation": {"x": 0, "y": 45, "z": 0},
+                                "scale": {"x": 2, "y": 2, "z": 2}},
+ "clamped": ["position"],
+ "transform": {"localPosition": {"x": 0, "y": 1000, "z": 0}, "localEulerAngles": {"x": 0, "y": 45, "z": 0},
+               "localScale": {"x": 2, "y": 2, "z": 2}},
+ "changed": true, "undoable": true, "undoStackLength": 10}
+```
+
+`applied`: the three `ModTransform` property values after the call (as `get_object` shows them on the `ModTransform`
+component); `clamped`: given properties whose applied value differs from the request (by more than 1e-4, relative);
+`transform`: Unity's local values (Euler angles may be normalised differently from `rotation`).
+Errors: guard codes, `INVALID_PARAMS`, `NOT_FOUND`, `INVALID_STATE`, `TIMEOUT`, `INTERNAL`.
+
+### `add_component` (write)
+
+| Param | Type | |
+|---|---|---|
+| `guid` | string (GUID), required | object |
+| `type` | string, required | class name (`ModLight`) or UI name (`Light`), case-insensitive |
+
+Calls `ModEditorComponentAdderRemover.AddComponentToGameObject(object, type)`, which is what the Add Component popup
+calls (the component's `Awake` creates its Unity components). Before that, every rule the editor's UI applies is
+checked; violations give `INVALID_PARAMS` with the editor's message:
+
+- the type is addable and allowed for the mod type (`EditorSystem.CanUseItem`); types the picker never offers
+  (Transform, Camera, Audio Listener, Mesh Filter, Script, Animator, ..., and RigidBody / Hittable, which have no mod
+  type) are refused;
+- not on a prefab instance (the inspector has no Add Component button there);
+- the editor's `PerformChecksForComponentAddability` rules: one per object for `[DisallowMultipleComponent]` types;
+  Prefab Instance, Board Space, Item and Text need an object without children and exclude each other; Prefab Instance
+  needs an otherwise bare object; renderer types that share a single-instance base class exclude each other (Prop,
+  Mesh Renderer, Particle System, Text, Water); Mover and Simple Animator exclude each other; Board Space Event only
+  inside a prefab; Prefab Instance and Board Space never inside a prefab. The editor's registry has no "required
+  component" relations.
+
+Both the bridge's replica of these rules and the editor's own check code are evaluated; either one blocking refuses.
+
+```json
+{"guid": "0b6d...", "component": {"type": "ModLight", "uiName": "Light", "guid": "c41f...", "enabled": true,
+  "properties": {"type": {"type": "InternalLight", "value": "Point"}, "...": "..."}},
+ "changed": true, "undoable": true, "undoStackLength": 11}
+```
+
+`component`: the new component as `get_object` shows it. Errors: guard codes, `INVALID_PARAMS`, `NOT_FOUND`,
+`INVALID_STATE`, `TIMEOUT`, `INTERNAL`.
+
+### `remove_component` (write)
+
+| Param | Type | |
+|---|---|---|
+| `guid` | string (GUID), required | object |
+| `component` | string, required | component guid, class name or UI name |
+
+The inspector's remove (X) button: `ModEditorComponentAdderRemover.RemoveComponentFromGameObject`. Refused
+(`INVALID_PARAMS`) where the inspector has no remove button: non-addable types (Transform and the other types the
+picker never offers), and on a prefab instance everything except the Prefab Instance component (the inspector shows
+only Transform and Prefab Instance there). For types that do not support children (Prefab Instance, Board Space,
+Item, Text) the editor first destroys the object's (generated) children; undo restores the component but not those
+children, except where the component regenerates them itself (a Prefab Instance re-instantiates its prefab).
+
+```json
+{"guid": "0b6d...", "removed": {"type": "ModLight", "uiName": "Light", "guid": "c41f..."}, "childrenDestroyed": 0,
+ "changed": true, "undoable": true, "undoStackLength": 12}
+```
+
+`childrenNote` is added when `childrenDestroyed > 0`. Errors: guard codes, `INVALID_PARAMS`, `NOT_FOUND`,
+`INVALID_STATE`, `TIMEOUT`.
+
+### `set_property` and `set_properties` (write)
+
+| Tool | Params |
+|---|---|
+| `set_property` | `guid` (string GUID, required), `component` (string, required: guid, class or UI name), `property` (string, required), `value` (required key; JSON as below; `null` clears a reference) |
+| `set_properties` | `guid`, `component` as above, `values` (object `{propertyName: value, ...}`, 1-64 entries) |
+
+All properties of one call are set in the same frame = **one** undo step. Property names are the component's
+reflected properties as `get_object` lists them (exact name; a unique case-insensitive match is accepted). Every value
+is validated and converted **before** anything is selected or changed; if one fails, nothing changes. Each value is
+written through the property's public setter, the same setter the inspector's `ReflectedProperty.SetValue` reaches,
+so the setter's side effects run (a light type updates the Unity light, a prop rebuilds its mesh, a prefab instance
+re-instantiates its prefab, ...). If a setter throws, the call returns `INTERNAL` with the exception message; the
+message names the properties already set by this call (one `undo` reverts them).
+
+Refused with `INVALID_PARAMS`:
+- `guid` (assigned by the editor) and every `SerializableGuid` property (set the matching reference property, e.g.
+  `ItemPrefab` instead of `ItemPrefabGUID`);
+- properties marked `hiddenInInspector`;
+- triggers and action lists (`ModLogicTrigger`, `ModLogicTrigger[]`, `ModAction`): use the action tools of the next
+  increment;
+- types the bridge cannot write yet: `ModComplexFloat`, `ModWeaponInfo`, `SimpleModHitAction`, `ModSimpleAnimation[]`,
+  `BoardNodeConnection[]`, `ParticleSystem.Burst[]`, `byte[]` (e.g. `ModScriptReference.scriptValues`), and any type
+  not in the table below;
+- on a prefab instance: components other than Transform and Prefab Instance (edit the prefab instead).
+
+Value JSON (the shapes `get_object` returns, so values round-trip):
+
+| Property type | JSON accepted |
+|---|---|
+| `Boolean` | `true` / `false` |
+| integer types (`Int32`, `UInt32`, `Byte`, ...) | an integer within the type's range (an integral float such as `3.0` is accepted) |
+| `Single`, `Double` | a finite number (NaN/Infinity refused; `Single` must fit a 32-bit float) |
+| `String` | a string (max 16384 chars) |
+| enums | a name, case-insensitive (`"Point"`), or a defined integer value; flags enums: names joined by `,` (`"OnSelf, OnTargets"`) or an integer made of defined bits |
+| `Vector2`, `Vector3`, `Vector4`, `Quaternion` | `{x, y[, z[, w]]}` with exactly these keys, or an array of 2/3/4 numbers |
+| `Color` | `{r, g, b, a?}` floats; `a` defaults to 1 |
+| `Color32` | `{r, g, b, a?}` integers 0-255; `a` defaults to 255 |
+| `Rect` | `{x, y, width, height}` |
+| `LayerMask` | an integer bit mask |
+| asset references (`Prop`, `Material`, `AudioClip`, `Texture2D`, `Mesh`, `Shader`, `PummelPrefab`, `PummelVisualScript`, ...) | `null`, a guid string, or `{"guid": "..."}`; other keys (`name`, `assetType`, ...) are ignored, so a reference from `get_object` can be sent back; one with `"registered": false` is refused |
+| scene-object references (`Transform`, `GameObject`, component types) | as for assets: the referenced component's guid (the `guid` of a reference in `get_object`), or an **object** guid (`ModTransform` guid): then the first component of that object whose class or wrapped Unity component matches the property type is used, like dropping the object from the hierarchy onto the field |
+| arrays `T[]` of the above | a JSON array (max 1024 elements); a `{"truncatedItems": n}` marker from `get_object` is refused |
+| `AnimationCurve` | `{keys: [{time, value, inTangent?, outTangent?}], preWrapMode?, postWrapMode?}`; wrap modes `Default`, `Once`, `Clamp`, `Loop`, `PingPong`, `ClampForever` (default `ClampForever`); max 256 keys |
+| `ParticleSystem.MinMaxCurve` | a number (= Constant), or `{mode: "Constant", constant}`, `{mode: "TwoConstants", constantMin, constantMax}`, `{mode: "Curve", curveMultiplier?, curve}`, `{mode: "TwoCurves", curveMultiplier?, curveMin, curveMax}` (curves as above, `curveMultiplier` defaults to 1) |
+| `ParticleSystem.MinMaxGradient` | a color `{r, g, b, a?}` (= Color), or `{mode: "Color", color}`, `{mode: "TwoColors", colorMin, colorMax}`, `{mode: "Gradient"` or `"RandomColor", gradient}`, `{mode: "TwoGradients", gradientMin, gradientMax}`; a gradient is `{mode?: "Blend"/"Fixed", colorKeys: [{color, time}], alphaKeys: [{alpha, time}]}` with 1-8 keys each and times 0-1 |
+
+Error messages name the property path and the expected type, e.g.
+`'color': expected Color: {r, g, b, a?} (floats, a defaults to 1) (got string "red")` or
+`'type': 'Area' is not a InternalLight value; expected one of Directional, Point, Spot (case-insensitive) or its integer value`.
+
+Reference rules (as the editor's object picker): the guid must resolve to a mod asset (as listed by `list_assets`,
+including built-in ones) or to an object of the mod; the resolved value must be an instance of the property's
+(element) type (`'materials[0]': 'Cube' is a Prop (Prop), expected Material`); scene objects may only reference scene
+objects and prefab objects only objects of the same prefab; deleted (missing) assets are refused.
+
+Inspector-only clamps: some custom inspectors re-apply limits on every frame they draw a component; the bridge applies
+the same limits when writing and lists the affected properties in `inspectorClamped`:
+`ModAudioSource.volume` 0-1, `.spatialBlend` 0-1, `.stereoPanning` -1..1; `ModBoardSpace.SpawnRotation` 0-360,
+`.SpawnDistance` 0-4; `ModFireWeapon.FireTime` >= 0.1; `ModItem.SecondsBetweenHeldAction` >= 0.1, `.Cooldown` >= 0.1;
+`ModLight.spotAngle` 0-180; `ModParticleSystem.arcSpread` 0-1; `ModSpawner.SpawnCount` 0-20;
+`ModText.OutlineThickness` 0-1, `.ShadowOffsetX` / `.ShadowOffsetY` -1..1, `.ShadowSoftness` 0-1;
+`ModTrigger.StayTriggerInterval` >= 0.1; `ModWater.CellSize` 0.1-10, `.WaveHeight` 0-1, `.WaveSpeed` 0-10.
+Setters may clamp further; `applied` shows the value actually stored.
+
+Properties whose getters have side effects (read side, see `get_object`) are written through their setters after the
+object has been selected and snapshotted (the editor's snapshot runs every getter of the selected object anyway):
+`ModItem.ItemPrefab` / `DroppedItemPrefab` (the setter stores the asset and its guid), `ModPrefabInstance.PrefabReference`
+(re-instantiates the prefab copy, stores the guid), `ModSpawner.Prefabs` (rebuilds the guid list),
+`ModMeshRenderer.materials`, `ModLineRenderer.Materials`, `ModSkinnedMeshRenderer.materials` (write the renderer's
+shared materials), `ModProp.customMaterials`, and the `ModParticleSystem` renderer properties (`material`,
+`renderMode`, `Prop`, ...; `INVALID_STATE` if the particle renderer is still not initialised when the edit is
+applied). Their `...GUID` siblings and `ModScriptReference.scriptValues` are refused (see above).
+
+```json
+{"method": "set_properties", "params": {"guid": "0b6d...", "component": "Light",
+  "values": {"type": "Spot", "spotAngle": 200, "color": {"r": 1, "g": 0.5, "b": 0}}}}
+```
+```json
+{"guid": "0b6d...", "component": {"type": "ModLight", "guid": "c41f..."},
+ "applied": {"type": {"type": "InternalLight", "value": "Spot"}, "spotAngle": {"type": "Single", "value": 180.0},
+             "color": {"type": "Color", "value": {"r": 1.0, "g": 0.5, "b": 0.0, "a": 1.0}}},
+ "inspectorClamped": ["spotAngle"], "changed": true, "undoable": true, "undoStackLength": 13}
+```
+
+`applied`: each written property read back after the editor recorded the step, in `get_object`'s `{type, value}`
+shape. Errors: guard codes, `INVALID_PARAMS`, `NOT_FOUND`, `INVALID_STATE`, `TIMEOUT`, `INTERNAL`.
+
+### `undo` (write)
+
+| Param | Type | Default | |
+|---|---|---|---|
+| `steps` | int 1-20 | 1 | number of Ctrl+Z presses |
+
+Exactly what Ctrl+Z does in `EditorSystem.Update`: `GetUndoManager().Undo()` on the current context's undo stack (the
+scene's, or the open prefab's), one step per frame like repeated key presses; stops early when the stack is empty.
+Then it waits one more frame and reports the stack length. There is **no redo** (the editor has none).
+
+```json
+{"undone": 1, "events": ["GameObjectUndoEvent"], "undoStackLength": 12}
+```
+
+- `events`: the type of each undone step: `GameObjectUndoEvent` (property, name, active, component and transform
+  edits, and selection changes), `MoveGameObject` (reparent), `DeleteGameObject` (restores the object),
+  `DuplicateGameObject` (destroys the clone).
+- The bottom entry of a stack is the editor's initial snapshot; undoing it changes nothing but the selection.
+- `extraUndoEntries` + `note`: the editor pushed a new snapshot right after the undo. This happens after undoing a
+  component add: `EditorUndo.Undo` re-baselines while the component it removes still exists (Unity destroys it at the
+  end of the frame), so the next snapshot differs. Editor behaviour, also with Ctrl+Z: one more undo re-adds the
+  component.
+- `undone: 0` + `note: "nothing to undo"` when the stack was empty.
+
+Errors: guard codes, `INVALID_STATE`, `TIMEOUT`.
 
 ---
 
@@ -461,13 +928,16 @@ prefix is hardcoded; there is no configuration, allowlist or bypass.
 ### Guard (central, in the tool registry)
 
 A write tool cannot be registered without a guard kind (`ToolDefinition.Write` requires one, a registry without
-`WriteSafety` refuses write tools). Checks, in order, on the main thread in the same unit of work as the body:
+`WriteSafety` refuses write tools). Checks, in order, on the main thread in the same unit of work as the start of the
+body, when the call's turn in the write queue comes (see [Threading](#threading)):
 
 1. `[Safety] EnableWrites` → `WRITES_DISABLED`
 2. publish block complete → `PUBLISH_BLOCK_INCOMPLETE`
 3. editor open → `EDITOR_NOT_OPEN`
 4. not loading → `BUSY_LOADING`
-5. kind **OpenMod** (`save_mod`): a mod is open (`NO_MOD_OPEN`) and loaded (`BUSY_LOADING`); its Meta name **and**
+5. kind **OpenMod** (`save_mod`, `create_object`, `duplicate_object`, `delete_object`, `reparent_object`,
+   `set_object`, `set_transform`, `add_component`, `remove_component`, `set_property`, `set_properties`, `undo`):
+   a mod is open (`NO_MOD_OPEN`) and loaded (`BUSY_LOADING`); its Meta name **and**
    folder name pass the rule (`GUARD_NOT_TEST_MOD`, message names the mod); state is `Editing` (`INVALID_STATE`).
    Kind **Lifecycle** (`create_test_mod`, `open_test_mod`): the `name` param passes the rule; if any mod is open it
    is a test mod, else `GUARD_NOT_TEST_MOD` ("close <name> by hand first"); state is `Editing`.
@@ -530,5 +1000,7 @@ Asset/object references (property values, action targets, settings) use one shap
 
 ## Not in this build
 
-No object/component/property/action editing, undo, playtest or batch tools (later Phase 2 increments). No delete,
-rename or close of mods. No Workshop functionality of any kind; publishing is blocked (see [Safety](#safety)).
+No action editing (triggers/actions), playtest or batch tools (later Phase 2 increments); no redo (the editor has
+none); no prefab asset editing context switch (open/close a prefab by hand), no layer/tag or per-component enable
+editing, no asset creation, import or removal. No delete, rename or close of mods. No Workshop functionality of any
+kind; publishing is blocked (see [Safety](#safety)).

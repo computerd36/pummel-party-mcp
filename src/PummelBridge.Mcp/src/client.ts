@@ -38,7 +38,13 @@ const HINTS: Record<string, string> = {
   PUBLISH_BLOCK_INCOMPLETE:
     "The plugin could not install its Workshop safety patches (probably after a game update), so write tools stay disabled. Tell the human.",
   GUARD_NOT_TEST_MOD: "Only mods whose name starts with PB_TEST_ can be modified; do not retry with a different name for a real mod.",
-  INVALID_STATE: "See the message for the required state (e.g. save first, or leave play mode), then retry.",
+  INVALID_STATE:
+    "See the message for the required state (e.g. save first, close the open editor dialog, release the mouse button, leave play mode, or return to the scene hierarchy), then retry.",
+  INVALID_PARAMS: "A parameter or value was refused; the message names the property/rule. Fix the call (see get_object / list_component_types / list_assets) and retry.",
+  NOT_FOUND: "No such object, component, asset or mod. Re-fetch guids with get_hierarchy / get_object (the object may have been deleted or be in another editing context).",
+  TIMEOUT: "The game did not service the call in time (busy, or the editor did not record its undo snapshot). Check get_status and get_object to see whether it was applied before retrying.",
+  INTERNAL: "Unexpected plugin error (possibly a game version change). Check get_log; an edit may have partly applied, so verify with get_object.",
+  UNKNOWN_METHOD: "The running plugin does not implement this method; it may be older than this MCP server.",
   ALREADY_EXISTS: "A mod with that name already exists; choose another name or use open_test_mod.",
 };
 
@@ -48,6 +54,18 @@ export const TOOL_TIMEOUTS_MS: Record<string, number> = {
   create_test_mod: 45000,
   open_test_mod: 45000,
   save_mod: 30000,
+  // edit tools: the plugin's own limit is 15 s
+  create_object: 20000,
+  duplicate_object: 20000,
+  delete_object: 20000,
+  reparent_object: 20000,
+  set_object: 20000,
+  set_transform: 20000,
+  add_component: 20000,
+  remove_component: 20000,
+  set_property: 20000,
+  set_properties: 20000,
+  undo: 30000,
 };
 
 /** Same rule the plugin enforces for sandbox mod names. */

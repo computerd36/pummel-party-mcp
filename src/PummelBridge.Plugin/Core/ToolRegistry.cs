@@ -91,10 +91,15 @@ namespace PummelBridge.Core
         private readonly WriteSafety m_safety;
 
         /// <param name="safety">Required to register write tools; a registry without it accepts read tools only.</param>
-        public ToolRegistry(WriteSafety safety = null)
+        /// <param name="writeQueue">Serialises write tool bodies on the main thread (one at a time). Created if null.</param>
+        public ToolRegistry(WriteSafety safety = null, WriteQueue writeQueue = null)
         {
             m_safety = safety;
+            WriteQueue = writeQueue ?? new WriteQueue();
         }
+
+        /// <summary>Main thread only. Pumped by the plugin once per frame (stuck-entry safety net).</summary>
+        public WriteQueue WriteQueue { get; }
 
         public void Register(ToolDefinition tool)
         {
@@ -131,14 +136,15 @@ namespace PummelBridge.Core
         public IEnumerable<string> Names => m_tools.Keys;
 
         /// <summary>
-        /// Params are parsed on the calling (HTTP) thread; the guard and the body then run on the main thread in one
-        /// dispatched unit of work, so the editor state cannot change between check and action.
+        /// Params are parsed on the calling (HTTP) thread. On the main thread the call joins the write queue (one write
+        /// body at a time, FIFO); when its turn comes, the guard and the start of the body run in one unit of work, so the
+        /// editor state cannot change between check and action. The timeout covers queueing and the whole body.
         /// </summary>
         private object InvokeWrite(ToolDefinition tool, ToolContext ctx)
         {
             object args = tool.ParseArgs?.Invoke(ctx);
             TimeSpan timeout = tool.Timeout ?? ctx.MainThreadTimeout;
-            return ctx.InvokeOnMainThread(completion =>
+            return ctx.InvokeOnMainThread(outer => WriteQueue.Enqueue(tool.Name, outer, completion =>
             {
                 EditorSnapshot snap = m_safety.Host.Capture();
                 RpcException denied = WriteGuardEvaluator.Evaluate(m_safety, tool.Guard, args, snap);
@@ -152,7 +158,7 @@ namespace PummelBridge.Core
                     m_safety.Host.EnforceDefaultWorkshopId();
                 }
                 tool.Body(new WriteInvocation(ctx, args, completion, snap, m_safety));
-            }, timeout);
+            }), timeout);
         }
     }
 

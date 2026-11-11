@@ -34,6 +34,7 @@ namespace PummelBridge.Tests
             Console.WriteLine("PummelBridge core test harness");
             UnitTests();
             GuardTests.Run((name, ok) => Check(name, ok));
+            EditCoreTests.Run((name, ok) => Check(name, ok));
             AssetListingTests();
             ServerTests();
             Console.WriteLine();

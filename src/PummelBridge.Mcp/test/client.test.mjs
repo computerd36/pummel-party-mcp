@@ -186,6 +186,10 @@ test("per-tool timeouts", () => {
   assert.equal(TOOL_TIMEOUTS_MS.save_mod, 30000);
   assert.equal(TOOL_TIMEOUTS_MS.screenshot, 30000);
   assert.equal(TOOL_TIMEOUTS_MS.ping, undefined);
+  for (const n of ["create_object", "duplicate_object", "delete_object", "reparent_object", "set_object", "set_transform", "add_component", "remove_component", "set_property", "set_properties"]) {
+    assert.equal(TOOL_TIMEOUTS_MS[n], 20000, n);
+  }
+  assert.equal(TOOL_TIMEOUTS_MS.undo, 30000);
 });
 
 test("name rule", () => {

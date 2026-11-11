@@ -24,7 +24,7 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <DebugType>portable</DebugType>
     <Deterministic>true</Deterministic>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Pummel Party</GameDir>
   </PropertyGroup>
 
@@ -52,6 +52,11 @@
     </Reference>
     <Reference Include="UnityEngine.ScreenCaptureModule">
       <HintPath>$(GameDir)\PummelParty_Data\Managed\UnityEngine.ScreenCaptureModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Input.GetMouseButton: the editor defers undo snapshots while the left mouse button is held. -->
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(GameDir)\PummelParty_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.ParticleSystemModule">

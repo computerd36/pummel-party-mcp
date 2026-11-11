@@ -78,6 +78,13 @@ namespace PummelBridge.Tools
             return result;
         }
 
+        /// <summary>A get_hierarchy node (with its whole subtree up to <paramref name="maxDepth"/>) for one object. Main thread.</summary>
+        internal static JObject NodeFor(ModTransform mt, int maxDepth = MaxDepthLimit)
+        {
+            WalkState state = new WalkState { IncludeInactive = true, MaxDepth = maxDepth };
+            return Node(mt.transform, mt, 0, state);
+        }
+
         private static JObject Node(Transform t, ModTransform mt, int depth, WalkState state)
         {
             state.Nodes++;

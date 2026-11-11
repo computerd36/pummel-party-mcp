@@ -6,6 +6,7 @@ using BepInEx.Logging;
 using HarmonyLib;
 using PummelBridge.Core;
 using PummelBridge.Game;
+using PummelBridge.Hooks;
 using PummelBridge.Safety;
 using PummelBridge.Tools;
 using UnityEngine;
@@ -36,6 +37,8 @@ namespace PummelBridge
         private LogRingBuffer m_logRing;
         private MainThreadDispatcher m_dispatcher;
         private FramePoller m_poller;
+        private EditServices m_edit;
+        private ToolRegistry m_registry;
         private BridgeHttpServer m_server;
         private bool m_logHooked;
         private bool m_shutDown;
@@ -96,17 +99,22 @@ namespace PummelBridge
             {
                 m_dispatcher = new MainThreadDispatcher();
                 m_poller = new FramePoller(log);
+                m_edit = new EditServices(m_poller, log);
+                InstallSaveWatch(log);
                 BridgeConfig config = m_config;
                 WriteSafety safety = new WriteSafety(() => config.EnableWrites, () => block.Complete, new GameEditorGuardHost(log));
-                ToolRegistry registry = new ToolRegistry(safety);
-                StatusTools.Register(registry, info, () => config.EnableWrites, block);
+                ToolRegistry registry = new ToolRegistry(safety, new WriteQueue(log));
+                m_registry = registry;
+                StatusTools.Register(registry, info, () => config.EnableWrites, block, m_edit);
                 HierarchyTools.Register(registry);
                 ObjectTools.Register(registry);
                 ActionTools.Register(registry);
                 AssetTools.Register(registry);
                 LogTools.Register(registry, m_logRing, info);
                 ScreenshotTool.Register(registry, this);
-                ModTools.Register(registry, m_poller, log);
+                ModTools.Register(registry, m_poller, log, m_edit);
+                ObjectEditTools.Register(registry, m_edit);
+                ComponentTools.Register(registry, m_edit);
 
                 RpcHandler handler = new RpcHandler(registry, m_dispatcher, log, MainThreadTimeout);
                 m_server = new BridgeHttpServer(new BridgeHttpServerOptions { Port = m_config.Port, Token = token }, handler.Handle, log);
@@ -144,11 +152,40 @@ namespace PummelBridge
             }
         }
 
+        /// <summary>
+        /// Harmony postfix on EditorSystem.SaveCurrentMod that only records "a save happened" (moves the edit tracker's
+        /// clean point after user saves). Separate Harmony id; failure only disables the tracker (editor flag fallback).
+        /// </summary>
+        private void InstallSaveWatch(IBridgeLog log)
+        {
+            try
+            {
+                System.Reflection.MethodInfo target = typeof(EditorSystem).GetMethod("SaveCurrentMod",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public, null, new[] { typeof(bool) }, null);
+                string error = SaveWatch.Install(new Harmony(SaveWatch.HarmonyId), target);
+                if (error != null)
+                {
+                    Logger.LogWarning($"Save watch not installed ({error}); unsaved-edit tracking falls back to the editor's dirty flag.");
+                    return;
+                }
+                EditServices edit = m_edit;
+                SaveWatch.OnSaved = () => edit.OnSaved();
+            }
+            catch (Exception e)
+            {
+                Logger.LogWarning($"Save watch not installed ({e.GetType().Name}: {e.Message}); unsaved-edit tracking falls back to the editor's dirty flag.");
+            }
+        }
+
         private void Update()
         {
+            // Observe the editor's undo stacks first (changes made by the editor's last Update / draw are seen before
+            // any tool runs this frame).
+            m_edit?.Observe();
             // Drain never throws: tool exceptions are captured into the waiting request.
             m_dispatcher?.Drain(MaxWorkItemsPerFrame, MaxWorkMillisecondsPerFrame);
             m_poller?.Tick();
+            m_registry?.WriteQueue.Pump();
         }
 
         private void OnDestroy() => Shutdown("OnDestroy");
