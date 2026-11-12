@@ -12,7 +12,7 @@ namespace PummelPartyMcp.Tools
     {
         private static EditServices s_services;
 
-        public static readonly string[] Capabilities = { "read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate" };
+        public static readonly string[] Capabilities = { "read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings" };
 
         /// <param name="publishBlock">Live publish-block status (re-verifies the required prefixes on every call).</param>
         public static void Register(ToolRegistry registry, PluginRuntimeInfo info, Func<bool> writesEnabled, Func<PublishBlockStatus> publishBlock,
@@ -137,6 +137,7 @@ namespace PummelPartyMcp.Tools
                 ["settings"] = settings == null ? JValue.CreateNull() : conv.SerializedFields(settings, 0, null),
                 ["lightingPreset"] = meta == null ? null : mod.GetSelectedLightingPreset(),
                 ["postProcessingPreset"] = meta == null ? null : mod.GetSelectedPostProcessingPreset(),
+                ["settingsDetail"] = "get_mod_settings returns every setting in the shapes set_mod_settings accepts (description, preview image, music, lighting and screen-effect values, board details); list_mod_settings explains the fields",
             };
 
             // Only these two fields of the workshop item are exposed (string id: may exceed 2^53).

@@ -32,6 +32,7 @@
     <Compile Include="..\PummelPartyMcp.Plugin\Hooks\SaveWatch.cs" Link="Hooks\SaveWatch.cs" />
     <Compile Include="..\PummelPartyMcp.Plugin\Core\RequiredMembers.cs" Link="Core\RequiredMembers.cs" />
     <Compile Include="..\PummelPartyMcp.Plugin\Core\InspectorRules.cs" Link="Core\InspectorRules.cs" />
+    <Compile Include="..\PummelPartyMcp.Plugin\Core\SettingsRules.cs" Link="Core\SettingsRules.cs" />
   </ItemGroup>
 
   <ItemGroup>

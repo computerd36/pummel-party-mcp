@@ -77,7 +77,7 @@ test("run_batch: schema limits, allowed tools and ids are enforced before the pl
     const { tools } = await s.client.listTools();
     const batch = tools.find((t) => t.name === "run_batch");
     const toolEnum = batch.inputSchema.properties.steps.items.properties.tool.enum;
-    assert.equal(toolEnum.length, 27);
+    assert.equal(toolEnum.length, 30);
     for (const bad of ["run_batch", "start_playtest", "stop_playtest", "create_test_mod", "open_test_mod", "screenshot", "ping", "get_status", "get_log", "get_open_mod", "validate_mod"]) {
       assert.ok(!toolEnum.includes(bad), bad);
     }
@@ -209,7 +209,7 @@ test("annotations of the new tools", async () => {
   try {
     const { tools } = await s.client.listTools();
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));
-    assert.equal(tools.length, 42);
+    assert.equal(tools.length, 46);
     assert.equal(by.validate_mod.annotations.readOnlyHint, true);
     assert.deepEqual(by.validate_mod.inputSchema.properties ?? {}, {});
     assert.deepEqual(
@@ -223,7 +223,7 @@ test("annotations of the new tools", async () => {
     assert.equal(by.run_batch.annotations.destructiveHint, true);
     assert.equal(by.run_batch.annotations.readOnlyHint, false);
     for (const n of ["start_playtest", "stop_playtest", "run_batch"]) assert.match(by[n].description, /usage_guide/, n);
-    const guide = s.client.getInstructions();
+    const guide = (await s.client.callTool({ name: "usage_guide", arguments: { topic: "playtest" } })).content[0].text + (await s.client.callTool({ name: "usage_guide", arguments: { topic: "batch" } })).content[0].text + (await s.client.callTool({ name: "usage_guide", arguments: { topic: "overview" } })).content[0].text + (await s.client.callTool({ name: "usage_guide", arguments: { topic: "safety" } })).content[0].text;
     assert.match(guide, /PLAYTEST:/);
     assert.match(guide, /BATCH:/);
     assert.match(guide, /MINIMAL VALID MINIGAME/);
@@ -279,7 +279,7 @@ test("get_playtest_state and get_playtest_events: read-only, strict schemas, par
     assert.equal(seen.length, n0, "invalid calls must not reach the plugin");
 
     // the shared guide tells the agent to verify mechanics with them, and the 256 sentinel is not a Workshop/minigame id
-    const guide = s.client.getInstructions();
+    const guide = (await s.client.callTool({ name: "usage_guide", arguments: { topic: "playtest" } })).content[0].text + (await s.client.callTool({ name: "usage_guide", arguments: { topic: "batch" } })).content[0].text + (await s.client.callTool({ name: "usage_guide", arguments: { topic: "overview" } })).content[0].text + (await s.client.callTool({ name: "usage_guide", arguments: { topic: "safety" } })).content[0].text;
     assert.match(guide, /get_playtest_state/);
     assert.match(guide, /get_playtest_events/);
     assert.match(guide, /stop_playtest first and read afterwards/);

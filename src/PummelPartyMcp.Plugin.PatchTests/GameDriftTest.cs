@@ -56,6 +56,7 @@ namespace PummelPartyMcp.PatchTests
                     .All(t => t.Method.DeclaringType.Assembly == game || t.Method.DeclaringType.Assembly == steam));
                 ReflectedMembers(game, check);
                 RegistryAndAudit(game, check);
+                SettingsDrift(game, check);
             }
             catch (Exception e)
             {
@@ -145,6 +146,86 @@ namespace PummelPartyMcp.PatchTests
                 }
                 check($"audit snapshot of {name} equals its reflected properties ({actual.Length})", same);
             }
+        }
+
+        /// <summary>
+        /// Mod settings (plugin 0.8.0): every field, enum, range and method that Core/SettingsRules.cs names against the real game
+        /// assembly (the same entries self_test resolves), plus completeness: the data classes the settings window edits must have no
+        /// public member the audit has not seen, so a game update that adds a setting fails here until the rule table is extended.
+        /// </summary>
+        private static void SettingsDrift(Assembly game, Action<string, bool> check)
+        {
+            const BindingFlags pub = BindingFlags.Instance | BindingFlags.Public;
+            List<RequiredMember> settings = RequiredMembers.All.Where(m => m.UsedBy != null && (m.UsedBy.StartsWith("settings rules", StringComparison.Ordinal) || m.UsedBy.StartsWith("settings tools", StringComparison.Ordinal) || m.UsedBy == "capture_preview_image")).ToList();
+            List<string> problems = new List<string>();
+            foreach (RequiredMember m in settings)
+            {
+                string why = RequiredMembers.Resolve(game, m);
+                if (why != null)
+                {
+                    problems.Add(m.Kind + " " + m.Id + ": " + why);
+                }
+            }
+            foreach (string p in problems)
+            {
+                Console.WriteLine("    settings drift: " + p);
+            }
+            int fieldCount = SettingsRules.All.SelectMany(s => s.Fields).Count(f => f.Member != null);
+            check($"every settings field resolves in the real game ({fieldCount} fields with a member, {settings.Count(m => m.Kind == "enumType")} enums, {settings.Count(m => m.Kind == "settingsRange")} slider ranges, {settings.Count(m => m.Kind == "method")} methods; {problems.Count} problems)", problems.Count == 0 && fieldCount > 200);
+
+            // completeness: every public instance member of these classes is a table field or a listed hidden member
+            (string type, string target)[] audited =
+            {
+                ("SimpleModPlayerSettings", "player"),
+                ("SimpleModControllerSettings", "controller"),
+                ("BoardModCameraSettings", "camera"),
+                ("ModLightingSettings", "lighting"),
+            };
+            foreach (var a in audited)
+            {
+                Type t = game.GetType(a.type, false);
+                HashSet<string> known = new HashSet<string>(StringComparer.Ordinal);
+                foreach (SettingsSection s in SettingsRules.All)
+                {
+                    foreach (ModSettingField f in s.Fields.Where(f => f.Target == a.target && f.Member != null))
+                    {
+                        known.Add(f.Member);
+                    }
+                    if (s.HiddenTarget == a.target)
+                    {
+                        foreach (string h in s.HiddenNames)
+                        {
+                            known.Add(h);
+                        }
+                    }
+                }
+                string[] actual = t == null ? new string[0] : t.GetFields(pub).Select(f => f.Name).ToArray();
+                string[] unknown = actual.Where(n => !known.Contains(n)).ToArray();
+                if (unknown.Length > 0)
+                {
+                    Console.WriteLine("    " + a.type + ": public fields the settings rules do not know: " + string.Join(", ", unknown));
+                }
+                check($"every public field of {a.type} is in the settings rules or listed as not shown ({actual.Length} fields)", t != null && unknown.Length == 0);
+            }
+            Type board = game.GetType("BoardModSettings", false);
+            string[] boardFields = board?.GetFields(pub | BindingFlags.DeclaredOnly).Select(f => f.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray() ?? new string[0];
+            check("BoardModSettings declares exactly CameraSettings, CustomSpaceSettings, UseCustomBoardSize (" + string.Join(", ", boardFields) + ")",
+                boardFields.SequenceEqual(new[] { "CameraSettings", "CustomSpaceSettings", "UseCustomBoardSize" }));
+            Type minigame = game.GetType("MinigameModSettings", false);
+            string[] mgFields = minigame?.GetFields(pub | BindingFlags.DeclaredOnly).Select(f => f.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray() ?? new string[0];
+            check("MinigameModSettings declares exactly SimpleMinigameSettings, SimpleModPlayerSettings and the two unused [NonSerialized] custom-prefab fields (" + string.Join(", ", mgFields) + ")",
+                mgFields.SequenceEqual(new[] { "SimpleMinigameSettings", "SimpleModPlayerSettings", "m_customMinigameController", "m_customMinigamePlayer" }.OrderBy(n => n, StringComparer.Ordinal)));
+
+            // the two screen-effect asset-less facts the tools rely on
+            Type profile = RequiredMembers.ResolveType(game, "UnityEngine.Rendering.PostProcessing.PostProcessProfile", "Unity.Postprocessing.Runtime");
+            Type effect = RequiredMembers.ResolveType(game, "UnityEngine.Rendering.PostProcessing.PostProcessEffectSettings", "Unity.Postprocessing.Runtime");
+            bool allEffects = effect != null && SettingsRules.EffectTypeNames.All(n =>
+            {
+                Type et = RequiredMembers.ResolveType(game, "UnityEngine.Rendering.PostProcessing." + n, "Unity.Postprocessing.Runtime");
+                return et != null && effect.IsAssignableFrom(et);
+            });
+            check("all 8 effect types the rules name derive from PostProcessEffectSettings and the profile has AddSettings(Type) / RemoveSettings(Type)",
+                allEffects && profile != null && profile.GetMethod("AddSettings", new[] { typeof(Type) }) != null && profile.GetMethod("RemoveSettings", new[] { typeof(Type) }) != null);
         }
 
         /// <summary>

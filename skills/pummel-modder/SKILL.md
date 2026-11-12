@@ -77,6 +77,13 @@ Board mods cannot be made valid through the plugin (connections are not editable
 - Health rule: with Use Health off (the default; only switchable by hand in the Minigame Settings) Change Health is a kill switch: any result of 0 or less kills at once, whatever the amount. Hit points need Use Health on and Health set, by the human.
 - Player-settings trigger edits are not undoable and are written by `save_mod`.
 
+## Mod settings
+
+- list_mod_settings first (fields, conditions, choices, limits, presets), then set_mod_settings {section, values} (all-or-nothing; check clamped, implied, validation), get_mod_settings to verify, save_mod.
+- Settings are not undoable: keep the returned previous values. Conditional fields need their controlling field in the same or an earlier call.
+- Lighting/screenEffects: pick a preset by name or Custom; edit custom values only with Custom; keep Custom selected when saving screen effects. Take a screenshot to see the result.
+- capture_preview_image creates a texture file in the mod right away (assignment saved by save_mod). The Workshop item is never touched.
+
 ## Playtest and verification
 
 1. `validate_mod` (errors give `INVALID_STATE` in `start_playtest`; `validateFirst: false` is "Run With Errors").

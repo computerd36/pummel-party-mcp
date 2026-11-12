@@ -21,13 +21,16 @@ namespace PummelPartyMcp.Core
 
         public bool IsStatic;
 
-        /// <summary>Method: parameter type names (System.Type.ToString()).</summary>
+        /// <summary>Assembly of <see cref="Type"/> when it is not Assembly-CSharp (e.g. Unity.Postprocessing.Runtime).</summary>
+        public string Assembly;
+
+        /// <summary>Method: parameter type names (System.Type.ToString()). enumType: the expected "Name=Value" pairs. settingsRange: min, max.</summary>
         public string[] Params;
 
         /// <summary>Where the plugin uses it.</summary>
         public string UsedBy;
 
-        public string Id => Kind == "enumValue" ? $"{Type}.{Extra} = {Name}" : $"{Type}.{Name}";
+        public string Id => Kind == "enumValue" ? $"{Type}.{Extra} = {Name}" : Name == null ? Type : $"{Type}.{Name}";
     }
 
     /// <summary>
@@ -134,9 +137,177 @@ namespace PummelPartyMcp.Core
                 }
             }
 
+            AddSettings(l);
+
             // distinct, order preserved
             HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
             return l.Where(m => seen.Add(m.Kind + "|" + m.Id + "|" + m.IsStatic)).ToList();
+        }
+
+        /// <summary>The mod settings tools (plugin 0.8.0): editor entry points plus every member, enum and limit of Core/SettingsRules.cs.</summary>
+        private static void AddSettings(List<RequiredMember> l)
+        {
+            const string pp = "UnityEngine.Rendering.PostProcessing.";
+            void F(string type, string name, string fieldType, string use, string assembly = null) =>
+                l.Add(new RequiredMember { Kind = "field", Type = type, Name = name, Extra = fieldType, Assembly = assembly, UsedBy = use });
+            void M(string type, string name, string use, string assembly, params string[] parameters) =>
+                l.Add(new RequiredMember { Kind = "method", Type = type, Name = name, Params = parameters, Assembly = assembly, UsedBy = use });
+            void P(string type, string name, string use) =>
+                l.Add(new RequiredMember { Kind = "property", Type = type, Name = name, UsedBy = use });
+            const string use1 = "settings tools";
+
+            // editor entry points
+            M("MinigameModSettings", "GenerateMinigameControls", use1, null);
+            M("ModSettings", "SetupLightingWidget", use1 + " (preset list)", null);
+            M("ModSettings", "SetupPostProcessingWidget", use1 + " (preset list)", null);
+            F("ModSettings", "m_lightingWidgetLogic", "LightingWidgetLogic", use1 + " (preset list)");
+            F("ModSettings", "m_postProcessWidgetLogic", "PostProcessWidgetLogic", use1 + " (preset list)");
+            F("LightingWidgetLogic", "m_presetNames", "System.String[]", use1 + " (preset list)");
+            F("LightingWidgetLogic", "m_lightingPresets", "System.Collections.Generic.List`1[ModLightingSettings]", use1 + " (preset objects)");
+            F("PostProcessWidgetLogic", "m_presetNames", "System.String[]", use1 + " (preset list)");
+            F("PostProcessWidgetLogic", "m_postProcessPresets", "System.Collections.Generic.List`1[ModPostProcessSettings]", use1 + " (preset objects)");
+            M("ModLightingSettings", "ApplyLightingChangesToRenderSettings", use1 + " (scene refresh)", null, "System.Boolean");
+            M("PummelMod", "GetSelectedLightingPreset", use1, null);
+            M("PummelMod", "SetSelectedLightingPreset", use1, null, "System.String");
+            M("PummelMod", "GetSelectedPostProcessingPreset", use1, null);
+            M("PummelMod", "SetSelectedPostProcessingPreset", use1, null, "System.String");
+            F("PummelMod", "lighting", "ModLightingSettings", use1);
+            F("PummelMod", "CustomLighting", "ModLightingSettings", use1);
+            F("PummelMod", "postProcess", "ModPostProcessSettings", use1);
+            F("PummelMod", "CustomPostProcess", "ModPostProcessSettings", use1);
+            M("ModPostProcessSettings", "GetPostProcessProfile", use1, null);
+            F("EditorSystem", "m_postProcessVolume", "UnityEngine.Rendering.PostProcessing.PostProcessVolume", use1);
+            F("EditorSystem", "m_sceneViewCamera", "UnityEngine.Camera", use1);
+            F("EditorSystem", "m_willTakePlaymodeScreenshot", "System.Boolean", "capture_preview_image");
+            F("EditorSystem", "m_isTakingScreenShot", "System.Boolean", "capture_preview_image");
+            M("EditorSystem", "TakeScreenGrab", "capture_preview_image", null);
+            P("MinigameMod", "MinigameSettings", use1);
+            M("MinigameMod", "GetMinigameDefinition", use1, null);
+            M("BoardMod", "GetMapDetails", use1, null);
+            F("MinigameModSettings", "SimpleMinigameSettings", "SimpleModControllerSettings", use1);
+            F("MinigameModSettings", "SimpleModPlayerSettings", "SimpleModPlayerSettings", use1);
+            F("BoardModSettings", "CameraSettings", "BoardModCameraSettings", use1);
+            F("BoardModSettings", "CustomSpaceSettings", "BoardModCustomSpaceSettings", use1);
+            F("MinigameDefinition", "screenshotTextureGuid", "SerializableGuid", use1 + " (preview image)");
+            F("MapDetails", "previewImageGuid", "SerializableGuid", use1 + " (preview image)");
+            F(pp + "PostProcessProfile", "settings", "System.Collections.Generic.List`1[UnityEngine.Rendering.PostProcessing.PostProcessEffectSettings]", use1, "Unity.Postprocessing.Runtime");
+            F(pp + "PostProcessEffectSettings", "enabled", pp + "BoolParameter", use1, "Unity.Postprocessing.Runtime");
+            M(pp + "PostProcessProfile", "AddSettings", use1, "Unity.Postprocessing.Runtime", "System.Type");
+            M(pp + "PostProcessProfile", "RemoveSettings", use1, "Unity.Postprocessing.Runtime", "System.Type");
+            F(pp + "ParameterOverride`1", "value", null, use1 + " (effect parameters)", "Unity.Postprocessing.Runtime");
+            F(pp + "ParameterOverride`1", "overrideState", "System.Boolean", use1 + " (effect parameters)", "Unity.Postprocessing.Runtime");
+            l.Add(new RequiredMember { Kind = "type", Type = pp + "PostProcessLayer", Assembly = "Unity.Postprocessing.Runtime", UsedBy = use1 + " (effect layer refresh)" });
+            foreach (string[] forced in SettingsRules.ForcedEffectValues)
+            {
+                l.Add(new RequiredMember
+                {
+                    Kind = "settingsMember", Type = pp + forced[0], Name = forced[1], Assembly = "Unity.Postprocessing.Runtime", UsedBy = use1 + " (forced effect value)",
+                });
+            }
+            l.Add(new RequiredMember
+            {
+                Kind = "enumType", Type = pp + "GradingMode", Assembly = "Unity.Postprocessing.Runtime", Params = new[] { "LowDefinitionRange=0", "HighDefinitionRange=1", "External=2" },
+                UsedBy = use1 + " (forced effect value)",
+            });
+            l.Add(new RequiredMember
+            {
+                Kind = "enumType", Type = pp + "VignetteMode", Assembly = "Unity.Postprocessing.Runtime", Params = new[] { "Classic=0", "Masked=1" },
+                UsedBy = use1 + " (forced effect value)",
+            });
+
+            // the rule table
+            foreach (SettingsSection s in SettingsRules.All)
+            {
+                foreach (ModSettingField f in s.Fields)
+                {
+                    string use = $"settings rules ({s.ModType}/{s.Name}.{f.Name})";
+                    if (f.Member != null)
+                    {
+                        l.Add(new RequiredMember { Kind = "settingsMember", Type = f.GameType, Name = f.Member, Extra = SettingsRules.ExpectedMemberType(f), Assembly = f.Assembly, UsedBy = use });
+                    }
+                    else if (f.IsEffect)
+                    {
+                        l.Add(new RequiredMember { Kind = "type", Type = f.GameType, Assembly = f.Assembly, UsedBy = use });
+                    }
+                    if (f.EnumType != null && f.EnumNames != null && f.EnumValues != null && f.Kind != SettingKind.NamedInt)
+                    {
+                        l.Add(new RequiredMember
+                        {
+                            Kind = "enumType", Type = f.EnumType, Assembly = f.EnumAssembly,
+                            Params = f.EnumNames.Select((n, i) => n + "=" + f.EnumValues[i]).ToArray(), UsedBy = use,
+                        });
+                    }
+                    if (f.RangeFromAttribute)
+                    {
+                        l.Add(new RequiredMember
+                        {
+                            Kind = "settingsRange", Type = f.GameType, Name = f.Member, Assembly = f.Assembly,
+                            Params = new[] { SettingsRules.FormatNumber(f.Min.Value), SettingsRules.FormatNumber(f.Max.Value) }, UsedBy = use,
+                        });
+                    }
+                }
+                foreach (string hidden in s.HiddenNames)
+                {
+                    l.Add(new RequiredMember { Kind = "settingsMember", Type = s.HiddenType, Name = hidden, UsedBy = $"settings rules ({s.ModType}/{s.Name} not shown: {hidden})" });
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------ type lookup across assemblies
+
+        private static Assembly FindAssembly(Assembly game, string name)
+        {
+#if NETFRAMEWORK
+            if (game.ReflectionOnly)
+            {
+                foreach (Assembly a in AppDomain.CurrentDomain.ReflectionOnlyGetAssemblies())
+                {
+                    if (a.GetName().Name == name)
+                    {
+                        return a;
+                    }
+                }
+                foreach (AssemblyName an in game.GetReferencedAssemblies())
+                {
+                    if (an.Name == name)
+                    {
+                        return Assembly.ReflectionOnlyLoad(an.FullName);
+                    }
+                }
+                return null;
+            }
+#endif
+            foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (a.GetName().Name == name)
+                {
+                    return a;
+                }
+            }
+            foreach (AssemblyName an in game.GetReferencedAssemblies())
+            {
+                if (an.Name == name)
+                {
+                    return Assembly.Load(an);
+                }
+            }
+            return null;
+        }
+
+        /// <summary>Type of a registered member: in Assembly-CSharp, or in the named assembly.</summary>
+        public static Type ResolveType(Assembly game, string typeName, string assemblyName)
+        {
+            if (assemblyName == null)
+            {
+                return game.GetType(typeName, false);
+            }
+            Assembly a = FindAssembly(game, assemblyName);
+            return a?.GetType(typeName, false);
+        }
+
+        private static string Pairs(Type enumType)
+        {
+            return string.Join(", ", enumType.GetFields(BindingFlags.Public | BindingFlags.Static).Select(f => f.Name + "=" + Convert.ToInt64(f.GetRawConstantValue(), System.Globalization.CultureInfo.InvariantCulture)).ToArray());
         }
 
         private const BindingFlags Declared = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
@@ -144,7 +315,7 @@ namespace PummelPartyMcp.Core
         /// <summary>Null if the member exists as registered, otherwise a short description of what is wrong.</summary>
         public static string Resolve(Assembly game, RequiredMember m)
         {
-            Type t = game.GetType(m.Type, false);
+            Type t = ResolveType(game, m.Type, m.Assembly);
             if (t == null)
             {
                 return "type " + m.Type + " not found";
@@ -194,6 +365,62 @@ namespace PummelPartyMcp.Core
                         }
                     }
                     return "method not found with parameters (" + string.Join(", ", m.Params ?? new string[0]) + ")";
+                }
+                case "type":
+                    return null;
+                case "settingsMember":
+                {
+                    // a public field or property of the type or a base type (settings fields are plain data members)
+                    for (Type c = t; c != null; c = c.BaseType)
+                    {
+                        FieldInfo f = c.GetField(m.Name, Declared);
+                        Type found = f?.FieldType;
+                        if (found == null)
+                        {
+                            found = c.GetProperty(m.Name, Declared)?.PropertyType;
+                        }
+                        if (found != null)
+                        {
+                            return m.Extra == null || found.ToString() == m.Extra ? null : $"member type is {found}, expected {m.Extra}";
+                        }
+                    }
+                    return "field or property not found";
+                }
+                case "enumType":
+                {
+                    if (!t.IsEnum)
+                    {
+                        return t.FullName + " is not an enum";
+                    }
+                    string actual = Pairs(t);
+                    string expected = string.Join(", ", m.Params ?? new string[0]);
+                    HashSet<string> a = new HashSet<string>(actual.Split(new[] { ", " }, StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+                    HashSet<string> e = new HashSet<string>(expected.Split(new[] { ", " }, StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+                    return a.SetEquals(e) ? null : $"enum values are [{actual}], expected [{expected}]";
+                }
+                case "settingsRange":
+                {
+                    for (Type c = t; c != null; c = c.BaseType)
+                    {
+                        FieldInfo f = c.GetField(m.Name, Declared);
+                        if (f == null)
+                        {
+                            continue;
+                        }
+                        foreach (CustomAttributeData ad in CustomAttributeData.GetCustomAttributes(f))
+                        {
+                            if (ad.AttributeType.Name == "RangeAttribute" && ad.ConstructorArguments.Count >= 2)
+                            {
+                                double min = Convert.ToDouble(ad.ConstructorArguments[0].Value, System.Globalization.CultureInfo.InvariantCulture);
+                                double max = Convert.ToDouble(ad.ConstructorArguments[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                                double emin = double.Parse(m.Params[0], System.Globalization.CultureInfo.InvariantCulture);
+                                double emax = double.Parse(m.Params[1], System.Globalization.CultureInfo.InvariantCulture);
+                                return Math.Abs(min - emin) < 1e-4 && Math.Abs(max - emax) < 1e-4 ? null : $"Range attribute is {min}..{max}, the rules document {emin}..{emax}";
+                            }
+                        }
+                        return "member has no Range attribute (the rules document one)";
+                    }
+                    return "field not found";
                 }
                 case "ruleProperty":
                     return FindRuleProperty(t, m.Name) != null ? null : "property not found";

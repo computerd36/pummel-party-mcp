@@ -1,4 +1,4 @@
-# pummel-party-mcp HTTP API (api v2, plugin 0.7.0)
+# pummel-party-mcp HTTP API (api v2, plugin 0.8.0)
 
 The BepInEx plugin `PummelPartyMcp.Plugin` runs inside Pummel Party and exposes the mod editor's state on a
 local HTTP endpoint. api v2 adds the guard layer, the always-on Workshop publish block and four mod lifecycle
@@ -9,7 +9,7 @@ additive) adds object, transform, component and property editing plus `undo`; se
 `stop_playtest` and `run_batch`, structured error details (`error.data`) and play-mode rules for every tool; see
 [Validation, playtest and batch](#validation-playtest-and-batch). Plugin 0.6.0 (still api v2, additive) adds playtest
 visibility: the read tools `get_playtest_state` and `get_playtest_events`, a small summary in `get_status.playtest`, and the
-capability `"playtestState"`; see [Playtest visibility](#playtest-visibility). Plugin 0.7.0 (still api v2, additive) adds the game-version gate (`GAME_VERSION_UNTESTED`, `[Safety] AcceptedGameVersion`, `gameVersionCheck`), the read tool `self_test`, and enforces the editor inspector's visibility rules in `set_property` / `set_properties`; see [Game-version gate](#game-version-gate), [`self_test`](#self_test-read) and [Inspector visibility rules](#inspector-visibility-rules-plugin-070). Write tools only ever act on `MCP_` mods; see
+capability `"playtestState"`; see [Playtest visibility](#playtest-visibility). Plugin 0.7.0 (still api v2, additive) adds the game-version gate (`GAME_VERSION_UNTESTED`, `[Safety] AcceptedGameVersion`, `gameVersionCheck`), the read tool `self_test`, and enforces the editor inspector's visibility rules in `set_property` / `set_properties`; see [Game-version gate](#game-version-gate), [`self_test`](#self_test-read) and [Inspector visibility rules](#inspector-visibility-rules-plugin-070). Plugin 0.8.0 (still api v2, additive) adds mod settings: `list_mod_settings`, `get_mod_settings`, `set_mod_settings` and `capture_preview_image`, the capability `"settings"`, and the settings rule tables; see [Mod settings](#mod-settings). Write tools only ever act on `MCP_` mods; see
 [Safety](#safety).
 
 ## Transport
@@ -253,6 +253,7 @@ running or ending (see [Play-mode behaviour](#play-mode-behaviour-of-every-tool)
 
 - `metadata` and `settings` are generic JSON trees of the objects' Unity-serialized fields (what `Meta.json` /
   `ModSettings.json` store). Triggers inside settings use the trigger shape of `get_action_graph`.
+- `settingsDetail` points to `get_mod_settings`, which returns every setting (also the ones this generic dump lacks: description, preview image, music and ambience as references, lighting and screen-effect values, board details) in the shapes `set_mod_settings` accepts; see [Mod settings](#mod-settings).
 - From the workshop item only `publishedFileId` (as a **string**, Steam ids are 64-bit) and `isPublished`
   (`publishedFileId != 256`) are exposed. **`"256"` is the "never published" sentinel**
   (`ModWorkshopItem.DefaultWorkshopID`), not a Workshop item: the game also uses it at runtime as the local id of every
@@ -1711,6 +1712,579 @@ Params: (address), and `type` and/or `parameters`.
 Result: the trigger as a `get_action_graph` entry plus `guid` (object scope), `clamped`, `previousTriggerType` and a
 `note` when the type changed, and the edit fields.
 
+## Mod settings
+
+Plugin 0.8.0 (api v2, additive, capability `"settings"`) reads and writes the settings the editor's **Mod Settings
+window** shows (the yellow `Minigame Settings` / `Board Settings` entry at the top of the Hierarchy): minigame and board
+details, minigame settings, player settings, music and ambience, lighting, screen effects, and for Board mods board
+size and camera. Four tools: `list_mod_settings` and `get_mod_settings` (read), `set_mod_settings` and
+`capture_preview_image` (write, guard OpenMod). The design notes are in `docs/architecture/06-mod-settings.md`.
+
+What the tools do **not** touch: the Workshop item (title, description, tags, visibility, published id, thumbnail files:
+`WorkshopItem.json`), `Data/Preview.jpg` (the editor's scene thumbnail, also the Workshop's fallback thumbnail), renaming
+or deleting mods, and every editor button that writes to disk (lighting profile export/delete, item "Generate Icon").
+`name` of the details sections is read-only for that reason. The minigame/board details the game shows are stored in
+their own files (`MinigameDefinitionData.json` / `MapDetails.json`), separate from the Workshop item.
+
+### How the editor applies settings, and what the plugin does about it
+
+The window's draw code clamps values and hides controls; the data classes have **no limits of their own**, and the draw
+code runs only while the group is expanded. The plugin therefore applies the same limits itself and reports them in
+`clamped`, refuses fields the editor never shows (or shows only under a condition that is false after the call's other
+values), and offers only the choices the UI offers. The rule table is `Core/SettingsRules.cs`; the tables
+[below](#settings-rule-tables) are generated from it (a test keeps them in sync) and `list_mod_settings` returns the same
+information per field. Settings have **no undo** in the editor and do not set its dirty flag: replies say
+`undoable: false` and return the previous values, and the plugin's own unsaved-edit tracking (`get_status.hasUnsavedEdits`)
+counts every settings change until `save_mod`.
+
+### `list_mod_settings` (read)
+
+| Param | Type | |
+|---|---|---|
+| `section` | string, optional | one section (case-insensitive); default all sections of the open mod's type |
+
+Needs a loaded mod in edit mode (`INVALID_STATE` during a playtest, like `get_open_mod`: the running mod is loaded from the
+saved files, not from the editor's objects). Minigame and Board mods have sections; BoardSpace and Item mods return
+`sections: []` and a `note` (BoardSpace has no settings window; Item details are not covered in 0.8.0: read them with
+`get_open_mod`). Reply: `{mod, modType, sections: [...], note}`; each section:
+
+```json
+{"name": "minigameSettings", "title": "Minigame Settings", "savedTo": "Data/ModSettings.json (written by save_mod)", "note": "...",
+ "fields": [{"name": "PointsToWin", "label": "Points to win", "type": "int", "shape": "integer", "writable": true,
+             "default": 5, "value": 5, "shown": false, "shownWhen": "EndConditions is ObtainPoints",
+             "limits": {"min": 1, "max": 1000000, "applied": "values outside are clamped and reported in set_mod_settings.clamped"}}],
+ "notShown": ["..."], "implied": ["..."], "refused": ["..."], "presets": ["Day", "..."]}
+```
+
+Per field: `name`, `label` (the UI label), `type` (`bool`, `int`, `float`, `string`, `enum`, `flags`, `choice`, `vector2`, `vector3`,
+`rect`, `color`, `assetRef`, `assetRef[]`, `preset`; a screen-effect parameter is `param(<type>)`), `shape` (the accepted JSON), `writable`
+(+ `reason` when not; `neverShown` when the editor has no control), `default` (a new mod's), `value` (current, same shape
+as `get_mod_settings`), `shown` (+ `shownWhen`: the condition in terms of other fields of the section; `null` = cannot be
+evaluated), `choices` (what the UI dropdown offers; presets: the editor's list), `assets` (`types`, `locations`
+`internal` = built-in / `external` = the mod's own, `nullAllowed`), `limits` (`min`/`max`, `source` for run-time limits,
+`rect` for the centre + size rule), `note`. Section extras: `notShown` (members of the same objects without a control),
+`implied` (side effects the UI performs), `refused` (value combinations the plugin refuses), `presets` (lighting and
+screen effects: the names the editor lists, ending with `Custom`), `unusablePresets` (listed but unselectable: the
+editor matches presets by their internal name), `saveWarning` (screen effects only, see below).
+
+### `get_mod_settings` (read)
+
+Same `section` param and rules. Reply: `{mod, modType, sections: {<name>: {values: {<field>: <value>}, readOnly: [names]}}, note}`.
+`values` use **exactly the shapes `set_mod_settings` accepts** (round trip; a test parses every writable field's output as
+input). Fields whose controlling condition is false are still returned (their stored values); parameters of absent screen
+effects are omitted; hidden members, `SpawnType` and the event triggers are not returned (`get_action_graph` with
+`scope: "playerSettings"` shows the triggers). Value shapes: bool; integer; number (floats are printed with float
+precision); string; enum name; flags `"Timer, ObtainPoints"` (names joined by `, `; `""` = none); `{x,y}`, `{x,y,z}`,
+`{x,y,width,height}`; color `{r,g,b,a}` (0-1); asset `null` or `{guid, name, assetType, location}` (input: `null`, a guid or
+`{guid}`); screen-effect parameter `{value, override}`.
+
+### `set_mod_settings` (write, guard OpenMod)
+
+| Param | Type | |
+|---|---|---|
+| `section` | string | a section of the open mod's type |
+| `values` | object | `{field: value, ...}`, 1-128 fields of that section |
+
+Errors: the guard's (`GUARD_NOT_TEST_MOD`, `INVALID_STATE` outside edit mode / with a dialog open, ...), `INVALID_PARAMS`.
+**All-or-nothing:** every value is parsed, checked and clamped before anything changes. `INVALID_PARAMS` (message names the
+field and the rule, `nothing was changed`) for: an unknown field; a field the editor never shows (`notShown`) or the plugin
+does not write (read-only, with reason); a wrong type; an enum/flag name or number that is not defined; a choice the UI
+does not offer; a preset name that is not in the editor's list; an asset reference to a missing asset, an asset of the
+wrong type (e.g. a mesh as music) or the wrong location; a **conditional field whose condition is false after applying the
+call's other values** (give the controlling field in the same call, e.g. `{"EndConditions": "Timer, ObtainPoints", "PointsToWin": 8}`);
+camera mode `Follow` without a Player Spawn in the scene (the editor throws on every draw then).
+
+Reply:
+
+```json
+{"section": "minigameSettings",
+ "applied": {"RoundDuration": {"type": "float", "value": 5}},
+ "previous": {"RoundDuration": 60},
+ "clamped": [{"field": "RoundDuration", "requested": 1, "applied": 5, "min": 5, "max": 1200, "reason": "the editor limits this value to this range"}],
+ "implied": [], "changed": true, "undoable": false,
+ "note": "mod settings have no undo in the editor: use 'previous' to revert by hand with set_mod_settings. The change is in memory until save_mod, which writes Data/ModSettings.json (written by save_mod).",
+ "warnings": ["..."], "validation": [{"severity": "warning", "message": "Missing minigame preview image."}]}
+```
+
+- `applied` is read back from the game after the write (the stored value, so clamps and normalisation show); implied
+  side effects are in it too (`"implied": true`) and in `implied` (`{field, value, why}`): ThirdPerson forces the camera
+  mode to Static; changing the board camera mode resets the distance (13 Perspective, 40 Orthographic) unless the call
+  sets the distance itself.
+- `previous` holds the values before the call (revert by hand: there is no undo). `changed` is false when every value
+  already was the stored one; then the mod is **not** marked as having unsaved edits.
+- `clamped`: what the UI's draw code would have clamped. `NumberOfRounds` 0 becomes 1 (the editor never lets 0 stand;
+  the validator only rejects 0 when it is written by other means).
+- `validation`: the settings-related messages of the editor's validator after the change (see the table at the end
+  of the rule tables), e.g. the Last Man Standing / respawn warning for values the UI can produce but the validator
+  dislikes. `null` + `validationError` when the validator could not run. Errors in `validation` do not undo the change.
+- `warnings`: screen effects: switching **from Custom to a preset while custom effects exist** (see below); lighting: custom
+  values are kept while a preset is selected.
+- A game exception in the middle of the write returns `INTERNAL` naming the fields already applied and the previous values.
+- The call is a write like any other: queued, guarded, committed at the point it changes the first value (`TIMEOUT` before
+  that means nothing changed and a retry is safe). One call = one write turn; there is no undo step.
+
+### Lighting and screen effects (presets and custom values)
+
+Both sections have a `preset` field (names from `list_mod_settings`, validated against the editor's own list; the last
+entry is `Custom`) and the custom fields, which the UI shows **only while `Custom` is selected**, so they are refused
+otherwise (select `Custom` in the same call or first).
+
+- Selecting a preset does what the editor's combo does: remembers the name, picks the preset object, assigns it to the
+  mod and applies it. Preset objects are shared caches: the plugin **never edits them**; custom values are written only to
+  the mod's own custom objects (`CustomLighting`, `CustomPostProcess`).
+- After every lighting change the plugin calls `ApplyLightingChangesToRenderSettings` once; after screen-effect changes it
+  toggles the scene view's post-processing layer once (what the editor does after adding/removing effects), so a
+  `screenshot` shows the result. Screen effects are visible only while the toolbar's **Post Processing** button is on.
+- **Save semantics.** `Lighting.json` always holds the custom lighting, so custom lighting survives a preset switch.
+  `PostProcessing.data` is written from the **active** effects: saving while a built-in screen-effects preset is selected
+  overwrites the custom effects on disk with the preset's, and they are gone after reopening the mod (in memory they
+  survive until then). The plugin never does this silently: switching from Custom to a preset while custom effects exist
+  adds a `warnings` entry, and `list_mod_settings` / `get_mod_settings` carry a `saveWarning` while that state exists.
+  Select `Custom` again before `save_mod` to keep the effects.
+- Screen effects: field `<effect>` (bool) adds (`true`) or removes (`false`, its values are lost) the effect: `ambientOcclusion`,
+  `bloom` (the game's ComputeBloom, labelled "Bloom"), `chromaticAberration`, `colorGrading`, `depthOfField`, `grain`,
+  `lensDistortion`, `vignette`; `<effect>.enabled` is its header checkbox; `<effect>.<parameter>` is `{value, override}`
+  (the editor ignores a value whose override is off): a bare value (`0.4`, `{r,g,b}`) sets the value **and** the override on,
+  `{"override": false}` switches it off, `{"value": 0.4, "override": false}` stores without applying. Slider parameters
+  are clamped to the `RangeAttribute` of the game's field, **read at run time** (0..10 if a field had none); parameters
+  the editor draws as free inputs are not clamped. Values the editor forces while an effect's header is open are
+  forced too (Color Grading `gradingMode` = LowDefinitionRange with override on; Vignette `mode` = Classic). The legacy
+  Bloom effect (only present in some presets, cannot be added in the editor) is not covered.
+- Presets whose internal name differs from their file name cannot be selected in the editor; they are listed under
+  `unusablePresets` and refused.
+
+### `capture_preview_image` (write, guard OpenMod)
+
+No params. Takes the editor's own screenshot of the scene view and makes it the minigame's / board's **in-game preview
+image** (the "Preview Image" under Minigame Details / Board Details; shown on the loading screen, ruleset and lobby).
+Exactly what happens:
+
+1. Refused (`INVALID_STATE`) with a dialog open, while a prefab is being edited, while the editor already takes a
+   screenshot, for mods other than Minigame/Board; guard as every write tool (edit mode, `MCP_` mod).
+2. `EditorSystem.TakeScreenGrab()` (the toolbar camera button / F10). At the end of the next frame the editor renders the
+   scene-view camera (gizmos and grid hidden for the moment, restored afterwards) into a 1920x1080 target and **writes
+   `Assets/Textures/Screenshot<N>.jpg`** (first free N) **inside the open sandbox mod's folder**, and its importer writes
+   the `Screenshot<N>.jpg.pmeta` next to it, then registers the texture as a mod asset. Nothing is written outside the
+   mod folder (the plugin checks the asset's path is inside it and refuses to assign otherwise). The selection is not
+   changed.
+3. The plugin waits (up to 12 s) for the new asset, assigns its texture as the preview image (same fields as the
+   picker, plus the guid the editor keeps for it) and marks the mod as having unsaved edits.
+
+Reply: `{asset: {guid, name, assetType, location, relativePath, fileExists, sizeBytes, width, height}, assignedTo:
+"details.previewImage", undoable: false, note}`. The **file exists on disk immediately** (also if you never save and
+reopen: it stays as an unused asset); the **assignment is in memory until `save_mod`**. `Data/Preview.jpg` and the Workshop
+item are not touched. `TIMEOUT`: nothing was assigned (check `list_assets` for a `Screenshot<N>` texture). Not allowed
+inside `run_batch` (several frames). `set_mod_settings` accepts any Texture2D asset guid (`previewImage`) too.
+
+### Board custom spaces and other limits
+
+`customSpaces.CustomSpacePrefabs` is **read-only**: board spaces store an *index* into this list (changing it re-points
+existing spaces) and the editor rebuilds the spaces through a static event that only its own window raises; the plugin
+does not raise it. Not covered in 0.8.0: Item mods (read with `get_open_mod`), BoardSpace mods (no settings window), the
+legacy Bloom effect, importing textures/audio (a later increment). Hidden members of the data classes (the `notShown` lists)
+are refused. Settings written while the editor's own settings window is open are re-clamped by the window on its next draw,
+and values the window would not show stay as written.
+
+### Settings rule tables
+
+Generated from `Core/SettingsRules.cs`. "Shown while" is the condition under which the editor draws the control;
+conditions are judged after applying the call's other values. Defaults are a new mod's.
+
+<!-- settings-rules:begin (generated from Core/SettingsRules.cs; a test keeps it in sync) -->
+
+**Minigame / details** (Minigame Details)
+
+Saved to: Data/MinigameDefinitionData.json (written by save_mod). The minigame's own description and presentation image (loading screen, ruleset, lobby). NOT the Workshop item: its title, description, tags, visibility and thumbnail are never touched. Use capture_preview_image to create a preview image from the scene.
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `name` | string | none | read-only: the name is the mod's name; renaming a mod is a separate editor action (Rename dialog: renames the folder and rewrites Meta.json and the Workshop item) that the plugin never performs |
+| `description` | string | A minigame mod. | multiline text, no length limit in the editor (the plugin accepts up to 16384 characters) |
+| `previewImage` | assetRef | none | asset type Texture2D, internal, external, null allowed; null = none (the validator warns: Missing minigame preview image). A guid from list_assets (type Texture2D) or the asset capture_preview_image created. |
+
+Not shown by the editor (refused): minigameNameToken, descriptionToken, minPlayers, maxPlayers, inputHelp.
+
+**Minigame / minigameSettings** (Minigame Settings)
+
+Saved to: Data/ModSettings.json (written by save_mod). How the minigame is played. The player type and all player options are in section playerSettings.
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `NumberOfRounds` | int | 1 | clamped 1..20; the validator requires at least 1; the UI clamps to 1..20 |
+| `EndConditions` | flags | Timer | flags: Timer, ObtainPoints, RemainingPlayersAlive, FinishMinigame; any combination; "" or "None" or 0 = no end condition (the UI's "Nothing") |
+| `PointsToWin` | int | 5 | shown while EndConditions is ObtainPoints; clamped 1..1000000 |
+| `RoundDuration` | float | 60 | shown while EndConditions is Timer; clamped 5..1200 |
+| `MinPlayersAlive` | int | 1 | shown while EndConditions is RemainingPlayersAlive; clamped 1..7 |
+| `PlacementCondition` | enum | MostPoints | choices: MostPoints, LeastPoints, FinishOrder, LastManStanding |
+| `ShowPlayerScore` | bool | true |  |
+| `OnlyShowCombinedTeamScoreInTeams` | bool | false | shown while ShowPlayerScore is on |
+| `SpawnType` | string | none | read-only: the editor has no control for it and the game ignores the value (it always uses PortalAbove) |
+
+**Minigame / playerSettings** (Player Settings)
+
+Saved to: Data/ModSettings.json (written by save_mod). The player type and every foldout of the Player Settings group. The six event triggers (weaponHitTrigger, tickTrigger, onDeathTrigger, onRespawnTrigger, onFirstSpawnTrigger, onRoundEndTrigger) are edited with the action tools (get_action_graph / add_action ... with scope "playerSettings"), not here. Changing the player type, canJump or canPunch also regenerates the controls help shown on the loading screen (the editor does so at save too).
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `ChosenPlayerType` | enum | TopDown | choices: ThirdPerson, TopDown, TwinStick; the UI offers ThirdPerson/TopDown in a combo and TwinStick as a checkbox under Movement (only while TopDown); all three are accepted |
+| `movementSpeed` | float | 6 | clamped 0..1000 |
+| `movementAcceleration` | float | 50 | clamped 0..1000 |
+| `movementDecelaration` | float | 50 | clamped 0..10000; the game's member name is spelled movementDecelaration |
+| `midAirMovementAcceleration` | float | 8 | clamped 0..1000 |
+| `playerGravity` | float | 25 | clamped -100..100; the UI shows playerGravity / 25 ("Gravity Scale", slider -4..4); this is the stored value |
+| `stepOffset` | float | 0.5 | clamped 0..1.75 |
+| `canJump` | bool | true |  |
+| `jumpSpeed` | float | 7 | shown while canJump is on; clamped 0..1000 |
+| `jumpCount` | int | 1 | shown while canJump is on; clamped 1..1001; the UI shows jumpCount - 1 as "Mid-air Jumps" (0..1000); this is the stored value |
+| `topDownCameraMode` | enum | Static | shown while ChosenPlayerType is TopDown or TwinStick; choices: Static, Follow, FollowAll; Follow needs a Player Spawn object in the scene (the editor throws on every draw otherwise); with ThirdPerson the editor forces Static |
+| `topDownCameraDistance` | float | 10 | shown while ChosenPlayerType is TopDown or TwinStick; clamped 1..40 |
+| `topDownCameraViewAngle` | float | 35 | shown while ChosenPlayerType is TopDown or TwinStick; clamped 0..90 |
+| `topDownCameraPositionOffset` | vector3 | {x: 0, y: 0, z: 0} | shown while ChosenPlayerType is TopDown or TwinStick |
+| `topDownCameraFollowAllType` | enum | Square | shown while ChosenPlayerType is TopDown or TwinStick and topDownCameraMode is FollowAll; choices: Circle, Square |
+| `topDownCamerafollowAllAreaRect` | rect | {x: -5, y: -5, width: 10, height: 10} | shown while ChosenPlayerType is TopDown or TwinStick and topDownCameraMode is FollowAll; width and height clamped 0..2000, centre kept within +-(1000 - half size); for the Circle shape the height is set to the width; the member's name has a lower-case f: topDownCamerafollowAllAreaRect |
+| `maxXMoveDist` | float | 3 | shown while ChosenPlayerType is TopDown or TwinStick and topDownCameraMode is FollowAll and topDownCameraFollowAllType is Square |
+| `maxZMoveDist` | float | 3 | shown while ChosenPlayerType is TopDown or TwinStick and topDownCameraMode is FollowAll and topDownCameraFollowAllType is Square |
+| `sphereMaxMoveDist` | float | 3 | shown while ChosenPlayerType is TopDown or TwinStick and topDownCameraMode is FollowAll and topDownCameraFollowAllType is Circle |
+| `canPunch` | bool | false |  |
+| `punchRechargeSpeed` | float | 0.75 | shown while canPunch is on; clamped 0.1..1000 |
+| `punchDamage` | int | 1 | shown while canPunch is on; clamped -1000..1000 |
+| `punchStunsTarget` | bool | false | shown while canPunch is on |
+| `punchStunDuration` | float | 1 | shown while canPunch is on and punchStunsTarget is on; clamped 0.1..1000 |
+| `stunImmunityLength` | float | 1 | clamped 0..1000 |
+| `respawnEnabled` | bool | true |  |
+| `respawnTime` | float | 3 | shown while respawnEnabled is on; clamped 0..1000 |
+| `respawnInvulnerableTime` | float | 1 | shown while respawnEnabled is on; clamped 0..1000 |
+| `useHealth` | bool | false |  |
+| `showHealthBar` | bool | false | shown while useHealth is on |
+| `health` | int | 100 | shown while useHealth is on; clamped 1..1000 |
+| `showNameTags` | bool | true |  |
+| `nameTagType` | enum | WorldSpaceWorldSizeOccluded | shown while showNameTags is on; choices: WorldSpaceScreenSize, WorldSpaceWorldSize, WorldSpaceWorldSizeOccluded; UI labels: WorldSpaceScreenSize = "Screen Space", WorldSpaceWorldSize = "World Space", WorldSpaceWorldSizeOccluded = "True World Space"; "no name tags" is showNameTags = false |
+| `weaponHitTrigger` | string | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
+| `tickTrigger` | string | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
+| `onDeathTrigger` | string | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
+| `onRespawnTrigger` | string | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
+| `onFirstSpawnTrigger` | string | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
+| `onRoundEndTrigger` | string | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
+
+Implied: the editor forces topDownCameraMode to Static for the ThirdPerson player type.
+
+Refused: `topDownCameraMode` = Follow unless the scene has a Player Spawn object.
+
+Not shown by the editor (refused): coyoteTime, shootDistance, shootRechargeSpeed, shotSpreadVertical, shotSpreadHorizontal, bulletsPerShot, firstShotCentred, firingPattern, respawnAnimationType, hitTrigger.
+
+**Minigame / music** (Music & Ambient Sound)
+
+Saved to: Data/ModSettings.json (written by save_mod). Background track and ambience of the minigame. Clips are assets: a built-in one (list_assets includeBuiltIn, type AudioClip) or one imported into the mod.
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `Music` | assetRef | 13dbf0ac-803d-49d1-997f-0a559bd43061 | asset type AudioClip, internal, external, null allowed; null = no music; a game property (stores the clip's asset guid) |
+| `MusicVolume` | float | 0.3 | clamped 0..1 |
+| `Ambience` | assetRef | 90abde3b-7f29-43ee-80c9-40ec418d5993 | asset type AudioClip, internal, external, null allowed; null = no ambience |
+| `AmbienceVolume` | float | 0.5 | clamped 0..1 |
+
+**Minigame / lighting** (Lighting)
+
+Saved to: Data/Meta.json (selected preset) and Data/Lighting.json (the custom values, always) (written by save_mod). Pick a preset by name, or "Custom" and edit the custom values. Custom values live in the mod's own custom lighting object and survive a preset switch (Lighting.json always holds them); the preset objects themselves are never modified. After a change the plugin applies the lighting to the editor scene once, so a screenshot shows it. Presets are listed by list_mod_settings (the built-in files of the game).
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `preset` | preset | Default | choices: the preset names of list_mod_settings (built-in files plus "Custom"); one of the names list_mod_settings shows (the last entry is "Custom"); anything else is refused (the editor would silently fall back to default lighting) |
+| `stars` | bool | false | shown while preset is Custom |
+| `topColor` | color | {r: 0.380392, g: 0.670588, b: 1, a: 1} | shown while preset is Custom |
+| `horizonColor` | color | {r: 0.360784, g: 0.654902, b: 0.882353, a: 1} | shown while preset is Custom |
+| `groundColor` | color | {r: 0.160784, g: 0.25098, b: 0.321569, a: 1} | shown while preset is Custom |
+| `haloColor` | color | {r: 0.709804, g: 0.670588, b: 0.568627, a: 1} | shown while preset is Custom |
+| `haloExponent` | float | 6 | shown while preset is Custom; clamped 0..32 |
+| `haloStrength` | float | 1 | shown while preset is Custom; clamped 0.1..4 |
+| `globalLightEnabled` | bool | true | shown while preset is Custom |
+| `globalLightRotation` | vector3 | {x: 130, y: 25, z: 0} | shown while preset is Custom and globalLightEnabled is on |
+| `globalLightColor` | color | {r: 1, g: 0.956863, b: 0.839216, a: 1} | shown while preset is Custom and globalLightEnabled is on |
+| `globalLightIntensity` | float | 0.6 | shown while preset is Custom and globalLightEnabled is on |
+| `globalShadowItensity` | float | 1 | shown while preset is Custom and globalLightEnabled is on; clamped 0..1; the game's member name is spelled globalShadowItensity |
+| `globalLightShadows` | enum | Soft | shown while preset is Custom and globalLightEnabled is on; choices: None, Hard, Soft |
+| `ambientMode` | enum | Skybox | shown while preset is Custom; choices: Skybox, Gradient, Color |
+| `ambientIntensity` | float | 0.7 | shown while preset is Custom and ambientMode is Skybox |
+| `ambientSkyColor` | color | {r: 0.211765, g: 0.227451, b: 0.258824, a: 1} | shown while preset is Custom and ambientMode is Gradient or Color; labelled "Ambient Color" in Color mode |
+| `ambientEquatorColor` | color | {r: 0.113725, g: 0.12549, b: 0.133333, a: 1} | shown while preset is Custom and ambientMode is Gradient |
+| `ambientGroundColor` | color | {r: 0.047059, g: 0.043137, b: 0.035294, a: 1} | shown while preset is Custom and ambientMode is Gradient |
+| `cloudShadows` | bool | false | shown while preset is Custom and globalLightShadows is not None |
+| `cloudSpeed1` | float | 0.12 | shown while preset is Custom and globalLightShadows is not None and cloudShadows is on |
+| `cloudSpeed2` | float | 0.1375 | shown while preset is Custom and globalLightShadows is not None and cloudShadows is on |
+| `cloudIntensity` | float | 0.7 | shown while preset is Custom and globalLightShadows is not None and cloudShadows is on; clamped 0..1 |
+| `cloudStrength` | float | 1 | shown while preset is Custom and globalLightShadows is not None and cloudShadows is on; clamped 0..5 |
+| `cloudScale` | float | 200 | shown while preset is Custom and globalLightShadows is not None and cloudShadows is on |
+| `fog` | bool | false | shown while preset is Custom |
+| `fogColor` | color | {r: 0.5, g: 0.5, b: 0.5, a: 1} | shown while preset is Custom and fog is on |
+| `fogMode` | enum | Linear | shown while preset is Custom and fog is on; choices: Linear, Exponential, ExponentialSquared |
+| `fogEndDistance` | float | 300 | shown while preset is Custom and fog is on and fogMode is Linear |
+| `fogStartDistance` | float | 0 | shown while preset is Custom and fog is on and fogMode is Linear |
+| `fogDensity` | float | 0.01 | shown while preset is Custom and fog is on and fogMode is not Linear |
+| `shadowDistance` | float | 200 | shown while preset is Custom; clamped 5..250 |
+| `shadowCascades` | choice | Four | shown while preset is Custom; choices: Zero, Two, Four; stored as the numbers 0, 2 or 4 |
+
+Not shown by the editor (refused): version, presetName, shadowCascade4Split, shadowProjection, shadowCascade2Split, defaultReflectionMode, reflectionIntensity.
+
+**Minigame / screenEffects** (Screen Effects)
+
+Saved to: Data/Meta.json (selected preset) and Data/PostProcessing.data (the ACTIVE effects: the preset's values while a preset is selected) (written by save_mod). Pick a preset by name, or "Custom" and add / remove effects and edit their parameters. Each parameter is {value, override}: the editor ignores a value whose override is off, so a bare value in set_mod_settings sets the value AND switches the override on; {override: false} switches it off. SAVE WARNING: PostProcessing.data is written from the active effects, so saving while a built-in preset is selected overwrites the custom effects on disk with the preset's values (they survive in memory until the mod is reopened; select Custom again before save_mod to keep them). The effects are visible in the scene view only while the toolbar's Post Processing button is on; the plugin refreshes the effect layer after a change. The legacy Bloom effect (only present in some presets) cannot be added and is not covered.
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `preset` | preset | Default | choices: the preset names of list_mod_settings (built-in files plus "Custom"); one of the names list_mod_settings shows (the last entry is "Custom"); anything else is refused (the editor would throw) |
+| `ambientOcclusion` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `ambientOcclusion.enabled` | bool | true | shown while preset is Custom and ambientOcclusion is on; the effect's on/off switch |
+| `ambientOcclusion.mode` | param(enum) | (game default) | shown while preset is Custom and ambientOcclusion is on; choices: ScalableAmbientObscurance, MultiScaleVolumetricObscurance |
+| `ambientOcclusion.intensity` | param(float) | (game default) | shown while preset is Custom and ambientOcclusion is on; clamped 0..4 (slider limits read from the game's Range attribute) |
+| `ambientOcclusion.radius` | param(float) | (game default) | shown while preset is Custom and ambientOcclusion is on and ambientOcclusion.mode is ScalableAmbientObscurance; no limit (free input) |
+| `ambientOcclusion.thicknessModifier` | param(float) | (game default) | shown while preset is Custom and ambientOcclusion is on and ambientOcclusion.mode is not ScalableAmbientObscurance; clamped 1..10 (slider limits read from the game's Range attribute) |
+| `ambientOcclusion.color` | param(color) | (game default) | shown while preset is Custom and ambientOcclusion is on |
+| `ambientOcclusion.ambientOnly` | param(bool) | (game default) | shown while preset is Custom and ambientOcclusion is on |
+| `bloom` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `bloom.enabled` | bool | true | shown while preset is Custom and bloom is on; the effect's on/off switch |
+| `bloom.HighQualityBloom` | param(bool) | (game default) | shown while preset is Custom and bloom is on |
+| `bloom.BloomStrength` | param(float) | (game default) | shown while preset is Custom and bloom is on; no limit (free input) |
+| `bloom.BloomThreshold` | param(float) | (game default) | shown while preset is Custom and bloom is on; clamped 0..2 (slider limits read from the game's Range attribute) |
+| `bloom.BloomUpsampleFactor` | param(float) | (game default) | shown while preset is Custom and bloom is on; no limit (free input) |
+| `bloom.color` | param(color) | (game default) | shown while preset is Custom and bloom is on |
+| `chromaticAberration` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `chromaticAberration.enabled` | bool | true | shown while preset is Custom and chromaticAberration is on; the effect's on/off switch |
+| `chromaticAberration.intensity` | param(float) | (game default) | shown while preset is Custom and chromaticAberration is on; no limit (free input) |
+| `colorGrading` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `colorGrading.enabled` | bool | true | shown while preset is Custom and colorGrading is on; the effect's on/off switch |
+| `colorGrading.temperature` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -100..100 (slider limits read from the game's Range attribute) |
+| `colorGrading.tint` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -100..100 (slider limits read from the game's Range attribute) |
+| `colorGrading.colorFilter` | param(color) | (game default) | shown while preset is Custom and colorGrading is on |
+| `colorGrading.hueShift` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -180..180 (slider limits read from the game's Range attribute) |
+| `colorGrading.saturation` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -100..100 (slider limits read from the game's Range attribute) |
+| `colorGrading.brightness` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -100..100 (slider limits read from the game's Range attribute) |
+| `colorGrading.contrast` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -100..100 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerRedOutRedIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerRedOutGreenIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerRedOutBlueIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerGreenOutRedIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerGreenOutGreenIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerGreenOutBlueIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerBlueOutRedIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerBlueOutGreenIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerBlueOutBlueIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `depthOfField` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `depthOfField.enabled` | bool | true | shown while preset is Custom and depthOfField is on; the effect's on/off switch |
+| `depthOfField.focusDistance` | param(float) | (game default) | shown while preset is Custom and depthOfField is on; no limit (free input) |
+| `depthOfField.aperture` | param(float) | (game default) | shown while preset is Custom and depthOfField is on; clamped 0.05..32 (slider limits read from the game's Range attribute) |
+| `depthOfField.focalLength` | param(float) | (game default) | shown while preset is Custom and depthOfField is on; clamped 1..300 (slider limits read from the game's Range attribute) |
+| `depthOfField.kernelSize` | param(enum) | (game default) | shown while preset is Custom and depthOfField is on; choices: Small, Medium, Large, VeryLarge |
+| `grain` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `grain.enabled` | bool | true | shown while preset is Custom and grain is on; the effect's on/off switch |
+| `grain.colored` | param(bool) | (game default) | shown while preset is Custom and grain is on |
+| `grain.intensity` | param(float) | (game default) | shown while preset is Custom and grain is on; clamped 0..1 (slider limits read from the game's Range attribute) |
+| `grain.size` | param(float) | (game default) | shown while preset is Custom and grain is on; clamped 0.3..3 (slider limits read from the game's Range attribute) |
+| `grain.lumContrib` | param(float) | (game default) | shown while preset is Custom and grain is on; clamped 0..1 (slider limits read from the game's Range attribute) |
+| `lensDistortion` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `lensDistortion.enabled` | bool | true | shown while preset is Custom and lensDistortion is on; the effect's on/off switch |
+| `lensDistortion.intensity` | param(float) | (game default) | shown while preset is Custom and lensDistortion is on; clamped -100..100 (slider limits read from the game's Range attribute) |
+| `lensDistortion.intensityX` | param(float) | (game default) | shown while preset is Custom and lensDistortion is on; clamped 0..1 (slider limits read from the game's Range attribute) |
+| `lensDistortion.intensityY` | param(float) | (game default) | shown while preset is Custom and lensDistortion is on; clamped 0..1 (slider limits read from the game's Range attribute) |
+| `lensDistortion.centerX` | param(float) | (game default) | shown while preset is Custom and lensDistortion is on; clamped -1..1 (slider limits read from the game's Range attribute) |
+| `lensDistortion.centerY` | param(float) | (game default) | shown while preset is Custom and lensDistortion is on; clamped -1..1 (slider limits read from the game's Range attribute) |
+| `lensDistortion.scale` | param(float) | (game default) | shown while preset is Custom and lensDistortion is on; clamped 0.01..5 (slider limits read from the game's Range attribute) |
+| `vignette` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `vignette.enabled` | bool | true | shown while preset is Custom and vignette is on; the effect's on/off switch |
+| `vignette.color` | param(color) | (game default) | shown while preset is Custom and vignette is on |
+| `vignette.center` | param(vector2) | (game default) | shown while preset is Custom and vignette is on |
+| `vignette.intensity` | param(float) | (game default) | shown while preset is Custom and vignette is on; clamped 0..1 (slider limits read from the game's Range attribute) |
+| `vignette.smoothness` | param(float) | (game default) | shown while preset is Custom and vignette is on; clamped 0.01..1 (slider limits read from the game's Range attribute) |
+| `vignette.roundness` | param(float) | (game default) | shown while preset is Custom and vignette is on; clamped 0..1 (slider limits read from the game's Range attribute) |
+| `vignette.rounded` | param(bool) | (game default) | shown while preset is Custom and vignette is on |
+
+**Board / details** (Board Details)
+
+Saved to: Data/MapDetails.json (written by save_mod). The board's own description and presentation image (lobby and in game). NOT the Workshop item: its title, description, tags, visibility and thumbnail are never touched. Use capture_preview_image to create a preview image from the scene.
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `name` | string | none | read-only: the name is the mod's name; renaming a mod is a separate editor action that the plugin never performs |
+| `description` | string | A board mod. |  |
+| `previewImage` | assetRef | none | asset type Texture2D, internal, external, null allowed; null = none (the validator warns: Missing board preview image) |
+| `defaultGoalChestCount` | int | 1 | clamped 1..8; players' rulesets can override it |
+| `supportsWeaponCache` | bool | true |  |
+| `useCustomChestShuffleLocation` | bool | false |  |
+| `chestShuffleLocation` | vector3 | {x: 0, y: 0, z: 0} | world space; the editor lets you edit it even while the checkbox is off (it only greys it out), so it has no condition here either |
+
+Not shown by the editor (refused): sceneName, overrideSpacePrefabs, overrideSpace, spacePrefabOverrides.
+
+**Board / customSpaces** (Custom Spaces)
+
+Saved to: Data/ModSettings.json (written by save_mod). The list of custom board space prefabs. Board spaces store an INDEX into this list, so adding, removing or reordering entries re-points existing spaces; the editor also rebuilds the spaces through an event that only its own window raises. Read-only in 0.8.0.
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `CustomSpacePrefabs` | assetRef[] | none | read-only: index-based list whose change event is raised only by the editor's own settings window; the plugin does not write it (edit it in the editor); asset type PummelPrefab, external |
+
+**Board / boardSize** (Board Size)
+
+Saved to: Data/ModSettings.json (UseCustomBoardSize) and Data/MapDetails.json (mapExtents) (written by save_mod). Without a custom size the editor recomputes the extents from the board nodes at every save (bounding box plus a margin), so writing them is only meaningful with UseCustomBoardSize on.
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `UseCustomBoardSize` | bool | false |  |
+| `mapExtents` | rect | {x: -20, y: -20, width: 40, height: 40} | shown while UseCustomBoardSize is on; width and height clamped 0..2000, centre kept within +-(1000 - half size); {x, y, width, height} with x/y the corner (the UI edits size and centre); the default shown is a new mod's |
+
+**Board / camera** (Camera Settings)
+
+Saved to: Data/ModSettings.json (written by save_mod). How the camera views the board. Changing CameraMode also resets CameraDistance (13 for Perspective, 40 for Orthographic), as the editor does.
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `CameraViewAngle` | float | 37.5 | clamped 14..90 |
+| `CameraMode` | choice | Perspective | choices: Perspective, Orthographic |
+| `CameraFov` | float | 60 | shown while CameraMode is Perspective; clamped 30..90 |
+| `CameraDistance` | float | 13 | shown while CameraMode is Perspective; clamped 6..20 |
+| `CameraSize` | float | 5 | shown while CameraMode is Orthographic; clamped 4..10 |
+
+Implied: changing the camera mode resets the distance (13 Perspective, 40 Orthographic).
+
+**Board / music** (Music & Ambient Sound)
+
+Saved to: Data/MapDetails.json (written by save_mod). Music and ambient clips of the board (assets, built-in or imported). The validator warns when a clip is set and its volume is very low.
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `Music` | assetRef | 3ac2bff4-9bc6-406e-8e6f-b725dc69e08a | asset type AudioClip, internal, external, null allowed; null = no music |
+| `MusicVolume` | float | 0.3 | clamped 0..1 |
+| `Ambience` | assetRef | 05f5b5c8-5190-49d7-ad7a-f154db4e4f29 | asset type AudioClip, internal, external, null allowed; null = no ambience |
+| `AmbienceVolume` | float | 0.5 | clamped 0..1 |
+
+**Board / lighting** (Lighting)
+
+Saved to: Data/Meta.json (selected preset) and Data/Lighting.json (the custom values, always) (written by save_mod). Pick a preset by name, or "Custom" and edit the custom values. Custom values live in the mod's own custom lighting object and survive a preset switch (Lighting.json always holds them); the preset objects themselves are never modified. After a change the plugin applies the lighting to the editor scene once, so a screenshot shows it. Presets are listed by list_mod_settings (the built-in files of the game).
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `preset` | preset | Default | choices: the preset names of list_mod_settings (built-in files plus "Custom"); one of the names list_mod_settings shows (the last entry is "Custom"); anything else is refused (the editor would silently fall back to default lighting) |
+| `stars` | bool | false | shown while preset is Custom |
+| `topColor` | color | {r: 0.380392, g: 0.670588, b: 1, a: 1} | shown while preset is Custom |
+| `horizonColor` | color | {r: 0.360784, g: 0.654902, b: 0.882353, a: 1} | shown while preset is Custom |
+| `groundColor` | color | {r: 0.160784, g: 0.25098, b: 0.321569, a: 1} | shown while preset is Custom |
+| `haloColor` | color | {r: 0.709804, g: 0.670588, b: 0.568627, a: 1} | shown while preset is Custom |
+| `haloExponent` | float | 6 | shown while preset is Custom; clamped 0..32 |
+| `haloStrength` | float | 1 | shown while preset is Custom; clamped 0.1..4 |
+| `globalLightEnabled` | bool | true | shown while preset is Custom |
+| `globalLightRotation` | vector3 | {x: 130, y: 25, z: 0} | shown while preset is Custom and globalLightEnabled is on |
+| `globalLightColor` | color | {r: 1, g: 0.956863, b: 0.839216, a: 1} | shown while preset is Custom and globalLightEnabled is on |
+| `globalLightIntensity` | float | 0.6 | shown while preset is Custom and globalLightEnabled is on |
+| `globalShadowItensity` | float | 1 | shown while preset is Custom and globalLightEnabled is on; clamped 0..1; the game's member name is spelled globalShadowItensity |
+| `globalLightShadows` | enum | Soft | shown while preset is Custom and globalLightEnabled is on; choices: None, Hard, Soft |
+| `ambientMode` | enum | Skybox | shown while preset is Custom; choices: Skybox, Gradient, Color |
+| `ambientIntensity` | float | 0.7 | shown while preset is Custom and ambientMode is Skybox |
+| `ambientSkyColor` | color | {r: 0.211765, g: 0.227451, b: 0.258824, a: 1} | shown while preset is Custom and ambientMode is Gradient or Color; labelled "Ambient Color" in Color mode |
+| `ambientEquatorColor` | color | {r: 0.113725, g: 0.12549, b: 0.133333, a: 1} | shown while preset is Custom and ambientMode is Gradient |
+| `ambientGroundColor` | color | {r: 0.047059, g: 0.043137, b: 0.035294, a: 1} | shown while preset is Custom and ambientMode is Gradient |
+| `cloudShadows` | bool | false | shown while preset is Custom and globalLightShadows is not None |
+| `cloudSpeed1` | float | 0.12 | shown while preset is Custom and globalLightShadows is not None and cloudShadows is on |
+| `cloudSpeed2` | float | 0.1375 | shown while preset is Custom and globalLightShadows is not None and cloudShadows is on |
+| `cloudIntensity` | float | 0.7 | shown while preset is Custom and globalLightShadows is not None and cloudShadows is on; clamped 0..1 |
+| `cloudStrength` | float | 1 | shown while preset is Custom and globalLightShadows is not None and cloudShadows is on; clamped 0..5 |
+| `cloudScale` | float | 200 | shown while preset is Custom and globalLightShadows is not None and cloudShadows is on |
+| `fog` | bool | false | shown while preset is Custom |
+| `fogColor` | color | {r: 0.5, g: 0.5, b: 0.5, a: 1} | shown while preset is Custom and fog is on |
+| `fogMode` | enum | Linear | shown while preset is Custom and fog is on; choices: Linear, Exponential, ExponentialSquared |
+| `fogEndDistance` | float | 300 | shown while preset is Custom and fog is on and fogMode is Linear |
+| `fogStartDistance` | float | 0 | shown while preset is Custom and fog is on and fogMode is Linear |
+| `fogDensity` | float | 0.01 | shown while preset is Custom and fog is on and fogMode is not Linear |
+| `shadowDistance` | float | 200 | shown while preset is Custom; clamped 5..250 |
+| `shadowCascades` | choice | Four | shown while preset is Custom; choices: Zero, Two, Four; stored as the numbers 0, 2 or 4 |
+
+Not shown by the editor (refused): version, presetName, shadowCascade4Split, shadowProjection, shadowCascade2Split, defaultReflectionMode, reflectionIntensity.
+
+**Board / screenEffects** (Screen Effects)
+
+Saved to: Data/Meta.json (selected preset) and Data/PostProcessing.data (the ACTIVE effects: the preset's values while a preset is selected) (written by save_mod). Pick a preset by name, or "Custom" and add / remove effects and edit their parameters. Each parameter is {value, override}: the editor ignores a value whose override is off, so a bare value in set_mod_settings sets the value AND switches the override on; {override: false} switches it off. SAVE WARNING: PostProcessing.data is written from the active effects, so saving while a built-in preset is selected overwrites the custom effects on disk with the preset's values (they survive in memory until the mod is reopened; select Custom again before save_mod to keep them). The effects are visible in the scene view only while the toolbar's Post Processing button is on; the plugin refreshes the effect layer after a change. The legacy Bloom effect (only present in some presets) cannot be added and is not covered.
+
+| Field | Type | Default | Rule |
+|---|---|---|---|
+| `preset` | preset | Default | choices: the preset names of list_mod_settings (built-in files plus "Custom"); one of the names list_mod_settings shows (the last entry is "Custom"); anything else is refused (the editor would throw) |
+| `ambientOcclusion` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `ambientOcclusion.enabled` | bool | true | shown while preset is Custom and ambientOcclusion is on; the effect's on/off switch |
+| `ambientOcclusion.mode` | param(enum) | (game default) | shown while preset is Custom and ambientOcclusion is on; choices: ScalableAmbientObscurance, MultiScaleVolumetricObscurance |
+| `ambientOcclusion.intensity` | param(float) | (game default) | shown while preset is Custom and ambientOcclusion is on; clamped 0..4 (slider limits read from the game's Range attribute) |
+| `ambientOcclusion.radius` | param(float) | (game default) | shown while preset is Custom and ambientOcclusion is on and ambientOcclusion.mode is ScalableAmbientObscurance; no limit (free input) |
+| `ambientOcclusion.thicknessModifier` | param(float) | (game default) | shown while preset is Custom and ambientOcclusion is on and ambientOcclusion.mode is not ScalableAmbientObscurance; clamped 1..10 (slider limits read from the game's Range attribute) |
+| `ambientOcclusion.color` | param(color) | (game default) | shown while preset is Custom and ambientOcclusion is on |
+| `ambientOcclusion.ambientOnly` | param(bool) | (game default) | shown while preset is Custom and ambientOcclusion is on |
+| `bloom` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `bloom.enabled` | bool | true | shown while preset is Custom and bloom is on; the effect's on/off switch |
+| `bloom.HighQualityBloom` | param(bool) | (game default) | shown while preset is Custom and bloom is on |
+| `bloom.BloomStrength` | param(float) | (game default) | shown while preset is Custom and bloom is on; no limit (free input) |
+| `bloom.BloomThreshold` | param(float) | (game default) | shown while preset is Custom and bloom is on; clamped 0..2 (slider limits read from the game's Range attribute) |
+| `bloom.BloomUpsampleFactor` | param(float) | (game default) | shown while preset is Custom and bloom is on; no limit (free input) |
+| `bloom.color` | param(color) | (game default) | shown while preset is Custom and bloom is on |
+| `chromaticAberration` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `chromaticAberration.enabled` | bool | true | shown while preset is Custom and chromaticAberration is on; the effect's on/off switch |
+| `chromaticAberration.intensity` | param(float) | (game default) | shown while preset is Custom and chromaticAberration is on; no limit (free input) |
+| `colorGrading` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `colorGrading.enabled` | bool | true | shown while preset is Custom and colorGrading is on; the effect's on/off switch |
+| `colorGrading.temperature` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -100..100 (slider limits read from the game's Range attribute) |
+| `colorGrading.tint` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -100..100 (slider limits read from the game's Range attribute) |
+| `colorGrading.colorFilter` | param(color) | (game default) | shown while preset is Custom and colorGrading is on |
+| `colorGrading.hueShift` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -180..180 (slider limits read from the game's Range attribute) |
+| `colorGrading.saturation` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -100..100 (slider limits read from the game's Range attribute) |
+| `colorGrading.brightness` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -100..100 (slider limits read from the game's Range attribute) |
+| `colorGrading.contrast` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -100..100 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerRedOutRedIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerRedOutGreenIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerRedOutBlueIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerGreenOutRedIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerGreenOutGreenIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerGreenOutBlueIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerBlueOutRedIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerBlueOutGreenIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `colorGrading.mixerBlueOutBlueIn` | param(float) | (game default) | shown while preset is Custom and colorGrading is on; clamped -200..200 (slider limits read from the game's Range attribute) |
+| `depthOfField` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `depthOfField.enabled` | bool | true | shown while preset is Custom and depthOfField is on; the effect's on/off switch |
+| `depthOfField.focusDistance` | param(float) | (game default) | shown while preset is Custom and depthOfField is on; no limit (free input) |
+| `depthOfField.aperture` | param(float) | (game default) | shown while preset is Custom and depthOfField is on; clamped 0.05..32 (slider limits read from the game's Range attribute) |
+| `depthOfField.focalLength` | param(float) | (game default) | shown while preset is Custom and depthOfField is on; clamped 1..300 (slider limits read from the game's Range attribute) |
+| `depthOfField.kernelSize` | param(enum) | (game default) | shown while preset is Custom and depthOfField is on; choices: Small, Medium, Large, VeryLarge |
+| `grain` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `grain.enabled` | bool | true | shown while preset is Custom and grain is on; the effect's on/off switch |
+| `grain.colored` | param(bool) | (game default) | shown while preset is Custom and grain is on |
+| `grain.intensity` | param(float) | (game default) | shown while preset is Custom and grain is on; clamped 0..1 (slider limits read from the game's Range attribute) |
+| `grain.size` | param(float) | (game default) | shown while preset is Custom and grain is on; clamped 0.3..3 (slider limits read from the game's Range attribute) |
+| `grain.lumContrib` | param(float) | (game default) | shown while preset is Custom and grain is on; clamped 0..1 (slider limits read from the game's Range attribute) |
+| `lensDistortion` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `lensDistortion.enabled` | bool | true | shown while preset is Custom and lensDistortion is on; the effect's on/off switch |
+| `lensDistortion.intensity` | param(float) | (game default) | shown while preset is Custom and lensDistortion is on; clamped -100..100 (slider limits read from the game's Range attribute) |
+| `lensDistortion.intensityX` | param(float) | (game default) | shown while preset is Custom and lensDistortion is on; clamped 0..1 (slider limits read from the game's Range attribute) |
+| `lensDistortion.intensityY` | param(float) | (game default) | shown while preset is Custom and lensDistortion is on; clamped 0..1 (slider limits read from the game's Range attribute) |
+| `lensDistortion.centerX` | param(float) | (game default) | shown while preset is Custom and lensDistortion is on; clamped -1..1 (slider limits read from the game's Range attribute) |
+| `lensDistortion.centerY` | param(float) | (game default) | shown while preset is Custom and lensDistortion is on; clamped -1..1 (slider limits read from the game's Range attribute) |
+| `lensDistortion.scale` | param(float) | (game default) | shown while preset is Custom and lensDistortion is on; clamped 0.01..5 (slider limits read from the game's Range attribute) |
+| `vignette` | bool | false | shown while preset is Custom; true adds the effect (Add Effect menu), false removes it (closing its header; its values are lost) |
+| `vignette.enabled` | bool | true | shown while preset is Custom and vignette is on; the effect's on/off switch |
+| `vignette.color` | param(color) | (game default) | shown while preset is Custom and vignette is on |
+| `vignette.center` | param(vector2) | (game default) | shown while preset is Custom and vignette is on |
+| `vignette.intensity` | param(float) | (game default) | shown while preset is Custom and vignette is on; clamped 0..1 (slider limits read from the game's Range attribute) |
+| `vignette.smoothness` | param(float) | (game default) | shown while preset is Custom and vignette is on; clamped 0.01..1 (slider limits read from the game's Range attribute) |
+| `vignette.roundness` | param(float) | (game default) | shown while preset is Custom and vignette is on; clamped 0..1 (slider limits read from the game's Range attribute) |
+| `vignette.rounded` | param(bool) | (game default) | shown while preset is Custom and vignette is on |
+
+**Settings-related validator messages**
+
+| Mod | Section | Message |
+|---|---|---|
+| Minigame | details | Empty minigame description. |
+| Minigame | details | Missing minigame preview image. |
+| Minigame | minigameSettings | Number of rounds must be greater than zero |
+| Minigame | playerSettings | Respawns are enabled with Last Man Standing end condition. |
+| Minigame | minigameSettings | Respawns are enabled with Last Man Standing end condition. |
+| Board | details | Empty board description. |
+| Board | details | Missing board preview image. |
+| Board | music | You have music set but the volume is very low. |
+| Board | music | You have ambient sound set but the volume is very low. |
+
+<!-- settings-rules:end -->
+
 ## Validation, playtest and batch
 
 Increment 4. Read tool `validate_mod`; write tools `start_playtest`, `stop_playtest`, `run_batch`. Plugin 0.6.0 adds the read tools
@@ -2114,8 +2688,8 @@ resolve (they would read as `registered: false`).
 | `get_hierarchy` | works; lists the **edit-time** scene and adds `playMode: true` + `playModeNote` (the synthetic root shows `active: false`) |
 | `list_assets`, `list_trigger_types`, `list_action_types` without an address | work; result has `playMode: true` (static or editor-mod data) |
 | `list_mods`, `list_component_types` | work (array results, no marker; `addable` describes edit mode) |
-| `get_object`, `get_action_graph`, `list_action_types` with an address, `get_open_mod`, `validate_mod` | `INVALID_STATE` (references would resolve against the runtime copy; the validator would see the runtime objects) |
-| every edit tool, `save_mod`, `undo`, `create_test_mod`, `open_test_mod`, `start_playtest`, `run_batch` | `INVALID_STATE` from the guard in every state except `Editing`, including `EnteringPlayMode` and `ExitingPlayMode` (edit pipelines also re-check each frame and stop if a playtest starts) |
+| `get_object`, `get_action_graph`, `list_action_types` with an address, `get_open_mod`, `validate_mod`, `list_mod_settings`, `get_mod_settings` | `INVALID_STATE` (references would resolve against the runtime copy; the validator would see the runtime objects) |
+| every edit tool, `set_mod_settings`, `capture_preview_image`, `save_mod`, `undo`, `create_test_mod`, `open_test_mod`, `start_playtest`, `run_batch` | `INVALID_STATE` from the guard in every state except `Editing`, including `EnteringPlayMode` and `ExitingPlayMode` (edit pipelines also re-check each frame and stop if a playtest starts) |
 | `stop_playtest` | allowed (its purpose) |
 
 ### `run_batch` (write)
@@ -2130,10 +2704,10 @@ step's own guard.
 
 Allowed tools: `create_object`, `duplicate_object`, `delete_object`, `reparent_object`, `set_object`, `set_transform`,
 `add_component`, `remove_component`, `set_property`, `set_properties`, `add_action`, `remove_action`, `move_action`,
-`set_action`, `add_trigger`, `remove_trigger`, `set_trigger`, `undo`, `save_mod`, and the read tools `get_object`,
-`get_hierarchy`, `get_action_graph`, `list_mods`, `list_assets`, `list_component_types`, `list_action_types`,
+`set_action`, `add_trigger`, `remove_trigger`, `set_trigger`, `undo`, `save_mod`, `set_mod_settings`, and the read tools `get_object`,
+`get_hierarchy`, `get_action_graph`, `get_mod_settings`, `list_mod_settings`, `list_mods`, `list_assets`, `list_component_types`, `list_action_types`,
 `list_trigger_types`. Refused: `run_batch`, `create_test_mod`, `open_test_mod`, `start_playtest`, `stop_playtest`,
-`screenshot` (named reason), and every other tool (`ping`, `get_status`, `get_log`, `get_open_mod`, `validate_mod`,
+`screenshot`, `capture_preview_image` (named reason), and every other tool (`ping`, `get_status`, `get_log`, `get_open_mod`, `validate_mod`,
 unknown names).
 
 **Up-front validation** (any failure refuses the whole batch with `INVALID_PARAMS` naming the step, e.g.
@@ -2347,8 +2921,8 @@ Asset/object references (property values, action targets, settings) use one shap
 
 ## Not in this build
 
-No input injection for playtests (a human or AI-only mode drives them); no pause/resume tool; no editing of mod
-settings other than the player-settings triggers (description, preview image, rounds, end conditions are set by hand);
+No input injection for playtests (a human or AI-only mode drives them); no pause/resume tool; no editing of
+Item details and no import of textures or audio; custom board spaces are read-only (see [Mod settings](#mod-settings));
 no editing of board connections (`BoardNodeConnection[]`), so a Board mod cannot be made validator-clean through the
 plugin yet; no redo (the editor has none); no copy/paste/duplicate of
 actions (the Action Editor has none); no editing of Set Connection Active connection mappings or of the Display

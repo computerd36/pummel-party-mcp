@@ -21,7 +21,7 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <DebugType>portable</DebugType>
     <Deterministic>true</Deterministic>
-    <Version>0.7.0</Version>
+    <Version>0.8.0</Version>
     <RequiresGameDir>true</RequiresGameDir>
   </PropertyGroup>
 
@@ -58,6 +58,16 @@
     </Reference>
     <Reference Include="UnityEngine.ParticleSystemModule">
       <HintPath>$(GameDir)\PummelParty_Data\Managed\UnityEngine.ParticleSystemModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- AudioClip: the music/ambience settings. -->
+    <Reference Include="UnityEngine.AudioModule">
+      <HintPath>$(GameDir)\PummelParty_Data\Managed\UnityEngine.AudioModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Post-processing package: the screen-effects settings (profile, effect settings, layer). -->
+    <Reference Include="Unity.Postprocessing.Runtime">
+      <HintPath>$(GameDir)\PummelParty_Data\Managed\Unity.Postprocessing.Runtime.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Newtonsoft.Json">

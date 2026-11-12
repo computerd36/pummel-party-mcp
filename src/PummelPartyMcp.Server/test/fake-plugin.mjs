@@ -101,6 +101,12 @@ export function defaultHandler(method, params) {
       return { ok: true, result: { playing: true, saved: true, echoed: params } };
     case "stop_playtest":
       return { ok: true, result: { stopped: true, alreadyStopped: false, state: "Editing" } };
+    case "list_mod_settings":
+    case "get_mod_settings":
+    case "set_mod_settings":
+      return { ok: true, result: { echoed: params } };
+    case "capture_preview_image":
+      return { ok: true, result: { assignedTo: "details.previewImage" } };
     case "run_batch":
       return { ok: true, result: { completed: params.steps.length, total: params.steps.length, echoed: params } };
     case "list_action_types":

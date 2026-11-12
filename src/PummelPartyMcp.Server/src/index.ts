@@ -17,7 +17,7 @@ const client = new PluginClient(opts);
 
 const PLAYER_TRIGGERS = "weaponHitTrigger, tickTrigger, onDeathTrigger, onRespawnTrigger, onFirstSpawnTrigger, onRoundEndTrigger";
 
-const GUIDE = [
+const PARAGRAPHS: string[] = [
   "pummel-party-mcp drives the Pummel Party Mod Editor through a plugin inside the running game.",
 
   "SAFETY: write tools act only on sandbox mods named MCP_ (^MCP_[A-Za-z0-9_ -]+$, max 64 chars, no leading/trailing space); anything else is refused (GUARD_NOT_TEST_MOD). Real mods can never be changed; Workshop publishing is blocked and has no tool. create_test_mod/open_test_mod are refused while a real mod is open (the human closes it). Writes need Safety.EnableWrites and a tested or accepted game version (get_status: writesEnabled, publishBlock, gameVersionCheck).",
@@ -41,7 +41,35 @@ const GUIDE = [
 
   "ACTION PARAMETERS (add_action, set_action, add_trigger, set_trigger): {name: value}, max 64; names are the fields get_action_graph reports (m_seconds), alias without m_ accepted; unknown names, wrong types, bad enums or references are refused and nothing changes. Shapes as PROPERTY VALUES plus: ModComplexFloat/Int a number (= Constant) or {valueType?:Constant|RandomBetweenTwoValues, min?, max?}; ModAssetReference<T> null, guid or {guid}; reference arrays replace the list; DamageInstance an object with any of damage, ragdoll, ragdollVel, hitAnim, removeKeys, blood, bloodVel, bloodAmount, sound, volume; Display Popup m_choices an array patch (element i updates choice i, null = unchanged; keys m_buttonText, m_costType, m_costAmount, m_itemCostType, m_choiceIconReference).",
   "TARGETS: target actions (not e.g. Wait) have targetFlags (Source, Receiver, Advanced) and, with Advanced, a targets list. targetFlags: names joined by comma (\"Source, Advanced\"), an array of names, an integer 0-7 (Source=1, Receiver=2, Advanced=4), or \"0\"/\"\"/\"None\". Flags whose toggle is hidden at the call site or for the action are refused (see callSite in get_action_graph; availableTargetFlags, targetFlagsLocked, appendTargetFlags, targetType in list_action_types). targets: references (object guid, component guid or {guid}; null = empty entry), max 1024, replaced as a whole, only with Advanced in the flags; each must resolve to the action's targetType and be a registered object (scene triggers: scene objects; prefab triggers: the same prefab). Default call-site flags apply on APPEND only.",
-].join("\n\n");
+];
+
+const SETTINGS_TOPIC =
+  "MOD SETTINGS (Minigame and Board mods; sandbox mod, edit mode): list_mod_settings {section?} is the discovery tool: per section and field the type, accepted shape, default, current value, shown/shownWhen (a field is only writable while its condition holds), choices the editor UI offers, limits, writable (+ reason), presets. get_mod_settings {section?} returns current values in exactly the shapes set_mod_settings accepts. set_mod_settings {section, values:{field:value,...}} applies several fields of ONE section together; everything is validated first and any problem (unknown/never-shown/read-only field, a conditional field whose controlling field is not set to the right value in the same or an earlier call, a choice the UI does not offer, wrong type, undefined enum value, unknown preset name, asset guid of a missing or wrong-type asset, camera mode Follow without a Player Spawn) refuses the whole call (INVALID_PARAMS naming field and rule, nothing changed). Limits the UI applies in draw code are applied by the plugin and reported in clamped (e.g. NumberOfRounds 0 -> 1). Reply: applied (read back), previous (old values: settings have NO undo, revert by hand), clamped, implied (side effects such as ThirdPerson forcing camera Static), changed, undoable false, note (which file save_mod writes), warnings, validation (settings-related validator messages). Edits are unsaved until save_mod. " +
+  "SECTIONS: details (description, previewImage; the name is read-only), minigameSettings (rounds, end conditions, points, duration, placement, score display), playerSettings (player type, movement, jumping, camera, punching, stuns, respawn, health, name tags; the six event triggers are edited with the action tools, scope playerSettings), music (Music/Ambience assets + volumes), lighting, screenEffects; Board: details (+ trophy chests, weapon cache, chest shuffle), customSpaces (read-only), boardSize, camera, music, lighting, screenEffects. Item and BoardSpace mods have no settings tools. The Workshop item (title, description, tags, thumbnail) is never touched. " +
+  "ASSETS: music/previewImage take null, a guid or {guid} from list_assets (type AudioClip / Texture2D; includeBuiltIn for built-in clips). get shows {guid,name,assetType,location}. " +
+  "LIGHTING / SCREEN EFFECTS: field preset = a name from list_mod_settings (last entry Custom); custom fields are editable only while preset is Custom (give preset Custom in the same call). Presets are never modified. Lighting is applied to the scene after each change, so screenshot shows it. screenEffects: <effect> true/false adds/removes an effect (ambientOcclusion, bloom, chromaticAberration, colorGrading, depthOfField, grain, lensDistortion, vignette), <effect>.enabled, <effect>.<param> = {value, override} (a bare value sets value and override on; {override:false} switches off; the editor ignores values whose override is off). Slider params are clamped to the game's ranges. The effects are visible only while the toolbar's Post Processing button is on. SAVE WARNING: PostProcessing.data is written from the ACTIVE effects, so save_mod while a built-in screen-effects preset is selected overwrites custom effects on disk (they survive in memory until reopen): switch back to Custom before save_mod to keep them (replies warn; Lighting.json always keeps custom lighting). " +
+  "PREVIEW IMAGE: capture_preview_image takes the editor's own screenshot of the scene view (like F10), which CREATES Assets/Textures/Screenshot<N>.jpg (+ .pmeta) in the sandbox mod immediately, and assigns it as the in-game preview image (assignment unsaved until save_mod). Not allowed in run_batch; refused while a dialog or prefab is open. Data/Preview.jpg is not touched. " +
+  "PLAYTEST: settings tools are edit-mode only (INVALID_STATE during a playtest); a playtest runs on the SAVED files, so save_mod before start_playtest (start_playtest does) and verify a changed setting with get_playtest_state. BATCH: set_mod_settings, get_mod_settings and list_mod_settings are allowed in run_batch.";
+
+const P = (...prefixes: string[]) => PARAGRAPHS.filter((p) => prefixes.some((x) => p.startsWith(x)));
+
+const TOPICS: Record<string, string> = {
+  overview: [PARAGRAPHS[0], ...P("WORKFLOW:", "MINIMAL VALID MINIGAME:")].join("\n\n"),
+  safety: P("SAFETY:", "MOD ID:").join("\n\n"),
+  editing: P("EDIT RULES:", "CLAMPING:", "PROPERTY VALUES", "PROPERTY RULES:").join("\n\n"),
+  actions: P("ACTIONS:", "ADDRESSES:", "ACTION PARAMETERS", "TARGETS:").join("\n\n"),
+  playtest: P("PLAYTEST:").join("\n\n"),
+  batch: P("BATCH:").join("\n\n"),
+  settings: SETTINGS_TOPIC,
+};
+const TOPIC_NAMES = Object.keys(TOPICS) as [string, ...string[]];
+
+// Server instructions are counted against the tools/list size limit, so they stay short: the rest is in usage_guide topics.
+const GUIDE =
+  "pummel-party-mcp drives the Pummel Party Mod Editor through a plugin inside the running game.\n\n" +
+  "SAFETY: write tools act only on sandbox mods named MCP_ (^MCP_[A-Za-z0-9_ -]+$, max 64 chars); anything else is refused (GUARD_NOT_TEST_MOD). Real mods can never be changed; Workshop publishing is blocked and has no tool. Writes also need Safety.EnableWrites (get_status: writesEnabled).\n\n" +
+  "WORKFLOW: get_status -> list_mods -> open_test_mod or create_test_mod -> get_hierarchy -> edits (set_property, add_action, set_mod_settings, ...; many at once: run_batch) -> get_object / get_mod_settings to verify -> validate_mod -> save_mod -> start_playtest -> get_playtest_state -> stop_playtest. Edits stay in memory until save_mod. Settings edits are not undoable.\n\n" +
+  "DETAILS: call usage_guide (no topic = overview + topic list; topics: " + TOPIC_NAMES.join(", ") + ") before using write tools: it holds the rules, value shapes and limits that tool descriptions only point to.";
 
 const server = new McpServer({ name: "pummel-party-mcp", version: pkg.version }, { instructions: GUIDE });
 
@@ -191,11 +219,15 @@ withoutDefaultExecution(server.registerTool(
   "usage_guide",
   {
     description:
-      "Returns the shared pummel-party-mcp guide (safety, workflow, playtest, batch, edit rules, address forms, value shapes). Local; does not call the game. Read it before using write tools.",
-    inputSchema: z.object({}).strict() as any,
+      "Long-form guide, local (no game call). Optional topic: overview, safety, editing, actions, playtest, batch, settings; none = overview plus the topic list. Read before write tools.",
+    inputSchema: z.object({ topic: z.enum(TOPIC_NAMES).optional() }).strict() as any,
     annotations: READ_ONLY,
   },
-  async (): Promise<ToolResult> => ({ content: [{ type: "text", text: GUIDE }] }),
+  async (args: { topic?: string }): Promise<ToolResult> => {
+    const topic = args?.topic;
+    const text = topic ? TOPICS[topic] : TOPICS.overview + "\n\nTOPICS (call usage_guide with topic): " + TOPIC_NAMES.join(", ") + ".";
+    return { content: [{ type: "text", text }] };
+  },
 ));
 
 // ---------------------------------------------------------------------------
@@ -336,6 +368,21 @@ register(
 );
 
 register(
+  "list_mod_settings",
+  "Discovery for the open Minigame/Board mod's settings: sections and, per field, type, shape, default, current value, shown/shownWhen, choices, limits, writable (+reason), presets. Use before set_mod_settings (usage_guide topic settings). Needs an open mod, edit mode.",
+  { section: nonEmpty().optional().describe("One section; default all.") },
+  READ_ONLY,
+  { narrow: "pass a section" },
+);
+register(
+  "get_mod_settings",
+  "Current settings by section {values, readOnly} in exactly the shapes set_mod_settings accepts (description, preview image, music, lighting, screen effects, board details...). Needs an open mod, edit mode.",
+  { section: nonEmpty().optional().describe("One section; default all.") },
+  READ_ONLY,
+  { narrow: "pass a section" },
+);
+
+register(
   "validate_mod",
   "Runs the editor's Mod Validator (as the Play button does): { valid, canPlaytest, errorCount, warningCount, issues: [{ severity, message, description?, fixable }] }. Changes nothing. Call before start_playtest (usage_guide: MINIMAL VALID MINIGAME).",
   {},
@@ -424,6 +471,22 @@ const CREATE_KINDS = [
   "playerSpawn", "item", "trigger", "logic", "weaponSource", "boardSpace",
   "directionalLight", "pointLight", "spotLight", "audioSource",
 ] as const;
+
+register(
+  "set_mod_settings",
+  `Sets several fields of one settings section together (all-or-nothing validation; not undoable, previous values returned; unsaved until save_mod).${RULES}`,
+  {
+    section: nonEmpty().describe("Section from list_mod_settings."),
+    values: z.record(nonEmpty(), z.any()).refine((o) => Object.keys(o).length >= 1 && Object.keys(o).length <= 128, { message: "values must have 1-128 entries" }).describe("{field: value}."),
+  },
+  WRITE_IDEMPOTENT,
+);
+register(
+  "capture_preview_image",
+  `Takes the editor's screenshot of the scene (like F10): CREATES a JPEG texture file + .pmeta in the sandbox mod's Assets/Textures right away and assigns it as the in-game preview image (unsaved until save_mod).${RULES}`,
+  {},
+  WRITE,
+);
 
 register(
   "create_object",
@@ -654,8 +717,8 @@ const BATCH_TOOLS = [
   "create_object", "duplicate_object", "delete_object", "reparent_object", "set_object", "set_transform",
   "add_component", "remove_component", "set_property", "set_properties",
   "add_action", "remove_action", "move_action", "set_action", "add_trigger", "remove_trigger", "set_trigger",
-  "undo", "save_mod",
-  "get_object", "get_hierarchy", "get_action_graph", "list_mods", "list_assets", "list_component_types",
+  "undo", "save_mod", "set_mod_settings",
+  "get_object", "get_hierarchy", "get_action_graph", "get_mod_settings", "list_mod_settings", "list_mods", "list_assets", "list_component_types",
   "list_action_types", "list_trigger_types",
 ] as const;
 const batchStepSchema = z

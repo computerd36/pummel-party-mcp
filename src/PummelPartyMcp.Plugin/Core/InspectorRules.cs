@@ -693,7 +693,7 @@ namespace PummelPartyMcp.Core
         }
 
         /// <summary>" (type is Point after this call)": the current state of what the condition looks at.</summary>
-        private static string DescribeState(RuleCondition cond, IRuleContext ctx)
+        internal static string DescribeState(RuleCondition cond, IRuleContext ctx)
         {
             List<RuleRef> refs = new List<RuleRef>();
             cond.CollectRefs(refs);

@@ -94,6 +94,8 @@ export const TOOL_TIMEOUTS_MS: Record<string, number> = {
   set_property: 20000,
   set_properties: 20000,
   undo: 30000,
+  set_mod_settings: 20000,
+  capture_preview_image: 30000,
   // action/trigger write tools (the plugin's own limit is 15 s)
   add_action: 20000,
   remove_action: 20000,

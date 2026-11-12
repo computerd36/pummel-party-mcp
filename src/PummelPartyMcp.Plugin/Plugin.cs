@@ -146,6 +146,7 @@ namespace PummelPartyMcp
                 ModTools.Register(registry, m_poller, log, m_edit);
                 ObjectEditTools.Register(registry, m_edit);
                 ComponentTools.Register(registry, m_edit);
+                SettingsTools.Register(registry, m_edit);
                 ActionEditTools.Register(registry, m_edit);
                 PlaytestTools.Register(registry, m_edit, info);
                 BatchTool.Register(registry, m_poller); // last: steps are looked up in the registry at call time

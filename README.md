@@ -15,7 +15,7 @@ It is an editor tool, not a cheat tool. In normal gameplay it does nothing, with
 
 ## Status
 
-Pre-1.0 (0.7.0). Tested on Pummel Party game version `1.14.1k` (Windows, Steam), Unity 2021.3, Mono runtime. Interfaces may change between versions.
+Pre-1.0 (0.8.0). Tested on Pummel Party game version `1.14.1k` (Windows, Steam), Unity 2021.3, Mono runtime. Interfaces may change between versions.
 
 ## Safety model
 
@@ -86,7 +86,7 @@ PowerShell, from the repo root. Replace the game folder with yours.
 4. Start the game and check `BepInEx\LogOutput.log`. The plugin prints lines like these (each prefixed by BepInEx with level and plugin name):
 
    ```text
-   PummelPartyMcp 0.7.0 (api v2); game version <version>, Unity <version>
+   PummelPartyMcp 0.8.0 (api v2); game version <version>, Unity <version>
    Workshop publish block active: 59 methods patched. Publishing to the Workshop is disabled while this plugin is enabled.
    Listening on http://127.0.0.1:38917/rpc (...); writes enabled, publish block complete
    ```
@@ -164,16 +164,17 @@ The server also ships a guide as `usage_guide`; clients that do not show server 
 | Actions and triggers | `list_action_types`, `list_trigger_types`, `add_action`, `remove_action`, `move_action`, `set_action`, `add_trigger`, `remove_trigger`, `set_trigger` |
 | Validation, playtest, observation | `validate_mod`, `start_playtest`, `stop_playtest`, `get_playtest_state`, `get_playtest_events` |
 | Batch and undo | `run_batch`, `undo` |
-| Guide and self-check | `usage_guide`, `self_test` |
+| Mod settings | `list_mod_settings`, `get_mod_settings`, `set_mod_settings`, `capture_preview_image` |
+| Guide and self-check | `usage_guide` (topics: overview, safety, editing, actions, playtest, batch, settings), `self_test` |
 
-0.7.0 adds the read tool `self_test` and stricter `set_property` rules that follow what each component's inspector really shows. The full contract (parameters, results, error codes, timeouts, play-mode behaviour) is in [docs/plugin-api.md](docs/plugin-api.md); the server is described in [src/PummelPartyMcp.Server/README.md](src/PummelPartyMcp.Server/README.md).
+0.8.0 adds the mod settings tools: minigame and board details, minigame and player settings, music, lighting and screen effects (presets and custom values), board size and camera, and a preview image captured from the scene (this one creates a texture file in the sandbox mod). Settings are not undoable, are written by `save_mod`, and never touch the Workshop item. The server instructions are now short; the long rules are in `usage_guide` topics. 0.7.0 adds the read tool `self_test` and stricter `set_property` rules that follow what each component's inspector really shows. The full contract (parameters, results, error codes, timeouts, play-mode behaviour) is in [docs/plugin-api.md](docs/plugin-api.md); the server is described in [src/PummelPartyMcp.Server/README.md](src/PummelPartyMcp.Server/README.md).
 
 ## Limits and known gaps
 
 - No redo (the editor has none). `undo` works like Ctrl+Z; object creation is not undoable (use `delete_object`).
 - No input injection: a playtest is AI-only (`aiOnly: true`) or driven by a human at the keyboard.
 - Some property types are not settable (for example triggers and action lists through `set_property`, `ModWeaponInfo`, `BoardNodeConnection[]`); use the dedicated tools or the editor.
-- No asset import, creation or removal; no editing of mod settings except the player-settings triggers (description, preview image, rounds and end conditions are set by hand; the Use Health setting too).
+- No asset import, creation or removal; custom board spaces, Item mods and the legacy Bloom effect are not covered by the settings tools.
 - Board mods: connections cannot be edited, so a Board mod cannot be made valid through the plugin; runtime visibility of board playtests is basic.
 - Only tested on Windows, Steam, game version `1.14.1k`.
 

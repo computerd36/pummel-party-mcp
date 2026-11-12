@@ -436,3 +436,12 @@ Read-side gaps to close before the write side ("same shape in and out"): descrip
 10. Raising `BoardModSettings.OnCustomSpacesUpdated` from the plugin (event backing field via reflection) versus leaving it to the next window draw; and what happens to board nodes when the custom space list changes while the window is closed.
 11. Whether adding the same effect twice via the Vignette menu entry throws in the editor (Vignette is not greyed when present).
 12. `ModSettings.json` of a Minigame mod when `SimpleModControllerSettings` loads with a missing `MusicGUID` key (defaults to the built-in track via the field initialiser, but JsonUtility behaviour for missing keys on nested objects should be checked once).
+
+---
+
+## 12. Corrections found while building the tools (plugin 0.8.0)
+
+- Slider ranges of the screen effects were read from the game's `RangeAttribute`s (all verified): LensDistortion `centerX/centerY` are -1..1 (section 5.4 guessed 0..1); ComputeBloom `BloomThreshold` is 0..2 and `BloomUpsampleFactor` has 0..1 but is drawn as a free input (not clamped); ChromaticAberration `intensity` has 0..1 but is a free input. The drift test compares the documented ranges with the attributes.
+- `ComputeBloom` lives in `Unity.Postprocessing.Runtime`, not in a game assembly (question 3 in section 11).
+- `NumberOfRounds` 0 cannot be produced by the UI (it clamps to 1..20), so the plugin clamps it and reports it instead of writing a validator error.
+- Custom board spaces are read-only in the tools (risk 10): the update event is raised only by the settings window.

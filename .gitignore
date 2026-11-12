@@ -27,3 +27,6 @@ scripts/backup.settings.psd1
 *.user
 .claude/settings.local.json
 artifacts/
+
+# Local working notes
+*.local.md

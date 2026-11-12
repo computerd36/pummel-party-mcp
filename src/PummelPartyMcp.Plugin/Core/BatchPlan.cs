@@ -16,7 +16,7 @@ namespace PummelPartyMcp.Core
             "create_object", "duplicate_object", "delete_object", "reparent_object", "set_object", "set_transform",
             "add_component", "remove_component", "set_property", "set_properties",
             "add_action", "remove_action", "move_action", "set_action", "add_trigger", "remove_trigger", "set_trigger",
-            "undo", "save_mod",
+            "undo", "save_mod", "set_mod_settings",
         };
 
         /// <summary>Read tools that may be batch steps (they run synchronously on the main thread inside the batch).</summary>
@@ -24,6 +24,7 @@ namespace PummelPartyMcp.Core
         {
             "get_object", "get_hierarchy", "get_action_graph",
             "list_mods", "list_assets", "list_component_types", "list_action_types", "list_trigger_types",
+            "get_mod_settings", "list_mod_settings",
         };
 
         /// <summary>Explicitly refused, with the reason given in the error.</summary>
@@ -35,6 +36,7 @@ namespace PummelPartyMcp.Core
             ["start_playtest"] = "playtests cannot be started inside a batch",
             ["stop_playtest"] = "playtests cannot be stopped inside a batch",
             ["screenshot"] = "screenshot needs end-of-frame rendering; call it outside the batch",
+            ["capture_preview_image"] = "it needs several frames (the editor renders the screenshot at the end of the next frames); call it outside the batch",
         };
 
         /// <summary>Null when <paramref name="tool"/> may be a step; otherwise why not.</summary>
@@ -50,8 +52,8 @@ namespace PummelPartyMcp.Core
             }
             if (!AllowedWrite.Contains(tool) && !AllowedRead.Contains(tool))
             {
-                return $"'{tool}' is not allowed inside run_batch (allowed: the object/component/property/action/trigger edit tools, undo, save_mod, " +
-                       "get_object, get_hierarchy, get_action_graph and the list_* tools)";
+                return $"'{tool}' is not allowed inside run_batch (allowed: the object/component/property/action/trigger edit tools, undo, save_mod, set_mod_settings, " +
+                       "get_object, get_hierarchy, get_action_graph, get_mod_settings and the list_* tools)";
             }
             return null;
         }

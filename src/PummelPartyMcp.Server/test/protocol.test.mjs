@@ -14,7 +14,7 @@ const entry = join(here, "..", "dist", "index.js");
 const READ_TOOLS = [
   "usage_guide", "ping", "get_status", "get_open_mod", "get_hierarchy", "get_object", "get_action_graph",
   "list_assets", "list_component_types", "list_action_types", "list_trigger_types", "get_log", "screenshot", "list_mods",
-  "validate_mod", "get_playtest_state", "get_playtest_events", "self_test",
+  "validate_mod", "get_playtest_state", "get_playtest_events", "self_test", "list_mod_settings", "get_mod_settings",
 ];
 const SIZE_LIMIT = 40000;
 
@@ -96,7 +96,7 @@ test("stdout carries only protocol frames, the list stays small, the process exi
       assert.equal(m.jsonrpc, "2.0", l.slice(0, 80));
     }
     const instr = init.result.instructions;
-    assert.ok(instr && instr.length > 1000);
+    assert.ok(instr && instr.length > 300);
     const toolsChars = JSON.stringify(list.result.tools).length;
     const total = toolsChars + instr.length;
     console.log(`tools/list ${toolsChars} chars + instructions ${instr.length} = ${total} (limit ${SIZE_LIMIT})`);
@@ -175,13 +175,26 @@ test("unknown arguments are rejected by name and never reach the plugin", async 
   }
 });
 
-test("usage_guide is served locally and equals the server instructions", async () => {
+test("usage_guide: topics exist, are non-empty, are served locally; instructions point at it", async () => {
   const s = await session();
   try {
-    const r = await s.client.callTool({ name: "usage_guide", arguments: {} });
-    assert.notEqual(r.isError, true);
-    assert.equal(r.content[0].text, s.client.getInstructions());
-    assert.match(r.content[0].text, /MCP_/);
+    const instr = s.client.getInstructions();
+    assert.match(instr, /usage_guide/);
+    assert.match(instr, /MCP_/);
+    const topics = ["overview", "safety", "editing", "actions", "playtest", "batch", "settings"];
+    const bare = await s.client.callTool({ name: "usage_guide", arguments: {} });
+    assert.notEqual(bare.isError, true);
+    for (const t of topics) assert.ok(bare.content[0].text.includes(t), `topic list names ${t}`);
+    for (const t of topics) {
+      const r = await s.client.callTool({ name: "usage_guide", arguments: { topic: t } });
+      assert.notEqual(r.isError, true, t);
+      assert.ok(r.content[0].text.length > 200, `topic ${t} is non-empty`);
+    }
+    const settings = (await s.client.callTool({ name: "usage_guide", arguments: { topic: "settings" } })).content[0].text;
+    assert.match(settings, /SAVE WARNING/);
+    assert.match(settings, /capture_preview_image/);
+    const bad = await call(s.client, "usage_guide", { topic: "nope" });
+    assert.equal(bad.isError, true);
     assert.equal(s.fake.requests.length, 0, "usage_guide must not call the plugin");
   } finally {
     await s.close();

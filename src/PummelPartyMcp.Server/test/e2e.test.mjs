@@ -18,15 +18,16 @@ const EXPECTED = [
   "list_action_types", "list_trigger_types", "add_action", "remove_action", "move_action", "set_action",
   "add_trigger", "remove_trigger", "set_trigger",
   "validate_mod", "get_playtest_state", "get_playtest_events", "self_test", "start_playtest", "stop_playtest", "run_batch",
+  "list_mod_settings", "get_mod_settings", "set_mod_settings", "capture_preview_image",
 ].sort();
 const WRITES = [
   "create_test_mod", "open_test_mod", "save_mod",
   "create_object", "duplicate_object", "delete_object", "reparent_object", "set_object", "set_transform",
   "add_component", "remove_component", "set_property", "set_properties", "undo",
   "add_action", "remove_action", "move_action", "set_action", "add_trigger", "remove_trigger", "set_trigger",
-  "start_playtest", "stop_playtest", "run_batch",
+  "start_playtest", "stop_playtest", "run_batch", "set_mod_settings", "capture_preview_image",
 ];
-const IDEMPOTENT = ["save_mod", "set_transform", "set_object", "set_property", "set_properties", "set_action", "set_trigger", "stop_playtest"];
+const IDEMPOTENT = ["save_mod", "set_mod_settings", "set_transform", "set_object", "set_property", "set_properties", "set_action", "set_trigger", "stop_playtest"];
 const DESTRUCTIVE = ["delete_object", "remove_component", "remove_action", "remove_trigger", "undo", "run_batch"];
 
 test("end to end over stdio MCP", async () => {
@@ -53,7 +54,7 @@ test("end to end over stdio MCP", async () => {
       assert.equal(t.inputSchema.type, "object");
       assert.ok(t.description && t.description.length > 20);
     }
-    assert.equal(tools.length, 42);
+    assert.equal(tools.length, 46);
     for (const t of tools) {
       if (WRITES.includes(t.name)) {
         assert.equal(t.annotations.readOnlyHint, false, t.name);
@@ -218,11 +219,14 @@ test("end to end over stdio MCP", async () => {
     assert.match(byName.add_action.description, /list_action_types/);
     assert.match(byName.add_action.description, /usage_guide/);
     const instructions = client.getInstructions();
-    assert.match(instructions, /APPEND only/);
-    assert.match(instructions, /editable/);
-    assert.match(instructions, /NOT undoable/);
     assert.match(instructions, /MCP_/);
     assert.match(instructions, /Workshop publishing is blocked/);
+    assert.match(instructions, /usage_guide/);
+    const actions = (await client.callTool({ name: "usage_guide", arguments: { topic: "actions" } })).content[0].text;
+    assert.match(actions, /APPEND only/);
+    assert.match(actions, /editable/);
+    const editing = (await client.callTool({ name: "usage_guide", arguments: { topic: "editing" } })).content[0].text;
+    assert.match(editing, /NOT undoable/);
 
     const objAddr = { guid: "g", component: "ModTrigger", trigger: "OnEnterActions" };
     const psAddr = { scope: "playerSettings", trigger: "onDeathTrigger" };
