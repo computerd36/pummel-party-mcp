@@ -62,7 +62,9 @@ const HINTS: Record<string, string> = {
   TIMEOUT: "The plugin message says which case. \"nothing was changed\" / \"safe to retry\" (the call timed out or was refused before its commit point): nothing was applied and it never runs later, so retrying is safe. A create_test_mod / open_test_mod message saying the mod was created or is being opened means it exists and may still finish loading: check get_status and list_mods, do not retry blindly (a retry of create gets ALREADY_EXISTS). \"the change was applied, but the call did not finish\" means the edit happened (main thread stalled): check get_status / get_object first. A client-side timeout (no plugin reply) is ambiguous: check get_status before retrying a write.",
   INTERNAL: "Unexpected plugin error (possibly a game version change). Check get_log; an edit may have partly applied, so verify with get_object.",
   UNKNOWN_METHOD: "The running plugin does not implement this method; it may be older than this MCP server.",
-  ALREADY_EXISTS: "A mod with that name already exists; choose another name or use open_test_mod.",
+  ALREADY_EXISTS: "A mod with that name already exists (create_test_mod: choose another name or use open_test_mod). For import_asset/create_material the name is taken: pass a different name (nothing was created).",
+  ASSET_IN_USE: "The asset is still used (error.data lists the references) or is the preview image. Clear the references first (set_property / remove_action / set_mod_settings / set_material), or for remove_asset retry with force true if the references may become null; changing a texture's compression needs its component/action/preview references cleared.",
+  IMPORT_FAILED: "The game could not import the copied file; the plugin removed its copy (error.data.cleanedUp) and the source file was not touched. Check get_log, try a smaller or re-exported file.",
   SERVER_BUSY: "The plugin is busy (too many requests in flight); wait a moment and retry.",
   PAYLOAD_TOO_LARGE: "The request was larger than the plugin's 1 MB limit; send less data (fewer or smaller values) per call.",
   REQUEST_TIMEOUT: "The plugin did not receive the whole request within 10 s; retry.",
@@ -96,6 +98,12 @@ export const TOOL_TIMEOUTS_MS: Record<string, number> = {
   undo: 30000,
   set_mod_settings: 20000,
   capture_preview_image: 30000,
+  // asset tools: the plugin's own limits are 60 s (import, decoding runs on the game's main thread) and 30 s
+  import_asset: 70000,
+  set_import_settings: 40000,
+  create_material: 40000,
+  set_material: 40000,
+  remove_asset: 40000,
   // action/trigger write tools (the plugin's own limit is 15 s)
   add_action: 20000,
   remove_action: 20000,

@@ -20,11 +20,12 @@ namespace PummelPartyMcp.Tools
                 string search = ctx.GetString("search");
                 int limit = ctx.GetInt("limit", AssetListing.DefaultLimit, 1, AssetListing.MaxLimit);
                 int offset = ctx.GetInt("offset", 0, 0, int.MaxValue);
-                return ctx.OnMainThread(() => ListAssets(type, includeBuiltIn, search, limit, offset));
+                string location = ctx.GetString("location");
+                return ctx.OnMainThread(() => ListAssets(type, includeBuiltIn, search, limit, offset, location));
             }));
         }
 
-        private static JObject ListAssets(string typeFilter, bool includeBuiltIn, string search, int limit, int offset)
+        private static JObject ListAssets(string typeFilter, bool includeBuiltIn, string search, int limit, int offset, string location)
         {
             EditorSystem ed = EditorAccess.RequireEditor();
             PummelMod mod = EditorAccess.RequireLoadedMod(ed);
@@ -46,7 +47,7 @@ namespace PummelPartyMcp.Tools
                 }
             }
 
-            if (includeBuiltIn)
+            if (includeBuiltIn || location == "internal")
             {
                 WorkshopController wc = WorkshopController.Instance;
                 if (wc == null || wc.Assets == null)
@@ -63,7 +64,7 @@ namespace PummelPartyMcp.Tools
                 }
             }
 
-            JObject result = AssetListing.Query(rows, typeFilter, search, limit, offset);
+            JObject result = AssetListing.Query(rows, typeFilter, search, limit, offset, location);
             if (ed.State != EditorState.Editing)
             {
                 result["playMode"] = true; // the editor mod's asset list (unchanged during a playtest)
@@ -89,6 +90,18 @@ namespace PummelPartyMcp.Tools
                 if (rel != null)
                 {
                     row["relativePath"] = rel;
+                }
+                try
+                {
+                    FileInfo fi = new FileInfo(ext.filePath);
+                    if (fi.Exists)
+                    {
+                        row["sizeBytes"] = fi.Length;
+                    }
+                }
+                catch (Exception)
+                {
+                    // size is informational
                 }
             }
             rows.Add(new AssetEntry

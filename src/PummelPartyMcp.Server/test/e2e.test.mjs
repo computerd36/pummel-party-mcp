@@ -19,6 +19,7 @@ const EXPECTED = [
   "add_trigger", "remove_trigger", "set_trigger",
   "validate_mod", "get_playtest_state", "get_playtest_events", "self_test", "start_playtest", "stop_playtest", "run_batch",
   "list_mod_settings", "get_mod_settings", "set_mod_settings", "capture_preview_image",
+  "get_asset", "list_asset_rules", "import_asset", "set_import_settings", "create_material", "set_material", "remove_asset",
 ].sort();
 const WRITES = [
   "create_test_mod", "open_test_mod", "save_mod",
@@ -26,9 +27,10 @@ const WRITES = [
   "add_component", "remove_component", "set_property", "set_properties", "undo",
   "add_action", "remove_action", "move_action", "set_action", "add_trigger", "remove_trigger", "set_trigger",
   "start_playtest", "stop_playtest", "run_batch", "set_mod_settings", "capture_preview_image",
+  "import_asset", "set_import_settings", "create_material", "set_material", "remove_asset",
 ];
-const IDEMPOTENT = ["save_mod", "set_mod_settings", "set_transform", "set_object", "set_property", "set_properties", "set_action", "set_trigger", "stop_playtest"];
-const DESTRUCTIVE = ["delete_object", "remove_component", "remove_action", "remove_trigger", "undo", "run_batch"];
+const IDEMPOTENT = ["save_mod", "set_mod_settings", "set_import_settings", "set_material", "set_transform", "set_object", "set_property", "set_properties", "set_action", "set_trigger", "stop_playtest"];
+const DESTRUCTIVE = ["delete_object", "remove_component", "remove_action", "remove_trigger", "undo", "run_batch", "remove_asset"];
 
 test("end to end over stdio MCP", async () => {
   const dir = makeTempDir();
@@ -54,7 +56,7 @@ test("end to end over stdio MCP", async () => {
       assert.equal(t.inputSchema.type, "object");
       assert.ok(t.description && t.description.length > 20);
     }
-    assert.equal(tools.length, 46);
+    assert.equal(tools.length, 53);
     for (const t of tools) {
       if (WRITES.includes(t.name)) {
         assert.equal(t.annotations.readOnlyHint, false, t.name);

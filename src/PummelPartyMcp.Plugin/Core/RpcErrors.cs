@@ -21,6 +21,10 @@ namespace PummelPartyMcp.Core
         public const string InvalidState = "INVALID_STATE";
         public const string AlreadyExists = "ALREADY_EXISTS";
         public const string GameVersionUntested = "GAME_VERSION_UNTESTED";
+
+        // asset tools (plugin 0.8.0)
+        public const string AssetInUse = "ASSET_IN_USE";
+        public const string ImportFailed = "IMPORT_FAILED";
     }
 
     /// <summary>Thrown by tools to return a specific error code to the caller.</summary>

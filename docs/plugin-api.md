@@ -9,7 +9,7 @@ additive) adds object, transform, component and property editing plus `undo`; se
 `stop_playtest` and `run_batch`, structured error details (`error.data`) and play-mode rules for every tool; see
 [Validation, playtest and batch](#validation-playtest-and-batch). Plugin 0.6.0 (still api v2, additive) adds playtest
 visibility: the read tools `get_playtest_state` and `get_playtest_events`, a small summary in `get_status.playtest`, and the
-capability `"playtestState"`; see [Playtest visibility](#playtest-visibility). Plugin 0.7.0 (still api v2, additive) adds the game-version gate (`GAME_VERSION_UNTESTED`, `[Safety] AcceptedGameVersion`, `gameVersionCheck`), the read tool `self_test`, and enforces the editor inspector's visibility rules in `set_property` / `set_properties`; see [Game-version gate](#game-version-gate), [`self_test`](#self_test-read) and [Inspector visibility rules](#inspector-visibility-rules-plugin-070). Plugin 0.8.0 (still api v2, additive) adds mod settings: `list_mod_settings`, `get_mod_settings`, `set_mod_settings` and `capture_preview_image`, the capability `"settings"`, and the settings rule tables; see [Mod settings](#mod-settings). Write tools only ever act on `MCP_` mods; see
+capability `"playtestState"`; see [Playtest visibility](#playtest-visibility). Plugin 0.7.0 (still api v2, additive) adds the game-version gate (`GAME_VERSION_UNTESTED`, `[Safety] AcceptedGameVersion`, `gameVersionCheck`), the read tool `self_test`, and enforces the editor inspector's visibility rules in `set_property` / `set_properties`; see [Game-version gate](#game-version-gate), [`self_test`](#self_test-read) and [Inspector visibility rules](#inspector-visibility-rules-plugin-070). Plugin 0.8.0 (still api v2, additive) adds mod settings: `list_mod_settings`, `get_mod_settings`, `set_mod_settings` and `capture_preview_image`, the capability `"settings"`, and the settings rule tables; see [Mod settings](#mod-settings). Plugin 0.8.0 also adds the asset tools (`get_asset`, `list_asset_rules`, `import_asset`, `set_import_settings`, `create_material`, `set_material`, `remove_asset`), the capability `"assets"` and the `[Assets]` config section; see [Assets](#assets-import-import-settings-materials-removal). Write tools only ever act on `MCP_` mods; see
 [Safety](#safety).
 
 ## Transport
@@ -91,7 +91,9 @@ validator refusal: `{"validation": {...}}`). Clients that ignore `data` still ge
 | `PUBLISH_BLOCK_INCOMPLETE` | write tool called while the Workshop publish block is not complete (`get_status.publishBlock`) |
 | `GUARD_NOT_TEST_MOD` | the open mod (open-mod tools) or the target / open mod (lifecycle tools) is not a `MCP_` mod; the message names it |
 | `INVALID_STATE` | editor state forbids the call: play mode (also the transitional states `EnteringPlayMode` / `ExitingPlayMode`), no playtest running (`get_playtest_state`), a mod that fails the validator (`start_playtest`), unsaved changes, a prefab being edited, an open editor dialog, a broken editor mod list, an object outside the current editing context, the left mouse button held in the game window, the open mod changed while an edit was pending (the message says what to do) |
-| `ALREADY_EXISTS` | `create_test_mod`: a folder or a mod (Meta name) with that name exists, case-insensitive |
+| `ALREADY_EXISTS` | `create_test_mod`: a folder or a mod (Meta name) with that name exists, case-insensitive; `import_asset`: no free name (`name`, `name (1)` ... `(20)` all taken); `create_material`: the file the editor would create (or the requested name) already exists |
+| `ASSET_IN_USE` | `remove_asset` (references, or the preview image) and `set_import_settings` (a compression change would break references): `error.data` lists them |
+| `IMPORT_FAILED` | `import_asset`: the game's importer rejected the copied file; the copy was removed (`error.data.cleanedUp`), the source was not touched |
 | `GAME_VERSION_UNTESTED` | write tool called while the running game version is not in the plugin's tested list and not accepted by `[Safety] AcceptedGameVersion` (or the version could not be read); read tools are unaffected. See [Game-version gate](#game-version-gate) |
 
 Edit tools additionally use `NOT_FOUND` (object / component / the edited object was deleted meanwhile),
@@ -165,7 +167,7 @@ Works with the editor closed. No params.
 
 ```json
 {"pong": true, "pluginVersion": "0.7.0", "gameVersion": "1.14.1k", "unityVersion": "2021.3.45f2",
- "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate"],
+ "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings", "assets"],
  "gameVersionCheck": {"running": "1.14.1k", "tested": ["1.14.1k"], "accepted": false, "writesAllowed": true}}
 ```
 
@@ -191,7 +193,7 @@ No params. Never fails because of editor state.
  "playtest": {"state": "Editing", "running": false, "startedAt": null, "playModeSince": null, "endedAt": null,
               "playSeconds": null, "startedByPlugin": false, "players": "4 Players", "playerCount": 4, "teams": null,
               "aiOnly": false, "eventCount": 0, "lastEventId": 0, "alivePlayers": null},
- "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate"], "writesEnabled": true,
+ "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings", "assets"], "writesEnabled": true,
  "gameVersionCheck": {"running": "1.14.1k", "tested": ["1.14.1k"], "accepted": false, "writesAllowed": true},
  "publishBlock": {"active": true, "complete": true, "patchedCount": 59, "missing": []}}
 ```
@@ -414,6 +416,7 @@ no triggers. With `scope: "playerSettings"`: six entries, one per trigger the Mi
 |---|---|---|---|
 | `type` | string | - | case-insensitive exact match on `type`, `className` or the internal asset type string |
 | `includeBuiltIn` | bool | false | also list the game's built-in (internal) assets (over 16,000: use `search`/`type` and paging) |
+| `location` | `external` \| `internal` | - | `external` = the mod's own custom assets (the editor's "Custom" folder; rows also carry `sizeBytes` and `fileExists`), `internal` = built-in |
 | `search` | string | - | case-insensitive substring match on the asset name; whitespace-separated terms must all match |
 | `limit` | int | 100 | page size, 1..500 |
 | `offset` | int | 0 | number of matching assets to skip, >= 0 |
@@ -2285,6 +2288,249 @@ Saved to: Data/Meta.json (selected preset) and Data/PostProcessing.data (the ACT
 
 <!-- settings-rules:end -->
 
+## Assets (import, import settings, materials, removal)
+
+Plugin 0.8.0 (api v2, additive, capability `"assets"`) replaces the old rule "the plugin never imports or removes assets"
+with the bounded rules below. Seven tools: `get_asset` and `list_asset_rules` (read), `import_asset`,
+`set_import_settings`, `create_material`, `set_material` and `remove_asset` (write, guard **OpenMod**: an open, loaded
+sandbox mod whose Meta name and folder name pass the `MCP_` rule, Editing state, writes enabled, publish block complete,
+game version accepted). None of them is allowed inside `run_batch` (named reason). The recon is
+`docs/architecture/07-asset-import.md`; the corrections found while building are appended there.
+
+All five write tools refuse (`INVALID_STATE`) while an editor dialog (including "Unapplied Import Settings") is open or an
+asset with unapplied import settings is selected; `import_asset`, `set_import_settings` and `remove_asset` also refuse
+while a prefab is being edited. Nothing here is undoable (`undoable: false`): files are written or deleted when the
+call runs, not at `save_mod`.
+
+### File-system safety (import)
+
+1. The editor's `PummelMod.AddAsset(path, folder, copy: true)` is **never called**: on an early exception it deletes the
+   *source* file, and with 100 duplicates it deletes an existing `(99)` file (doc 07, H1/H2). `AddAsset(copy: false)` and
+   `ImportFile` on a file outside the mod are never used either (they write a `.pmeta` beside the file).
+2. The plugin copies the file itself (`Core/AssetImportCore.cs`): the source is opened read-only with
+   `FileShare.ReadWrite | Delete`, read once and closed; it is never moved, renamed, changed, locked or deleted. A `.pmeta`
+   next to the source is ignored.
+3. The destination is always `<mod>\Assets\{Textures|Props|Audio}\<name><.ext>`; the tool takes a source path and an
+   optional **name**, never a destination. The final full path must be exactly one folder below `Assets` after
+   normalisation; the mod folder comes from the open mod object and its leaf name is re-checked against the sandbox rule;
+   `Assets` must be `<mod>\Assets` and not a link. Names: `A-Za-z0-9 _.()-`, at most 64 characters, no `..`, no leading or
+   trailing space or dot, no separators or drive letters, no control characters, no reserved device names (CON, NUL,
+   COM1, ...). Without `name` the source's file name is used with other characters replaced by `_`.
+4. **No overwrite.** A free name is chosen where neither the file nor `<file>.pmeta` exists (`name`, then `name (1)` ...
+   `name (20)`; all taken: `ALREADY_EXISTS`, nothing copied). The file is created with `FileMode.CreateNew`; if it appears
+   in between, the next name is tried. Only then `PummelMod.ImportFile(FileInfo)` registers the file that is now inside
+   the mod.
+5. On any failure after the copy, only what this call created is deleted: the copy and the `.pmeta` the importer wrote for
+   it (each path re-checked to be exactly `Assets\<Sub>\<name>` first; if the asset got registered it is unregistered with
+   `RemoveAsset`, which deletes the same two files). The reply is `IMPORT_FAILED` with `error.data.cleanedUp`. The OBJ
+   importer's "empty list, no cleanup" failure is handled the same way; `.bmp` (offered by the editor menu, no importer) is
+   refused up front.
+6. Allow-list: `.png .jpg .jpeg` (textures), `.obj` (meshes), `.wav .mp3 .ogg` (audio); case-insensitive on input, the
+   copy gets a lower-case extension (the audio importer switches on the exact-case extension). The content is sniffed
+   before anything is copied: PNG signature and header, JPEG markers, RIFF/WAVE, OggS, MP3 ID3 tag or frame sync, OBJ as
+   text (no NUL byte in the first 8 KB) with at least one `v ` line. A renamed file (a PNG called `.wav`, a text file
+   called `.png`) is refused; zero-byte files are refused.
+7. Limits: `[Assets] MaxImportFileMB` (default 50) and `MaxModAssetsMB` (default 500, total size of the mod's `Assets`
+   folder after the import), edited in the plugin config and re-read on every call; plus constants: texture sides <= 8192 px
+   (read from the header), OBJ vertex lines <= 500,000, name <= 64 characters, at most 20 numbered duplicates. The editor
+   has none of these; the audio decode busy-waits on the main thread, so keep audio small.
+8. Sources: any readable **local absolute path** (`C:\...`). Refused in this version: UNC (`\\server\share`), device
+   (`\\.\`, `\\?\`) and network-drive paths, alternate data streams, links/junctions, folders, relative paths. Reason: the
+   audio loader and the native OBJ loader are unverified on them (the copy itself would be safe); this is a limitation
+   that can be lifted later. A source inside the open mod's own `Assets` folder is refused (nothing to import). A source
+   inside **another** mod's folder is allowed (read-only by construction). The game's loaders only ever see the
+   plain-ASCII destination name below the mod folder; the mod **folder** path itself may contain non-ASCII characters,
+   which the audio loader (raw path string, not a URI) may not handle [unverified in the game].
+9. Time: the copy and the registration run on the main thread inside the call (the guard and the mod folder are only known
+   there; at most one file of the configured size). Commit point: a timeout before the copy starts is safe to retry
+   ("nothing was changed"); after it the call returns its own result.
+
+### `list_asset_rules` (read)
+
+No params. Returns `import` (extensions, destination folders, live limits from the config, caps, source rules),
+`importSettings` per type, `materials.shaderRules` (properties per shader with type, limits, conditions) and
+`materials.builtInShaderAssets` (`{guid, name}` of every built-in Shader asset). The block under
+[Generated asset rules](#generated-asset-rules) is the same table.
+
+### `get_asset` (read)
+
+`{guid}` (any asset except runtime entries). Returns the `list_assets` row (`guid`, `name`, `type`, `className`,
+`location`, `relativePath`, `fileExists`, `sizeBytes`), `ownCustomAsset` (external and inside the open mod's `Assets`),
+and for the mod's own assets: textures `width`/`height`/`importSettings`/`importSettingFields`; props `vertices`,
+`triangles`, `subMeshes`, `importSettings`; audio clips `lengthSeconds`, `frequency`, `channels`; materials `shader`,
+`knownShader`, `properties` (in the shapes `set_material` accepts) and `propertyFields`; `removable` (+ `removableReason`);
+`references`: `{count, items: [{kind, owner, ownerGuid?, where}], scanComplete, objectsScanned}` where `kind` is
+`component`, `action`, `material` or `setting`. The scan reads every scene and prefab object with the plugin's own value
+converter (so it finds what `get_object` shows: component properties, action parameters and targets), materials' texture
+slots and the settings the settings tools know (music, ambience, preview image). `scanComplete: false` means some component
+value could not be read (the scan is then not a proof of "unused"). Needs an open mod; edit mode.
+
+### `import_asset` (write, guard OpenMod)
+
+| Param | Type | |
+|---|---|---|
+| `path` | string | required, absolute local path |
+| `name` | string | asset name, see rule 3; default derived from the file name |
+| `type` | `Texture`, `Prop`, `AudioClip` | optional; must match the file |
+
+Timeout 60 s. Reply: `asset` (the `list_assets` row of the new asset: `guid`, `name`, `type`, `className`, `location:
+"external"`, `relativePath`, `fileExists`, `sizeBytes`), `copy` (`relativePath`, `sizeBytes`, `sha256` of the copied
+bytes, equal to the source's), `source` (`path`, `sizeBytes`, `modified: false`), `nameDerived`, `renamedBecauseExists`,
+`checks` (what was verified before copying), `limits`, `modAssetsBytesAfter`, `undoable: false`, `note`. Errors:
+`INVALID_PARAMS` (path/name/type, extension, content, size, caps), `NOT_FOUND` (source missing), `INVALID_STATE`
+(dialog, prefab edited, `Assets\<Sub>` is a file or a link), `ALREADY_EXISTS` (no free name), `IMPORT_FAILED` (the game's
+importer rejected the file; the copy was removed). The game may also create an empty `PummelModCache\<id>` folder in its
+own data folder for PNG/JPG imports (directory only, hazard H17). A neighbouring `.mtl` is not copied.
+
+### `set_import_settings` (write, guard OpenMod)
+
+`{guid, values}` for the open sandbox mod's own textures and props, fields as in the generated table (the inspector's
+fields and choices; `compression` also accepts 0..2, `filterMode` 0..2, `wrapMode` 0..3). Everything is validated first.
+Applied like the inspector's **Apply**: the field is set, the `.pmeta` written and, for `compression` and
+`recalculateNormals`, the file re-imported (`EditorSystem.ReimportAsset`, which re-checks that the file exists; the file
+is checked before). `filterMode` and `wrapMode` are set on the existing `Texture2D` in place and the `.pmeta` is written
+(a re-import would only produce the same values in a new object).
+
+**What a re-import replaces (found in the source, doc 07 H8 confirmed):** a texture re-import decodes into a **new**
+`Texture2D` and the asset list swaps it in; things that hold the old object by identity (component properties, action
+parameters, the preview image) would not find the asset any more and would be saved as "none". The tool therefore
+re-points materials' texture slots itself and **refuses a compression change with `ASSET_IN_USE`** (references listed)
+while anything else uses the texture. For props the registered `Prop` object keeps its identity (only its mesh is
+replaced), so references survive; objects already placed in the scene may keep showing the previous mesh until the mod is
+reopened (reply `warnings`). If the re-import fails, the previous values are restored. Reply: `applied`, `previous`,
+`unchanged`, `reimported`, `materialSlotsRepointed`, `undoable: false`.
+
+### `create_material` and `set_material` (write, guard OpenMod)
+
+`create_material {name?, shader?, properties?}`: calls the editor's own `EditorSystem.CreateNewMaterial()`, which writes
+`Assets\Materials\<Material_N>.pmat` and its `.pmeta` immediately (default shader: the editor's
+`defaultShaderGuid`; `shader` = the name or guid of a built-in Shader asset). Before the call the plugin asks the editor
+which name it will use (`GetUniqueAssetName`, a check against *asset names* only) and refuses with `ALREADY_EXISTS` when
+that file or its `.pmeta` already exists on disk without a loaded material (the editor would overwrite it); a custom `name`
+is applied afterwards with the editor's own rename (both target names are checked free first). A failure after creation
+removes the new material again. `set_material {guid, shader?, properties?}` changes only the open mod's **own** materials
+(never built-in ones). Properties are validated per shader from the generated table before anything changes (unknown key,
+wrong type, a texture that is not a texture asset, a conditional property whose condition is false: all refuse the call),
+clamped like the inspector (ranges to the **shader's own range**, read at run time; colours 0..1; emission up to 64) and
+reported in `clamped`. After the properties the texture keywords and, for the standard shaders, `UpdateKeywords` (blend
+keywords, queue, render type for the rendering mode) run, as the inspector does on every draw. The material is then
+**saved at once** (`PummelMaterial.Save()`: `.pmat` + `.pmeta`, what the inspector's Apply writes) — it does not wait for
+`save_mod`. Changing the shader of an existing material drops properties the new shader lacks, and conditional
+properties must then be set in the same call. Shaders **without a known inspector** (anything but the four rule entries)
+can be chosen, but their properties are refused (the generic inspector is not supported). Replies carry `properties`
+(read back), `previous` (set_material), `clamped`, `persisted: true`, `undoable: false`. Assigning a material works with
+the existing tools: `set_property` on a renderer's `materials` array or a prop's `customMaterials` with the material guid
+(`[{"guid": "<material guid>"}]` or a guid string per element; see [set_property](#set_property-and-set_properties-write)).
+
+### `remove_asset` (write, guard OpenMod)
+
+`{guid, force?}`. Allowed only when **all** hold: the asset is external, in the open mod's asset list and its **full
+file path is strictly inside** the mod's `Assets` folder ("external" alone is not enough, doc 07 H11); its class is a
+texture, prop (mesh), audio clip or material (prefabs are refused: removal nulls every instance and the plugin has no
+prefab context tools yet); it is not a built-in asset, not the open prefab, not selected with unapplied import settings;
+for a prop the nested mesh asset points at the same file (the editor's removal deletes that path too); and it is not
+the mod's preview image (never removed, even with `force`: set it to null or another texture first). The editor's own
+`PummelMod.RemoveAsset` is then called, which destroys the Unity object, deletes `<file>` and `<file>.pmeta` and unlists
+the asset; a selected (non-dirty) asset is deselected first. Before that the references are scanned (see `get_asset`): any
+reference, or an incomplete scan, refuses the call with `ASSET_IN_USE` (`error.data` = the references) unless
+`force: true`; with `force` the reply lists `referencesNulled` — they become null at the next `save_mod` (in memory they
+point at a destroyed object until then). Reply: `removed`, `deletedFiles`, `undoable: false`, `note`.
+
+### Reply fields common to the write tools
+
+`undoable: false`; `persisted`/`note` say what is on disk now. No record of who imported an asset is kept: the boundary
+is the editor's own split between the mod's custom assets and built-in assets, checked by path.
+
+### Unverified in the game
+
+Everything above was checked against the decompiled source and unit tests on real temp directories, not in the game:
+the audio and OBJ loaders on non-ASCII mod folder paths, what `LoadObjFile` does with malformed text, whether Unity's audio
+decoder accepts every `.mp3`/`.ogg` variant, the shipped shader property ranges, the value of `defaultShaderGuid`, and the
+visual effect of a mesh re-import on placed objects. The in-game test script is `docs/phase4-ingame-tests.local.md` (local).
+
+### Generated asset rules
+
+<!-- asset-rules:begin (generated by AssetRules.ToMarkdown(); do not edit by hand) -->
+
+### Asset import rules (generated)
+
+Importable files: .png, .jpg, .jpeg, .obj, .wav, .mp3, .ogg (case-insensitive; the copy gets a lower-case extension). Destination folders inside the mod's `Assets` folder: Textures (png, jpg, jpeg), Props (obj), Audio (wav, mp3, ogg).
+
+Constant caps: name <= 64 characters from `A-Za-z0-9 _.()-`; texture side <= 8192 px; OBJ vertex lines <= 500000; at most 20 numbered duplicates (`name (1)` ...). Size limits are configurable: `[Assets] MaxImportFileMB` (default 50) and `MaxModAssetsMB` (default 500).
+
+#### Import settings (`set_import_settings`)
+
+| Asset type | Field | Choices | Default | Effect |
+|---|---|---|---|---|
+| Texture | `compression` | Normal, HighQuality, None | Normal | applied when the image is decoded: compressed only if not None and both sides are multiples of 4. Needs a re-import (new texture object), see set_import_settings |
+| Texture | `filterMode` | Point, Bilinear, Trilinear | Bilinear | set on the Texture2D (applied in place, no re-import) |
+| Texture | `wrapMode` | Repeat, Clamp, Mirror, MirrorOnce | Repeat | set on the Texture2D (applied in place, no re-import) |
+| Prop | `recalculateNormals` | true, false | false | normals are recalculated when the mesh is re-imported (always done when the OBJ has none). Needs a re-import; objects already in the scene keep showing the previous mesh until the mod is reopened |
+
+Audio clips, materials and prefabs have no import-setting fields (materials: `set_material`).
+
+#### Material properties (`create_material`, `set_material`)
+
+**`Standard`, `Standard Decal Receiver`** (inspector `StandardShaderInspector`)
+
+| Key | Type | Shown when | Notes |
+|---|---|---|---|
+| `_Mode` | one of Opaque, Cutout, Fade, Transparent | always | Opaque, Cutout, Fade, Transparent; sets blend keywords, queue and render type like the inspector |
+| `_Cutoff` | number 0..1 | _Mode = Cutout | Alpha Cutoff |
+| `_MainTex` | Texture asset guid or null | always | Albedo |
+| `_Color` | color {r,g,b,a} 0..1 | always | Color |
+| `_MetallicGlossMap` | Texture asset guid or null | always | keyword _METALLICGLOSSMAP follows the texture |
+| `_Metallic` | number (shader range; documented 0..1) | always | Metallic |
+| `_Glossiness` | number (shader range; documented 0..1) | always | Smoothness |
+| `_BumpMap` | Texture asset guid or null | always | keyword _NORMALMAP follows the texture and _BumpScale is set to 1 |
+| `_ParallaxMap` | Texture asset guid or null | always | keyword _PARALLAXMAP follows the texture |
+| `_Parallax` | number (shader range; documented 0.005..0.08) | _ParallaxMap has a texture | Height |
+| `_OcclusionMap` | Texture asset guid or null | always | Occlusion |
+| `Emission` | bool | always | keyword _EMISSION |
+| `_EmissionColor` | color {r,g,b,a} 0..64 (HDR) | Emission = true | Emission Color |
+| `_EmissionMap` | Texture asset guid or null | Emission = true | Emission map |
+| `Tiling` | vector {x,y} | always | Material.mainTextureScale |
+| `Offset` | vector {x,y} | always | Material.mainTextureOffset |
+
+**`Custom/ModBoardSpaceShader`** (inspector `CustomBoardSpaceInspector`)
+
+| Key | Type | Shown when | Notes |
+|---|---|---|---|
+| `_MainTex` | Texture asset guid or null | always | Albedo |
+| `Tiling` | vector {x,y} | always | Material.mainTextureScale |
+| `Offset` | vector {x,y} | always | Material.mainTextureOffset |
+| `_EdgeColor` | color {r,g,b,a} 0..1 | always | Edge Color |
+| `_InsideColor` | color {r,g,b,a} 0..1 | always | Inside Color |
+| `_IconColor` | color {r,g,b,a} 0..1 | always | Icon Color |
+| `_Metallic` | number (shader range; read at run time) | always | Metallic |
+| `_Glossiness` | number (shader range; read at run time) | always | Smoothness |
+| `_IconScale` | number (shader range; read at run time) | always | Icon Scale |
+
+**`Particles/Additive Intensify Mod`** (inspector `ParticleShaderInspector`)
+
+| Key | Type | Shown when | Notes |
+|---|---|---|---|
+| `_TintColor` | color {r,g,b,a} 0..1 | always | Tint Color |
+| `_MainTex` | Texture asset guid or null | always | Particle Texture |
+| `Tiling` | vector {x,y} | always | Material.mainTextureScale |
+| `Offset` | vector {x,y} | always | Material.mainTextureOffset |
+| `_InvFade` | number (shader range; read at run time) | always | Soft Particles Factor |
+| `_Glow` | number (shader range; read at run time) | always | Intensity |
+
+**`Legacy Shaders/Particles/Alpha Blended Mod`** (inspector `AlphaBlendedShaderInspector`)
+
+| Key | Type | Shown when | Notes |
+|---|---|---|---|
+| `_TintColor` | color {r,g,b,a} 0..1 | always | Tint Color |
+| `_MainTex` | Texture asset guid or null | always | Particle Texture |
+| `Tiling` | vector {x,y} | always | Material.mainTextureScale |
+| `Offset` | vector {x,y} | always | Material.mainTextureOffset |
+| `_InvFade` | number (shader range; read at run time) | always | Soft Particles Factor |
+
+Shaders without a known inspector are accepted by `create_material`/`set_material` for the shader choice only; their properties are refused (the generic inspector is not supported).
+
+<!-- asset-rules:end -->
+
 ## Validation, playtest and batch
 
 Increment 4. Read tool `validate_mod`; write tools `start_playtest`, `stop_playtest`, `run_batch`. Plugin 0.6.0 adds the read tools
@@ -2707,7 +2953,7 @@ Allowed tools: `create_object`, `duplicate_object`, `delete_object`, `reparent_o
 `set_action`, `add_trigger`, `remove_trigger`, `set_trigger`, `undo`, `save_mod`, `set_mod_settings`, and the read tools `get_object`,
 `get_hierarchy`, `get_action_graph`, `get_mod_settings`, `list_mod_settings`, `list_mods`, `list_assets`, `list_component_types`, `list_action_types`,
 `list_trigger_types`. Refused: `run_batch`, `create_test_mod`, `open_test_mod`, `start_playtest`, `stop_playtest`,
-`screenshot`, `capture_preview_image` (named reason), and every other tool (`ping`, `get_status`, `get_log`, `get_open_mod`, `validate_mod`,
+`screenshot`, `capture_preview_image`, `import_asset`, `set_import_settings`, `create_material`, `set_material`, `remove_asset` (named reason), and every other tool (`ping`, `get_status`, `get_log`, `get_open_mod`, `validate_mod`,
 unknown names).
 
 **Up-front validation** (any failure refuses the whole batch with `INVALID_PARAMS` naming the step, e.g.
@@ -2807,6 +3053,8 @@ exactly what was applied; revert by hand with `delete_object` or one `undo` per 
 | `[Safety] EnableWrites` | `true` | Read on every write call (the plugin reloads the file when its modification time changed, see below). `false`: every write tool returns `WRITES_DISABLED`. Does not affect the publish block. |
 | `[Safety] AcceptedGameVersion` | empty | A game version you accept although the plugin was not tested with it. Applies only to that exact string (case-sensitive; surrounding whitespace in the cfg line is ignored); the next game update closes the gate again. Read on every write call. See [Game-version gate](#game-version-gate). |
 | `[Safety] ForceGameVersionUntested` | `false` | Test switch: treats the running version as untested even if it is in the tested list. Can only make the gate stricter; it never accepts a version. |
+| `[Assets] MaxImportFileMB` | `50` | `import_asset`: largest source file, 1..1024 MB. Read on every import call (no restart). |
+| `[Assets] MaxModAssetsMB` | `500` | `import_asset`: largest total size of the sandbox mod's `Assets` folder after the import, 1..8192 MB. Read on every import call. |
 | `[Server] Enabled` | `true` | `false`: no RPC server; the publish block stays active. |
 | `[Server] Port` | `38917` | Read at game start. If the port cannot be bound (already in use), one Error is logged and the plugin stays idle: no dispatcher, frame poller, save watch or undo observer runs and no tool is served. The Workshop publish block stays active. |
 
@@ -2849,7 +3097,8 @@ body, when the call's turn in the write queue comes (see [Threading](#threading)
 6. kind **OpenMod** (`save_mod`, `create_object`, `duplicate_object`, `delete_object`, `reparent_object`,
    `set_object`, `set_transform`, `add_component`, `remove_component`, `set_property`, `set_properties`, `undo`,
    `add_action`, `remove_action`, `move_action`, `set_action`, `add_trigger`, `remove_trigger`, `set_trigger`,
-   `start_playtest`, `run_batch`, and every write step inside a batch; `stop_playtest` with the play-mode option):
+   `start_playtest`, `run_batch`, `set_mod_settings`, `capture_preview_image`, `import_asset`, `set_import_settings`,
+   `create_material`, `set_material`, `remove_asset`, and every write step inside a batch; `stop_playtest` with the play-mode option):
    a mod is open (`NO_MOD_OPEN`) and loaded (`BUSY_LOADING`); its Meta name **and**
    folder name pass the rule (`GUARD_NOT_TEST_MOD`, message names the mod); state is `Editing` (`INVALID_STATE`;
    every state other than `Editing`, i.e. also `EnteringPlayMode` and `ExitingPlayMode`, is refused). Only
@@ -2922,10 +3171,13 @@ Asset/object references (property values, action targets, settings) use one shap
 ## Not in this build
 
 No input injection for playtests (a human or AI-only mode drives them); no pause/resume tool; no editing of
-Item details and no import of textures or audio; custom board spaces are read-only (see [Mod settings](#mod-settings));
+Item details; custom board spaces are read-only (see [Mod settings](#mod-settings));
 no editing of board connections (`BoardNodeConnection[]`), so a Board mod cannot be made validator-clean through the
 plugin yet; no redo (the editor has none); no copy/paste/duplicate of
 actions (the Action Editor has none); no editing of Set Connection Active connection mappings or of the Display
 Popup's hidden timer fields; no prefab asset editing context switch (open/close a prefab by hand), no layer/tag or per-component enable
-editing, no asset creation, import or removal. No delete, rename or close of mods. No Workshop functionality of any
+editing, no prefab creation or removal. Assets: import only from local absolute paths (no UNC/network/device paths), no
+mesh import of `.mtl` files, no import of `.bmp`, `.pmat`, `.pfab` or `.pgf`, no overwrite or replace of an existing asset, no
+rename or duplicate of assets, no prefab removal, no material properties for shaders without a known inspector, no
+audio/OBJ import settings beyond what the inspector offers. No delete, rename or close of mods. No Workshop functionality of any
 kind; publishing is blocked (see [Safety](#safety)).

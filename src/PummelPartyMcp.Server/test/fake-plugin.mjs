@@ -107,6 +107,14 @@ export function defaultHandler(method, params) {
       return { ok: true, result: { echoed: params } };
     case "capture_preview_image":
       return { ok: true, result: { assignedTo: "details.previewImage" } };
+    case "get_asset":
+    case "list_asset_rules":
+    case "import_asset":
+    case "set_import_settings":
+    case "create_material":
+    case "set_material":
+    case "remove_asset":
+      return { ok: true, result: { echoed: params, undoable: false } };
     case "run_batch":
       return { ok: true, result: { completed: params.steps.length, total: params.steps.length, echoed: params } };
     case "list_action_types":

@@ -36,6 +36,11 @@ namespace PummelPartyMcp.Core
             ["start_playtest"] = "playtests cannot be started inside a batch",
             ["stop_playtest"] = "playtests cannot be stopped inside a batch",
             ["screenshot"] = "screenshot needs end-of-frame rendering; call it outside the batch",
+            ["import_asset"] = "it copies files on disk and runs the game's importer (decoding can take a while); call it outside the batch",
+            ["set_import_settings"] = "it re-imports an asset and writes files; call it outside the batch",
+            ["create_material"] = "it creates files immediately and is not undoable; call it outside the batch",
+            ["set_material"] = "it writes the material's files immediately and is not undoable; call it outside the batch",
+            ["remove_asset"] = "it deletes files immediately and is not undoable; call it outside the batch",
             ["capture_preview_image"] = "it needs several frames (the editor renders the screenshot at the end of the next frames); call it outside the batch",
         };
 

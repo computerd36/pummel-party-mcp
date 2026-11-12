@@ -40,6 +40,7 @@ namespace PummelPartyMcp.Tests
             PlaytestBatchTests.Run((name, ok) => Check(name, ok));
             PlaytestFeedTests.Run((name, ok) => Check(name, ok));
             SettingsTests.Run((name, ok) => Check(name, ok));
+            AssetTests.Run((name, ok) => Check(name, ok));
             AssetListingTests();
             ServerTests();
             Console.WriteLine();

@@ -79,7 +79,7 @@ namespace PummelPartyMcp.Core
         /// Applies search, then counts types (ignoring the type filter), then the type filter, stable sort
         /// (type, name, guid; ordinal ignore-case) and paging. limit/offset must already be validated.
         /// </summary>
-        public static JObject Query(IEnumerable<AssetEntry> entries, string typeFilter, string search, int limit, int offset)
+        public static JObject Query(IEnumerable<AssetEntry> entries, string typeFilter, string search, int limit, int offset, string locationFilter = null)
         {
             if (limit < 1 || limit > MaxLimit)
             {
@@ -91,7 +91,12 @@ namespace PummelPartyMcp.Core
             }
 
             string[] terms = ParseSearch(search);
-            List<AssetEntry> searched = entries.Where(e => MatchesSearch(e.Name, terms)).ToList();
+            if (locationFilter != null && locationFilter != "external" && locationFilter != "internal")
+            {
+                throw RpcException.InvalidParams("'location' must be \"external\" (the mod's own custom assets) or \"internal\" (built-in)");
+            }
+            List<AssetEntry> searched = entries.Where(e => MatchesSearch(e.Name, terms))
+                .Where(e => locationFilter == null || (string)e.Row["location"] == locationFilter).ToList();
 
             Dictionary<string, int> counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (AssetEntry e in searched)

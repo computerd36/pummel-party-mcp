@@ -17,6 +17,8 @@ namespace PummelPartyMcp
         private readonly ConfigEntry<bool> m_forceUntested;
         private readonly ConfigEntry<int> m_port;
         private readonly ConfigEntry<bool> m_serverEnabled;
+        private readonly ConfigEntry<int> m_maxImportFileMB;
+        private readonly ConfigEntry<int> m_maxModAssetsMB;
         private DateTime m_lastWriteUtc;
 
         public PluginConfig(ConfigFile config)
@@ -44,8 +46,21 @@ namespace PummelPartyMcp
             m_serverEnabled = config.Bind("Server", "Enabled", true,
                 "Start the local RPC server. false = no server, but the Workshop publish block still applies " +
                 "(as long as [General] PluginEnabled = true).");
+            m_maxImportFileMB = config.Bind("Assets", "MaxImportFileMB", AssetLimits.DefaultMaxImportFileMB,
+                new ConfigDescription("import_asset: largest source file accepted, in MB. The editor itself has no limit; the game decodes audio on the main thread " +
+                    "and waits for it, so keep this moderate. Re-read from this file on every import call, no restart needed.",
+                    new AcceptableValueRange<int>(1, 1024)));
+            m_maxModAssetsMB = config.Bind("Assets", "MaxModAssetsMB", AssetLimits.DefaultMaxModAssetsMB,
+                new ConfigDescription("import_asset: largest total size of the sandbox mod's Assets folder after an import, in MB. " +
+                    "Re-read from this file on every import call, no restart needed.",
+                    new AcceptableValueRange<int>(1, 8192)));
             m_lastWriteUtc = LastWrite();
         }
+
+        /// <summary>Asset size limits ([Assets] section); call <see cref="RefreshIfChanged"/> first (the registry does, per call).</summary>
+        public AssetLimits AssetLimits => new AssetLimits(
+            m_maxImportFileMB.Value >= 1 && m_maxImportFileMB.Value <= 1024 ? m_maxImportFileMB.Value : AssetLimits.DefaultMaxImportFileMB,
+            m_maxModAssetsMB.Value >= 1 && m_maxModAssetsMB.Value <= 8192 ? m_maxModAssetsMB.Value : AssetLimits.DefaultMaxModAssetsMB);
 
         public bool PluginEnabled => m_pluginEnabled.Value;
 

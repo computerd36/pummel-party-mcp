@@ -12,7 +12,7 @@ namespace PummelPartyMcp.Tools
     {
         private static EditServices s_services;
 
-        public static readonly string[] Capabilities = { "read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings" };
+        public static readonly string[] Capabilities = { "read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings", "assets" };
 
         /// <param name="publishBlock">Live publish-block status (re-verifies the required prefixes on every call).</param>
         public static void Register(ToolRegistry registry, PluginRuntimeInfo info, Func<bool> writesEnabled, Func<PublishBlockStatus> publishBlock,

@@ -7,7 +7,7 @@ Unofficial project, not affiliated with Rebuilt Games. It is an editor tool, not
 ## Safety model
 
 - Write tools only act on sandbox mods whose name starts with `MCP_` (hardcoded). Real mods cannot be opened, changed or deleted by the tools.
-- No mod deletion, no asset import, no Workshop tool of any kind.
+- No mod deletion, no Workshop tool of any kind. Assets: `import_asset` only reads the file you name and copies it into the sandbox mod's `Assets` folder (checked name, fixed sub-folder, never overwrites, size limits in the config `[Assets]`); `remove_asset` deletes only the sandbox mod's own custom assets. Both write or delete files immediately and are not undoable.
 - The API listens on `127.0.0.1` only, every request needs a per-install random token, and requests with an `Origin` header or a non-local `Host` are refused.
 - On a game version the plugin was not tested with, write tools are refused until you accept that version in the config.
 - Writes can be switched off in the config (`[Safety] EnableWrites = false`).

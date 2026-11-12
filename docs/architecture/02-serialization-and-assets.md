@@ -170,3 +170,11 @@ Detailed in `mod-format.md` section 6. Key code: `NewModPopup.CreateNewMod` (`Pa
 10. Concurrency: `LoadModAsync` runs stages on a worker thread while the editor UI keeps running; behaviour of calling `Save` during load is unprotected (`DelayedSaveRoutine` waits for `IsLoaded`, direct `Save()` does not) [C for absence of lock].
 11. `ModSettings.json` for Board mods references assets via `ModAssetReference<PummelPrefab>`; round-trip when the referenced prefab is missing was not traced.
 12. Whether the on-disk folder names for Workshop-downloaded/internal mods (`InbuiltMods`, Steam content folder) matter for the plugin: not studied (read-only there).
+
+## Corrections and additions (Phase 4, asset import and removal built)
+
+Recorded when the asset tools were built (plugin 0.8.0); details and evidence in `07-asset-import.md` (which has its own corrections section):
+
+- The standing rule "the plugin never imports or removes assets" no longer holds. The plugin now copies files into the sandbox mod itself (never through `PummelMod.AddAsset(copy: true)`, which can delete the source or an existing `(99)` duplicate) and registers them with `PummelMod.ImportFile`; `remove_asset` replicates `PummelMod.RemoveAsset` after a path, class and reference check. The boundaries are in `docs/plugin-api.md` (Assets).
+- The "100-duplicates" hazard noted above is avoided by construction: the plugin picks the free name (file and `.pmeta` both absent, at most 20 numbered duplicates, `FileMode.CreateNew`) and never lets the editor's loop run.
+- A re-import (`EditorSystem.ReimportAsset`) of a texture creates a new `Texture2D` and the asset list swaps it into the registered asset; the old object is neither destroyed nor re-pointed. Components, action parameters and the preview image that hold the old object by identity then fail the `GetAssetWithObject` lookup and are saved as none (confirmed from `PummelImageImporter` and `ModAssetList.AddAsset`). Props keep their registered `Prop` object (only the mesh is replaced).

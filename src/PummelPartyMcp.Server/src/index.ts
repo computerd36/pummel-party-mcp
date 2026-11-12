@@ -20,7 +20,7 @@ const PLAYER_TRIGGERS = "weaponHitTrigger, tickTrigger, onDeathTrigger, onRespaw
 const PARAGRAPHS: string[] = [
   "pummel-party-mcp drives the Pummel Party Mod Editor through a plugin inside the running game.",
 
-  "SAFETY: write tools act only on sandbox mods named MCP_ (^MCP_[A-Za-z0-9_ -]+$, max 64 chars, no leading/trailing space); anything else is refused (GUARD_NOT_TEST_MOD). Real mods can never be changed; Workshop publishing is blocked and has no tool. create_test_mod/open_test_mod are refused while a real mod is open (the human closes it). Writes need Safety.EnableWrites and a tested or accepted game version (get_status: writesEnabled, publishBlock, gameVersionCheck).",
+  "SAFETY: write tools act only on sandbox mods named MCP_ (^MCP_[A-Za-z0-9_ -]+$, max 64 chars, no leading/trailing space); anything else is refused (GUARD_NOT_TEST_MOD). Real mods can never be changed; Workshop publishing is blocked and has no tool. create_test_mod/open_test_mod are refused while a real mod is open (the human closes it). Writes need Safety.EnableWrites and a tested or accepted game version (get_status: writesEnabled, publishBlock, gameVersionCheck). Asset tools only read the source path you give (never change or delete it), only write inside the sandbox mod's Assets folder, and only remove the mod's own custom assets (usage_guide assets).",
 
   "WORKFLOW: get_status -> list_mods -> open_test_mod or create_test_mod -> get_hierarchy (guids) -> edits (create_object, set_transform, add_component, set_property, ...; many at once: run_batch) -> get_object to verify -> validate_mod -> save_mod -> start_playtest (aiOnly true runs unattended) -> get_playtest_state / get_playtest_events -> stop_playtest. Edits stay in memory until save_mod.",
   "ACTIONS: create_object kind trigger/logic; for a Trigger component set_property TriggerOnEnter (or TriggerOnExit/TriggerOnStay/TriggerOnHit) true to make its slot editable -> get_action_graph -> list_action_types with that trigger address -> add_action -> get_action_graph to verify -> save_mod. Logic components hold a trigger list (add_trigger, set_trigger, remove_trigger; Triggers[0], ...); other components have fixed slots. set_property cannot set triggers or actions.",
@@ -51,6 +51,14 @@ const SETTINGS_TOPIC =
   "PREVIEW IMAGE: capture_preview_image takes the editor's own screenshot of the scene view (like F10), which CREATES Assets/Textures/Screenshot<N>.jpg (+ .pmeta) in the sandbox mod immediately, and assigns it as the in-game preview image (assignment unsaved until save_mod). Not allowed in run_batch; refused while a dialog or prefab is open. Data/Preview.jpg is not touched. " +
   "PLAYTEST: settings tools are edit-mode only (INVALID_STATE during a playtest); a playtest runs on the SAVED files, so save_mod before start_playtest (start_playtest does) and verify a changed setting with get_playtest_state. BATCH: set_mod_settings, get_mod_settings and list_mod_settings are allowed in run_batch.";
 
+const ASSETS_TOPIC =
+  "ASSETS (sandbox mod, edit mode, no dialog, no prefab being edited): list_asset_rules shows the live limits, accepted files, import-setting fields and per-shader material properties; list_assets {location: external} lists the mod's own custom assets (internal = built-in); get_asset {guid} shows one asset in detail (file size, import settings, shader/properties, mesh/audio facts, removable, and references = every place that uses it). " +
+  "IMPORT: import_asset {path, name?, type?} COPIES a local file into the open sandbox mod and registers it. path = an absolute local path (C:\\...); UNC/network/device paths are refused in this version. The source is only read (never moved, changed, locked or deleted). Allowed: .png .jpg .jpeg (Assets/Textures), .obj (Assets/Props; a .mtl is not copied), .wav .mp3 .ogg (Assets/Audio), case-insensitive on input, written lower-case. The content must match the extension (a renamed file is refused); zero-byte files, textures over 8192 px per side, OBJs over 500,000 vertex lines and files over the configured size limits ([Assets] MaxImportFileMB default 50, MaxModAssetsMB default 500, in the plugin config, re-read per call) are refused before anything is copied. name = the asset name (A-Z a-z 0-9 space _ . ( ) -, max 64; default = the source file name with other characters replaced by _). The destination folder is fixed, nothing is ever overwritten: a taken name becomes 'name (1)' ... '(20)' (renamedBecauseExists), then ALREADY_EXISTS. The reply is the new asset (guid, name, type, location external, relativePath, size), copy.sha256, checks, undoable false. The files exist on disk NOW, not only after save_mod, and stay even if you never save. IMPORT_FAILED (error.data.cleanedUp) = the game could not read the file; the copy was removed again, the source untouched. Audio is decoded by the game on the main thread and blocks it until done: prefer small files. Not allowed in run_batch. " +
+  "USE: textures are referenced by guid in a material (set_material _MainTex), mesh props with create_object kind prop {prop: guid}, audio clips in a Play Sound action's clip parameter or as music/ambience (set_mod_settings music Music/Ambience), a texture as the preview image (set_mod_settings details previewImage = guid). " +
+  "IMPORT SETTINGS: set_import_settings {guid, values} for the mod's own textures (compression Normal|HighQuality|None, filterMode Point|Bilinear|Trilinear, wrapMode Repeat|Clamp|Mirror|MirrorOnce) and props (recalculateNormals). Applied like the inspector's Apply: .pmeta written and, for compression/recalculateNormals, the file re-imported. A re-import swaps the texture object, so a texture used by components, actions or the preview image is refused for compression changes (ASSET_IN_USE lists them; filterMode/wrapMode are applied in place and always allowed); materials' texture slots are re-pointed automatically. Audio, materials and prefabs have no import settings. " +
+  "MATERIALS: create_material {name?, shader?, properties?} creates Assets/Materials/<name>.pmat + .pmeta NOW (the editor's Create > Material, default shader unless shader = a built-in Shader name or guid) and saves the properties; set_material {guid, shader?, properties} changes only the mod's own materials and saves them at once (like Apply). properties = {key: value} per shader as listed by list_asset_rules (Standard / Standard Decal Receiver: _Mode Opaque|Cutout|Fade|Transparent, _Cutoff, _MainTex, _Color, _MetallicGlossMap, _Metallic, _Glossiness, _BumpMap, _ParallaxMap, _Parallax, _OcclusionMap, Emission, _EmissionColor, _EmissionMap, Tiling, Offset; three more shaders have their own short lists). Colours {r,g,b,a?} 0..1 (emission up to 64), vectors {x,y}, textures null or a Texture asset guid; ranges are clamped to the shader's own range (see clamped); conditional properties (_Cutoff only in Cutout, _Parallax only with a height map, _EmissionColor/_EmissionMap only with Emission) must have their controlling property in the same call or before. Shaders without a known inspector accept no properties. Assign a material with set_property on a renderer's 'materials' (or a prop's 'customMaterials') using the material guid. Materials are not undoable; reply has previous. Not allowed in run_batch. " +
+  "REMOVE: remove_asset {guid, force?} deletes the file and its .pmeta NOW (not undoable) and only for the mod's own custom textures, props, audio clips and materials (never built-in assets, prefabs or the open prefab). It is refused with ASSET_IN_USE and the list of references (objects/components, action parameters and targets, materials' texture slots, settings such as music/ambience) unless force true, which removes anyway: the references then become null at the next save_mod (referencesNulled). The mod's preview image is never removed (set it to null or another texture first). save_mod + get_asset/list_assets afterwards confirms the state.";
+
 const P = (...prefixes: string[]) => PARAGRAPHS.filter((p) => prefixes.some((x) => p.startsWith(x)));
 
 const TOPICS: Record<string, string> = {
@@ -61,6 +69,7 @@ const TOPICS: Record<string, string> = {
   playtest: P("PLAYTEST:").join("\n\n"),
   batch: P("BATCH:").join("\n\n"),
   settings: SETTINGS_TOPIC,
+  assets: ASSETS_TOPIC,
 };
 const TOPIC_NAMES = Object.keys(TOPICS) as [string, ...string[]];
 
@@ -219,7 +228,7 @@ withoutDefaultExecution(server.registerTool(
   "usage_guide",
   {
     description:
-      "Long-form guide, local (no game call). Optional topic: overview, safety, editing, actions, playtest, batch, settings; none = overview plus the topic list. Read before write tools.",
+      "Long-form guide, local (no game call). Optional topic: overview, safety, editing, actions, playtest, batch, settings, assets; none = overview plus the topic list. Read before write tools.",
     inputSchema: z.object({ topic: z.enum(TOPIC_NAMES).optional() }).strict() as any,
     annotations: READ_ONLY,
   },
@@ -296,6 +305,7 @@ register(
   {
     type: z.string().optional().describe("Asset type, case-insensitive (Prop, Material, Texture2D, AudioClip, Shader, Prefab...)."),
     includeBuiltIn: z.boolean().optional().describe("Default false."),
+    location: z.enum(["external", "internal"]).optional().describe("external = the mod's own custom assets (with sizeBytes); internal = built-in."),
     search: z.string().optional().describe("Name substring; space-separated terms must all match."),
     limit: z.number().int().min(1).max(500).optional().describe("1..500 (default 100)."),
     offset: z.number().int().min(0).optional().describe("Default 0."),
@@ -486,6 +496,68 @@ register(
   `Takes the editor's screenshot of the scene (like F10): CREATES a JPEG texture file + .pmeta in the sandbox mod's Assets/Textures right away and assigns it as the in-game preview image (unsaved until save_mod).${RULES}`,
   {},
   WRITE,
+);
+
+// ---------------------------------------------------------------------------
+// Assets (import, import settings, materials, removal)
+// ---------------------------------------------------------------------------
+
+register(
+  "get_asset",
+  "One asset in detail { guid, name, type, location, relativePath, sizeBytes, ownCustomAsset, importSettings, material shader/properties, removable, references: { count, items, scanComplete }, limits }. references lists every object, action, material and setting that uses it. Needs an open mod, edit mode.",
+  { guid: guidSchema },
+  READ_ONLY,
+);
+register(
+  "list_asset_rules",
+  "Discovery for assets: accepted file types, destination folders, live size limits, import-setting fields per type, material properties per shader (types, limits, conditions) and the built-in shader assets (usage_guide topic assets).",
+  {},
+  READ_ONLY,
+);
+register(
+  "import_asset",
+  `COPIES a local file into the open sandbox mod's Assets folder (Textures/Props/Audio) and registers it: .png .jpg .jpeg .obj .wav .mp3 .ogg. The source is only read. Files exist on disk immediately; not undoable (remove_asset deletes). Never overwrites.${RULES}`,
+  {
+    path: nonEmpty().describe("Absolute local path (C:\\...). UNC/network paths are refused."),
+    name: z.string().max(64).optional().describe("Asset name (A-Za-z0-9 _.()-); default: the source file name."),
+    type: z.enum(["Texture", "Prop", "AudioClip"]).optional().describe("Optional check against the file."),
+  },
+  WRITE,
+);
+register(
+  "set_import_settings",
+  `Sets import settings of one of the mod's own textures (compression, filterMode, wrapMode) or props (recalculateNormals) and applies them like the inspector's Apply (writes the .pmeta now, re-imports if needed). Not undoable.${RULES}`,
+  {
+    guid: guidSchema,
+    values: z.record(nonEmpty(), z.any()).refine((o) => Object.keys(o).length >= 1 && Object.keys(o).length <= 8, { message: "values must have 1-8 entries" }).describe("{field: value}."),
+  },
+  WRITE_IDEMPOTENT,
+);
+register(
+  "create_material",
+  `Creates a material like the editor's Create > Material (Assets/Materials/<name>.pmat + .pmeta written NOW) and sets its properties. Not undoable. Shader name/guid from list_asset_rules.${RULES}`,
+  {
+    name: z.string().max(64).optional().describe("Material name (A-Za-z0-9 _.()-); default Material_<n>."),
+    shader: nonEmpty().optional().describe("Built-in Shader name or guid; default: the editor's default shader."),
+    properties: z.record(nonEmpty(), z.any()).optional().describe("{property: value} per shader."),
+  },
+  WRITE,
+);
+register(
+  "set_material",
+  `Changes the shader and/or properties of one of the mod's own materials and saves it at once (like Apply). Not undoable; the reply has previous.${RULES}`,
+  {
+    guid: guidSchema,
+    shader: nonEmpty().optional(),
+    properties: z.record(nonEmpty(), z.any()).optional().describe("{property: value}."),
+  },
+  WRITE_IDEMPOTENT,
+);
+register(
+  "remove_asset",
+  `DELETES one of the mod's own custom assets (texture, prop, audio clip, material) and its .pmeta from the sandbox mod NOW; not undoable. Refused with ASSET_IN_USE (references listed) while it is used, unless force true (references become null).${RULES}`,
+  { guid: guidSchema, force: z.boolean().optional().describe("Default false.") },
+  WRITE_DESTRUCTIVE,
 );
 
 register(

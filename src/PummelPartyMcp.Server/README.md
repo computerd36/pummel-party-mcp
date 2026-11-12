@@ -67,3 +67,5 @@ npm test
 ```
 claude mcp add pummel-party-mcp -- node <abs path>\dist\index.js
 ```
+
+Asset tools (0.8.0): `get_asset`, `list_asset_rules`, `import_asset`, `set_import_settings`, `create_material`, `set_material`, `remove_asset` (and `list_assets` with `location`). `import_asset` copies a local absolute path into the sandbox mod (the source is only read; UNC/network paths are refused; size limits are plugin config values), `remove_asset` deletes only the mod's own custom assets and returns `ASSET_IN_USE` with the references while the asset is used. `import_asset`, `create_material` and `remove_asset` change files immediately and are not undoable; none of them is allowed inside `run_batch`. Long-form rules: `usage_guide` topic `assets`.

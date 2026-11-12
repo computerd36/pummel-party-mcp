@@ -138,6 +138,7 @@ namespace PummelPartyMcp.Core
             }
 
             AddSettings(l);
+            AddAssets(l);
 
             // distinct, order preserved
             HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
@@ -251,6 +252,58 @@ namespace PummelPartyMcp.Core
                     l.Add(new RequiredMember { Kind = "settingsMember", Type = s.HiddenType, Name = hidden, UsedBy = $"settings rules ({s.ModType}/{s.Name} not shown: {hidden})" });
                 }
             }
+        }
+
+        /// <summary>The asset tools (plugin 0.8.0): every editor/game member import_asset, set_import_settings, materials and remove_asset call.</summary>
+        private static void AddAssets(List<RequiredMember> l)
+        {
+            const string use = "asset tools";
+            void F(string type, string name, string fieldType, string u = use, bool isStatic = false) =>
+                l.Add(new RequiredMember { Kind = "field", Type = type, Name = name, Extra = fieldType, IsStatic = isStatic, UsedBy = u });
+            void P(string type, string name, string u = use) =>
+                l.Add(new RequiredMember { Kind = "property", Type = type, Name = name, UsedBy = u });
+            void M(string type, string name, string u, params string[] parameters) =>
+                l.Add(new RequiredMember { Kind = "method", Type = type, Name = name, Params = parameters, UsedBy = u });
+            void E(string type, string assembly, params string[] pairs) =>
+                l.Add(new RequiredMember { Kind = "enumType", Type = type, Assembly = assembly, Params = pairs, UsedBy = use + " (import settings / materials)" });
+
+            // import (the plugin copies the file itself and registers it with ImportFile; AddAsset(copy:true) is never called)
+            M("PummelMod", "ImportFile", "import_asset (registers the copied file)", "System.IO.FileInfo", "System.Boolean");
+            M("PummelMod", "RemoveAsset", "remove_asset, import cleanup", "ModAsset");
+            P("PummelMod", "FullAssetsFolder", "asset tools (folder re-check)");
+            P("PummelMod", "FullMaterialsFolder", "create_material (folder re-check)");
+            M("PummelMod", "GetModPath", "asset tools (the mod's absolute folder)");
+            M("PummelMod", "GetPreviewImageGuid", "remove_asset (preview image is never removed)");
+            F("ModAssetExternal", "filePath", "System.String");
+            M("ModAssetExternal", "Save", use + " (import settings, materials)");
+            M("ModAssetExternal", "Rename", "create_material (name)", "System.String");
+            P("PummelProp", "MeshAsset");
+            P("PummelMesh", "RecalculateNormals", "set_import_settings");
+            M("PummelTexture", "GetCompression", "get_asset, set_import_settings");
+            M("PummelTexture", "GetFilterMode", "get_asset, set_import_settings");
+            M("PummelTexture", "GetWrapMode", "get_asset, set_import_settings");
+            F("PummelTexture", "m_compression", "PummelTextureCompression", "set_import_settings (inspector field)");
+            F("PummelTexture", "m_filter", "UnityEngine.FilterMode", "set_import_settings (inspector field)");
+            F("PummelTexture", "m_wrapMode", "UnityEngine.TextureWrapMode", "set_import_settings (inspector field)");
+            E("PummelTextureCompression", null, "Normal=0", "HighQuality=1", "None=2");
+            E("UnityEngine.FilterMode", "UnityEngine.CoreModule", "Point=0", "Bilinear=1", "Trilinear=2");
+            E("UnityEngine.TextureWrapMode", "UnityEngine.CoreModule", "Repeat=0", "Clamp=1", "Mirror=2", "MirrorOnce=3");
+            M("EditorSystem", "ReimportAsset", "set_import_settings (the inspector's Apply)", "ModAssetExternal");
+            M("EditorSystem", "CreateNewMaterial", "create_material (writes Assets/Materials/<name>.pmat and .pmeta)");
+            M("EditorSystem", "GetUniqueAssetName", "create_material (the name the editor will choose)", "System.String");
+            F("EditorSystem", "defaultShaderGuid", "SerializableGuid", "create_material (the editor's default shader)");
+            M("EditorSystem", "GetSelectionManager", use);
+            M("EditorSystem", "GetAssetWithGuid", use, "SerializableGuid");
+            M("EditorSelectionManager", "IsSelected", use, "ModAssetExternal");
+            M("EditorSelectionManager", "IsSelectedAssetDirty", use);
+            M("EditorSelectionManager", "SerializeSelectedObject", use + " (clean baseline after a change)");
+            M("EditorSelectionManager", "DeselectSelectedAsset", "remove_asset", "System.Boolean");
+            F("EditorPopupManager", "CurrentPopup", "EditorPopup", "asset tools (dialog check)", true);
+            M("PummelMaterial", "SetShader", "create_material, set_material", "UnityEngine.Shader");
+            P("PummelMaterial", "UnityMaterial");
+            M("StandardShaderInspector", "UpdateKeywords", "set_material (what the inspector runs after each change)", "PummelMaterial");
+            M("DefaultShaderInspector", "UpdateKeywords", "set_material", "PummelMaterial");
+            E("MaterialRenderingMode", null, "Opaque=0", "Cutout=1", "Fade=2", "Transparent=3");
         }
 
         // ------------------------------------------------------------------ type lookup across assemblies

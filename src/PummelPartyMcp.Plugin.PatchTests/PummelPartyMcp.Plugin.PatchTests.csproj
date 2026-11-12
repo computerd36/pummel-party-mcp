@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
   <ItemGroup>
@@ -33,6 +34,9 @@
     <Compile Include="..\PummelPartyMcp.Plugin\Core\RequiredMembers.cs" Link="Core\RequiredMembers.cs" />
     <Compile Include="..\PummelPartyMcp.Plugin\Core\InspectorRules.cs" Link="Core\InspectorRules.cs" />
     <Compile Include="..\PummelPartyMcp.Plugin\Core\SettingsRules.cs" Link="Core\SettingsRules.cs" />
+    <Compile Include="..\PummelPartyMcp.Plugin\Core\AssetSettingsRules.cs" Link="Core\AssetSettingsRules.cs" />
+    <Compile Include="..\PummelPartyMcp.Plugin\Core\AssetImportCore.cs" Link="Core\AssetImportCore.cs" />
+    <Compile Include="..\PummelPartyMcp.Plugin\Core\TestModName.cs" Link="Core\TestModName.cs" />
   </ItemGroup>
 
   <ItemGroup>

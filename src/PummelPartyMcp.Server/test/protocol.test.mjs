@@ -15,6 +15,7 @@ const READ_TOOLS = [
   "usage_guide", "ping", "get_status", "get_open_mod", "get_hierarchy", "get_object", "get_action_graph",
   "list_assets", "list_component_types", "list_action_types", "list_trigger_types", "get_log", "screenshot", "list_mods",
   "validate_mod", "get_playtest_state", "get_playtest_events", "self_test", "list_mod_settings", "get_mod_settings",
+  "get_asset", "list_asset_rules",
 ];
 const SIZE_LIMIT = 40000;
 
@@ -181,7 +182,7 @@ test("usage_guide: topics exist, are non-empty, are served locally; instructions
     const instr = s.client.getInstructions();
     assert.match(instr, /usage_guide/);
     assert.match(instr, /MCP_/);
-    const topics = ["overview", "safety", "editing", "actions", "playtest", "batch", "settings"];
+    const topics = ["overview", "safety", "editing", "actions", "playtest", "batch", "settings", "assets"];
     const bare = await s.client.callTool({ name: "usage_guide", arguments: {} });
     assert.notEqual(bare.isError, true);
     for (const t of topics) assert.ok(bare.content[0].text.includes(t), `topic list names ${t}`);
@@ -193,6 +194,11 @@ test("usage_guide: topics exist, are non-empty, are served locally; instructions
     const settings = (await s.client.callTool({ name: "usage_guide", arguments: { topic: "settings" } })).content[0].text;
     assert.match(settings, /SAVE WARNING/);
     assert.match(settings, /capture_preview_image/);
+    const assets = (await s.client.callTool({ name: "usage_guide", arguments: { topic: "assets" } })).content[0].text;
+    assert.match(assets, /remove_asset/);
+    assert.match(assets, /UNC/);
+    assert.match(assets, /MaxImportFileMB/);
+    assert.match(assets, /never removed/);
     const bad = await call(s.client, "usage_guide", { topic: "nope" });
     assert.equal(bad.isError, true);
     assert.equal(s.fake.requests.length, 0, "usage_guide must not call the plugin");

@@ -57,6 +57,7 @@ namespace PummelPartyMcp.PatchTests
                 ReflectedMembers(game, check);
                 RegistryAndAudit(game, check);
                 SettingsDrift(game, check);
+                AssetsDrift(game, check);
             }
             catch (Exception e)
             {
@@ -153,6 +154,105 @@ namespace PummelPartyMcp.PatchTests
         /// assembly (the same entries self_test resolves), plus completeness: the data classes the settings window edits must have no
         /// public member the audit has not seen, so a game update that adds a setting fails here until the rule table is extended.
         /// </summary>
+        /// <summary>String literals (ldstr operands) of a method body, read from the IL without running anything.</summary>
+        private static HashSet<string> LdStrs(MethodBase method)
+        {
+            HashSet<string> result = new HashSet<string>(StringComparer.Ordinal);
+            MethodBody body = method.GetMethodBody();
+            byte[] il = body?.GetILAsByteArray();
+            if (il == null)
+            {
+                return result;
+            }
+            for (int i = 0; i + 4 < il.Length; i++)
+            {
+                if (il[i] != 0x72)
+                {
+                    continue;
+                }
+                int token = BitConverter.ToInt32(il, i + 1);
+                if ((token >> 24) != 0x70)
+                {
+                    continue; // not a user-string token
+                }
+                try
+                {
+                    result.Add(method.Module.ResolveString(token));
+                }
+                catch (Exception)
+                {
+                    // an operand byte that only looked like ldstr
+                }
+            }
+            return result;
+        }
+
+        /// <summary>Asset tools (plugin 0.8.0): the game facts the import/removal safety rules rest on, checked against the real assembly.</summary>
+        private static void AssetsDrift(Assembly game, Action<string, bool> check)
+        {
+            const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+            string[] users = { "asset tools", "import_asset", "set_import_settings", "create_material", "set_material", "remove_asset", "get_asset" };
+            List<RequiredMember> assets = RequiredMembers.All.Where(m => m.UsedBy != null && users.Any(u => m.UsedBy.StartsWith(u, StringComparison.Ordinal))).ToList();
+            List<string> problems = new List<string>();
+            foreach (RequiredMember m in assets)
+            {
+                string why = RequiredMembers.Resolve(game, m);
+                if (why != null)
+                {
+                    problems.Add(m.Kind + " " + m.Id + ": " + why);
+                }
+            }
+            foreach (string p in problems)
+            {
+                Console.WriteLine("    asset drift: " + p);
+            }
+            check($"every member the asset tools use resolves in the real game ({assets.Count} members; {problems.Count} problems)", problems.Count == 0 && assets.Count > 30);
+
+            // the import-setting table equals the game enums
+            List<string> enumProblems = new List<string>();
+            foreach (ImportSettingField f in ImportSettingRules.All.Where(x => !x.IsBool))
+            {
+                Type t = RequiredMembers.ResolveType(game, f.EnumType, f.EnumAssembly);
+                if (t == null || !t.IsEnum)
+                {
+                    enumProblems.Add(f.Name + ": enum " + f.EnumType + " not found");
+                    continue;
+                }
+                string actual = string.Join(",", t.GetFields(BindingFlags.Public | BindingFlags.Static).Select(x => x.Name + "=" + Convert.ToInt64(x.GetRawConstantValue())).OrderBy(x => x).ToArray());
+                string expected = string.Join(",", f.EnumNames.Select((n, i) => n + "=" + f.EnumValues[i]).OrderBy(x => x).ToArray());
+                if (actual != expected)
+                {
+                    enumProblems.Add($"{f.Name}: game [{actual}] table [{expected}]");
+                }
+            }
+            check("the import-setting choices equal the game's enums (" + string.Join("; ", enumProblems.ToArray()) + ")", enumProblems.Count == 0);
+
+            // the importer table: the extensions the allow-list relies on; .bmp (offered by the menu) has no importer
+            Type importer = game.GetType("PummelAssetImporter", false);
+            MethodInfo getImporter = importer?.GetMethod("GetImporter", all);
+            if (getImporter == null)
+            {
+                check("PummelAssetImporter.GetImporter exists", false);
+            }
+            else
+            {
+                HashSet<string> exts = LdStrs(getImporter);
+                check("GetImporter knows every allow-listed extension (" + string.Join(" ", AssetImportRules.AllowedExtensions.Where(e => !exts.Contains(e)).ToArray()) + " missing)",
+                    AssetImportRules.AllowedExtensions.All(e => exts.Contains(e)));
+                check("GetImporter has no .bmp importer (the editor menu offers it, the allow-list does not)", !exts.Contains(".bmp"));
+            }
+
+            // removal deletes <file> and <file>.pmeta (the two paths the plugin re-checks)
+            MethodInfo deleteFile = game.GetType("PummelMod", false)?.GetMethod("DeleteFile", all);
+            check("PummelMod.DeleteFile deletes the file and its .pmeta (what remove_asset re-checks)", deleteFile != null && LdStrs(deleteFile).Contains(".pmeta"));
+
+            // doc 07 hazards H1/H2: AddAsset(string, string, bool copy) still has this signature (the plugin never calls it; if it changes, redo the analysis)
+            MethodInfo addAsset = game.GetType("PummelMod", false)?.GetMethod("AddAsset", new[] { typeof(string), typeof(string), typeof(bool) });
+            check("PummelMod.AddAsset(string, string, bool copy) is unchanged (never called by the plugin; doc 07 hazards H1/H2)", addAsset != null);
+            MethodInfo createMat = game.GetType("EditorSystem", false)?.GetMethod("CreateNewMaterial", all);
+            check("EditorSystem.CreateNewMaterial writes a .pmat (create_material checks the file name first)", createMat != null && LdStrs(createMat).Contains(".pmat"));
+        }
+
         private static void SettingsDrift(Assembly game, Action<string, bool> check)
         {
             const BindingFlags pub = BindingFlags.Instance | BindingFlags.Public;
