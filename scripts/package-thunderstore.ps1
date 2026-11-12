@@ -99,7 +99,7 @@ if ($description.Length -gt 250) { throw "Description is $($description.Length) 
 $manifest = [ordered]@{
     name           = $pluginName
     version_number = $version
-    website_url    = ''   # PLACEHOLDER: fill in the project's GitHub URL once it is known
+    website_url    = 'https://github.com/computerd36/pummel-party-mcp'
     description    = $description
     dependencies   = @()  # PLACEHOLDER: add the BepInEx pack dependency string of this game's Thunderstore community (not known from the repo; do not guess)
 }

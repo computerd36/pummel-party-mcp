@@ -27,15 +27,15 @@
   },
   "license": "MIT",
   "private": true,
-  "//": "private stays true until the author decides to publish. Fill repository, homepage and bugs below once the GitHub URL is known (do not publish with the placeholders).",
+  "//": "private stays true until the author decides to publish.",
   "repository": {
     "type": "git",
-    "url": "REPLACE_WITH_GITHUB_REPOSITORY_URL",
+    "url": "git+https://github.com/computerd36/pummel-party-mcp.git",
     "directory": "src/PummelPartyMcp.Server"
   },
-  "homepage": "REPLACE_WITH_GITHUB_HOMEPAGE_URL",
+  "homepage": "https://github.com/computerd36/pummel-party-mcp#readme",
   "bugs": {
-    "url": "REPLACE_WITH_GITHUB_ISSUES_URL"
+    "url": "https://github.com/computerd36/pummel-party-mcp/issues"
   },
   "keywords": [
     "mcp",

@@ -6,6 +6,13 @@ Unofficial project, not affiliated with Rebuilt Games.
 
 It is an editor tool, not a cheat tool. In normal gameplay it does nothing, with one consequence you must know about: **while the plugin is enabled, publishing to the Steam Workshop is blocked** (create, update and delete), on purpose, so that a bug or a bad AI edit cannot reach a live Workshop item. To publish a mod by hand, quit the game, set `[General] PluginEnabled = false` in the plugin config (see [Configuration](#configuration)), start the game, publish as usual, quit, and set it back to `true`.
 
+## Use at your own risk
+
+- **No endorsement.** This project is not endorsed, supported or approved by Rebuilt Games or by Valve. Pummel Party has no separate developer licence agreement that we could find; the [Steam Subscriber Agreement](https://store.steampowered.com/subscriber_agreement/) applies. Its wording on third-party software and on reverse engineering is broad, and nobody has confirmed that a plugin like this one is permitted. You decide whether to use it; see [docs/legal-notes.md](docs/legal-notes.md) for what was checked. Nothing here is legal advice.
+- **Disable the plugin for normal play.** BepInEx loads the plugin every time the game starts, including for online matches. It does nothing there except keep the Workshop publish block and a few record-only hooks installed, but a third-party plugin loaded during online play is exactly what the agreement's anti-cheat wording describes. When you are not modding, set `[General] PluginEnabled = false` in the plugin config (see [Configuration](#configuration)) and restart the game, or keep a separate game shortcut without BepInEx.
+- **You are responsible for what you publish.** The plugin never publishes anything. If you publish a mod that an AI agent helped build, you do it by hand, under the Steam Workshop terms, as its author.
+- **No warranty** (see the [licence](#licence)). Back up your mod projects before you start (see [Safety model](#safety-model)).
+
 ## Status
 
 Pre-1.0 (0.7.0). Tested on Pummel Party game version `1.14.1k` (Windows, Steam), Unity 2021.3, Mono runtime. Interfaces may change between versions.
