@@ -154,7 +154,7 @@ For a plugin: `ModReflectionSystem.GetType(typeof(X)).properties` yields exactly
 
 ## 8. Folder naming (code view)
 
-Detailed in `mod-format.md` section 6. Key code: `NewModPopup.CreateNewMod` (`Path.Combine(EditorSystem.ModFolder, m_modName)`), `EditorPopup.IsValidFilenameInput/IsValidModnameInput` (`EditorPopup.cs:51-76`), `EditorSystem.RenameMod` (`:1172-1215`), `PummelMod` ctor (Name := `Path.GetFileName(path)`, `:160-170`). `PB_TEST_xyz` -> folder `PB_TEST_xyz`, Meta Name `PB_TEST_xyz`, workshop title set from `GetModName()` at creation (`PummelMod.cs:187`). The check for duplicate names is on Meta Name (case-insensitive), while the on-disk collision check happens only in rename (`Directory.Exists`) and implicitly in template copy (no-overwrite copy throws).
+Detailed in `mod-format.md` section 6. Key code: `NewModPopup.CreateNewMod` (`Path.Combine(EditorSystem.ModFolder, m_modName)`), `EditorPopup.IsValidFilenameInput/IsValidModnameInput` (`EditorPopup.cs:51-76`), `EditorSystem.RenameMod` (`:1172-1215`), `PummelMod` ctor (Name := `Path.GetFileName(path)`, `:160-170`). `MCP_xyz` -> folder `MCP_xyz`, Meta Name `MCP_xyz`, workshop title set from `GetModName()` at creation (`PummelMod.cs:187`). The check for duplicate names is on Meta Name (case-insensitive), while the on-disk collision check happens only in rename (`Directory.Exists`) and implicitly in template copy (no-overwrite copy throws).
 
 ## 9. Open questions / unverified
 

@@ -181,9 +181,12 @@ test("new error codes map to hints", async () => {
   }
 });
 
+// near misses and the old sandbox prefix (PB_TEST_), which is no longer accepted
+const BAD_NAMES = ["MyMod", "mcp_x", "Mcp_x", "MCP_", "MCP", "MCPx", " MCP_x", "MCP_x ", "MCP_a/b", "MCP_a\\b", "MCP_a\n", "MCP_" + "a".repeat(61), "\u041CCP_x", "M\u0421P_x", "MC\u0420_x", "\u039CCP_x", "\uFF2DCP_x", "MCP\uFF3Fx", "MCP_\uFF58", "PB_TEST_x", "PB_TEST_Sandbox", "pb_test_x"];
+
 test("name rule", () => {
-  for (const n of ["MyMod", "pb_test_x", "PB_TEST_", "PB_TEST_a/b", "PB_TEST_" + "a".repeat(62), "PB_TEST_a ", "PB_TEST_a\n"]) {
+  for (const n of BAD_NAMES) {
     assert.equal(isValidTestModName(n), false, JSON.stringify(n));
   }
-  for (const n of ["PB_TEST_x", "PB_TEST_a b-c_1", "PB_TEST_" + "a".repeat(56)]) assert.equal(isValidTestModName(n), true, n);
+  for (const n of ["MCP_x", "MCP_a b-c_1", "MCP_" + "a".repeat(60)]) assert.equal(isValidTestModName(n), true, n);
 });

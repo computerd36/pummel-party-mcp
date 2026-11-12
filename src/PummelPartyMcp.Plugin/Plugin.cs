@@ -23,7 +23,7 @@ namespace PummelPartyMcp
 
     /// <summary>
     /// Entry point. Phase 2: token-protected HTTP API on 127.0.0.1 with read tools and guarded write tools
-    /// (PB_TEST_ mods only), plus an always-on Harmony block of every Workshop publish/update/delete path.
+    /// (MCP_ mods only), plus an always-on Harmony block of every Workshop publish/update/delete path.
     /// The HTTP thread only parses requests; all Unity/game access is queued to Update() via the dispatcher.
     /// </summary>
     [BepInPlugin(PluginInfo.Guid, PluginInfo.Name, PluginInfo.Version)]
@@ -42,6 +42,19 @@ namespace PummelPartyMcp
         private RpcHttpServer m_server;
         private bool m_logHooked;
         private bool m_shutDown;
+
+        /// <summary>Application.version, or null if it cannot be read (the gate then treats the version as untested).</summary>
+        private static string ReadGameVersion()
+        {
+            try
+            {
+                return Application.version;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
 
         private void Awake()
         {
@@ -62,11 +75,23 @@ namespace PummelPartyMcp
 
             PluginRuntimeInfo info = new PluginRuntimeInfo
             {
-                GameVersion = Application.version,
+                GameVersion = ReadGameVersion(),
                 UnityVersion = Application.unityVersion,
                 SessionId = Guid.NewGuid().ToString("N"),
             };
             Logger.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} (api v{PluginInfo.ApiVersion}); game version {info.GameVersion}, Unity {info.UnityVersion}");
+
+            GameVersionStatus versionAtStart = m_config.CurrentGameVersion(info.GameVersion);
+            if (versionAtStart.WritesAllowed)
+            {
+                Logger.LogInfo(versionAtStart.IsTested
+                    ? $"Game version {info.GameVersion} is in the tested list ({string.Join(", ", versionAtStart.Tested)})."
+                    : $"Game version {info.GameVersion} is not in the tested list ({string.Join(", ", versionAtStart.Tested)}) but is accepted by [Safety] AcceptedGameVersion.");
+            }
+            else
+            {
+                Logger.LogWarning(GameVersionGate.Refusal(versionAtStart).Message + " (this is a warning: read tools keep working)");
+            }
 
             m_logRing = new LogRingBuffer(2000);
             Application.logMessageReceivedThreaded += OnUnityLog;
@@ -103,10 +128,15 @@ namespace PummelPartyMcp
                 InstallSaveWatch(log);
                 InstallPlaytestHooks();
                 PluginConfig config = m_config;
-                WriteSafety safety = new WriteSafety(() => config.EnableWrites, block.IsComplete, new GameEditorGuardHost(log));
+                // Config values are re-read from the file on every guarded call (BepInEx 5.4 has no file watcher): see PluginConfig.RefreshIfChanged.
+                Func<bool> writesEnabled = () => { config.RefreshIfChanged(); return config.EnableWrites; };
+                Func<GameVersionStatus> gameVersionPeek = () => config.CurrentGameVersion(info.GameVersion);
+                Func<GameVersionStatus> gameVersionMain = () => { config.RefreshIfChanged(); return gameVersionPeek(); };
+                WriteSafety safety = new WriteSafety(writesEnabled, block.IsComplete, gameVersionMain, new GameEditorGuardHost(log));
                 ToolRegistry registry = new ToolRegistry(safety, new WriteQueue(log));
                 m_registry = registry;
-                StatusTools.Register(registry, info, () => config.EnableWrites, block.Current, m_edit);
+                StatusTools.Register(registry, info, writesEnabled, block.Current, gameVersionPeek, gameVersionMain, m_edit);
+                SelfTestTool.Register(registry, info, gameVersionMain, block.Current);
                 HierarchyTools.Register(registry);
                 ObjectTools.Register(registry);
                 ActionTools.Register(registry);

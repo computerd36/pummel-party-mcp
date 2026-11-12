@@ -32,8 +32,8 @@ namespace PummelPartyMcp.Tests
             Console.WriteLine("-- unit: test-mod name rule");
             string[] valid =
             {
-                "PB_TEST_x", "PB_TEST_Sandbox", "PB_TEST_My Arena-2", "PB_TEST__", "PB_TEST_-", "PB_TEST_0",
-                "PB_TEST_" + new string('a', TestModName.MaxLength - 8),
+                "MCP_x", "MCP_Sandbox", "MCP_My Arena-2", "MCP__", "MCP_-", "MCP_0",
+                "MCP_" + new string('a', TestModName.MaxLength - 4),
             };
             foreach (string v in valid)
             {
@@ -41,23 +41,27 @@ namespace PummelPartyMcp.Tests
             }
             string[] invalid =
             {
-                null, "", "PB_TEST_", "PB_TEST", "PB_TEST ", "pb_test_x", "Pb_Test_x", "PB_test_x", "pB_TEST_x",
-                " PB_TEST_x", "PB_TEST_x ", "PB_TEST_x\t", "\tPB_TEST_x", "PB_TEST_x\n", "PB_TEST_ ",
-                "XPB_TEST_x", "My Real Mod", "My PB_TEST_x",
-                "PB_TEST_a/b", "PB_TEST_a\\b", "PB_TEST_..", "PB_TEST_../x", "PB_TEST_..\\x", "PB_TEST_a.b", "PB_TEST_x.",
-                "PB_TEST_C:", "PB_TEST_a:b", "PB_TEST_*", "PB_TEST_?", "PB_TEST_\"", "PB_TEST_<x>", "PB_TEST_a|b", "PB_TEST_a;b",
-                "PB_TEST_\0", "PB_TEST_a\u0001",
-                "PB_TEST_é", "PB_TEST_ü", "PB_TEST_ẞ", "PB_TEST_\u00A0x", "PB_TEST_x\u200B", "PB_TEST_\uFF41",   // non-ASCII, nbsp, zero-width, fullwidth a
-                "PB\u2010TEST_x", "PB_ТЕST_x", "ΡB_TEST_x", "PB＿TEST_x",   // hyphen look-alike, Cyrillic Т/Е, Greek Rho, fullwidth low line
-                "PB_TEST_" + new string('a', TestModName.MaxLength - 7),   // 65 chars
-                "PB_TEST_" + new string('a', 300),
+                null, "", "MCP_", "MCP", "MCP ", "mcp_x", "Mcp_x", "MCp_x", "mCP_x", "MCPx", "MCP-x",
+                " MCP_x", "MCP_x ", "MCP_x\t", "\tMCP_x", "MCP_x\n", "MCP_ ",
+                "XMCP_x", "My Real Mod", "My MCP_x",
+                "MCP_a/b", "MCP_a\\b", "MCP_..", "MCP_../x", "MCP_..\\x", "MCP_a.b", "MCP_x.",
+                "MCP_C:", "MCP_a:b", "MCP_*", "MCP_?", "MCP_\"", "MCP_<x>", "MCP_a|b", "MCP_a;b",
+                "MCP_\0", "MCP_a\u0001",
+                "MCP_é", "MCP_ü", "MCP_ẞ", "MCP_\u00A0x", "MCP_x\u200B", "MCP_\uFF41",   // non-ASCII, nbsp, zero-width, fullwidth a
+                "МCP_x", "MСP_x", "MCР_x", "ΜCP_x", "MCP＿x", "MCP‐x", "MCP‗x",   // Cyrillic M/S/R, Greek Mu, fullwidth low line, hyphen/double low line look-alikes
+                "ＭCP_x", "MCP_ｘ",   // fullwidth M, fullwidth x
+                // the old sandbox prefix is no longer accepted
+                "PB_TEST_x", "PB_TEST_Sandbox", "PB_TEST_Arena", "PB_TEST_My Arena-2", "PB_TEST_" + new string('a', 20),
+                "MCP_" + new string('a', TestModName.MaxLength - 3),   // 65 chars
+                "MCP_" + new string('a', 300),
             };
             foreach (string v in invalid)
             {
                 Check($"invalid: '{Show(v)}'", !TestModName.IsValid(v) && TestModName.Validate(v) != null);
             }
-            Check("length 64 is the maximum", ("PB_TEST_" + new string('a', 56)).Length == 64 && TestModName.IsValid("PB_TEST_" + new string('a', 56)));
-            Check("prefix constant is exactly PB_TEST_", TestModName.Prefix == "PB_TEST_");
+            Check("length 64 is the maximum", ("MCP_" + new string('a', 60)).Length == 64 && TestModName.IsValid("MCP_" + new string('a', 60)));
+            Check("old prefix PB_TEST_ is refused with a reason", TestModName.Validate("PB_TEST_x") != null && !TestModName.IsValid("PB_TEST_x"));
+            Check("prefix constant is exactly MCP_", TestModName.Prefix == "MCP_");
         }
 
         private static string Show(string s) => s == null ? "<null>" : (s.Length > 40 ? s.Substring(0, 40) + "..." : s)
@@ -87,16 +91,16 @@ namespace PummelPartyMcp.Tests
             Check("registry without WriteSafety accepts read tools", readOnly.TryGet("ping", out RegisteredTool p) && !p.Definition.IsWrite);
 
             FakeHost host = new FakeHost();
-            ToolRegistry reg = new ToolRegistry(new WriteSafety(() => true, () => true, host));
+            ToolRegistry reg = new ToolRegistry(new WriteSafety(() => true, () => true, () => GameVersionGate.AlwaysTested(), host));
             reg.Register(ToolDefinition.Write("save_mod", WriteGuard.OpenMod(), null, inv => inv.Complete(null)));
             Check("registry with WriteSafety registers write tool, definition keeps its guard",
                 reg.TryGet("save_mod", out RegisteredTool w) && w.Definition.IsWrite && w.Definition.Guard.Kind == WriteGuardKind.OpenMod
                 && w.Definition.ReadHandler == null);
             Check("duplicate names refused", Throws<InvalidOperationException>(() => reg.Register(ToolDefinition.Read("save_mod", _ => 1))));
             Check("WriteSafety requires all providers",
-                Throws<ArgumentNullException>(() => new WriteSafety(null, () => true, host))
-                && Throws<ArgumentNullException>(() => new WriteSafety(() => true, null, host))
-                && Throws<ArgumentNullException>(() => new WriteSafety(() => true, () => true, null)));
+                Throws<ArgumentNullException>(() => new WriteSafety(null, () => true, () => GameVersionGate.AlwaysTested(), host))
+                && Throws<ArgumentNullException>(() => new WriteSafety(() => true, null, () => GameVersionGate.AlwaysTested(), host))
+                && Throws<ArgumentNullException>(() => new WriteSafety(() => true, () => true, () => GameVersionGate.AlwaysTested(), null)));
         }
 
         // ------------------------------------------------------------------ guard order (OpenMod)
@@ -104,12 +108,12 @@ namespace PummelPartyMcp.Tests
         private static EditorSnapshot GoodSnapshot() => new EditorSnapshot
         {
             EditorOpen = true, IsLoading = false, ModOpen = true, ModLoaded = true,
-            ModName = "PB_TEST_Arena", FolderName = "PB_TEST_Arena", IsEditing = true, StateName = "Editing",
+            ModName = "MCP_Arena", FolderName = "MCP_Arena", IsEditing = true, StateName = "Editing",
         };
 
         private static string Code(bool writes, bool block, WriteGuard guard, object args, EditorSnapshot snap)
         {
-            RpcException e = WriteGuardEvaluator.Evaluate(new WriteSafety(() => writes, () => block, new FakeHost()), guard, args, snap);
+            RpcException e = WriteGuardEvaluator.Evaluate(new WriteSafety(() => writes, () => block, () => GameVersionGate.AlwaysTested(), new FakeHost()), guard, args, snap);
             return e?.Code;
         }
 
@@ -140,7 +144,7 @@ namespace PummelPartyMcp.Tests
 
             EditorSnapshot real = GoodSnapshot();
             real.ModName = "My Real Mod"; real.FolderName = "My Real Mod"; real.IsEditing = false; real.StateName = "PlayMode";
-            RpcException e = WriteGuardEvaluator.Evaluate(new WriteSafety(() => true, () => true, new FakeHost()), g, null, real);
+            RpcException e = WriteGuardEvaluator.Evaluate(new WriteSafety(() => true, () => true, () => GameVersionGate.AlwaysTested(), new FakeHost()), g, null, real);
             Check("GUARD_NOT_TEST_MOD for a real mod (before INVALID_STATE), message names it",
                 e?.Code == ErrorCodes.GuardNotTestMod && e.Message.Contains("My Real Mod"));
 
@@ -151,18 +155,18 @@ namespace PummelPartyMcp.Tests
             folderOnly.ModName = "My Real Mod";
             Check("GUARD_NOT_TEST_MOD when only the folder is a test name", Code(true, true, g, null, folderOnly) == ErrorCodes.GuardNotTestMod);
             EditorSnapshot lower = GoodSnapshot();
-            lower.ModName = lower.FolderName = "pb_test_arena";
+            lower.ModName = lower.FolderName = "mcp_arena";
             Check("GUARD_NOT_TEST_MOD for lower-case prefix", Code(true, true, g, null, lower) == ErrorCodes.GuardNotTestMod);
             EditorSnapshot nullNames = GoodSnapshot();
             nullNames.ModName = null; nullNames.FolderName = null;
             Check("GUARD_NOT_TEST_MOD when names are unreadable", Code(true, true, g, null, nullNames) == ErrorCodes.GuardNotTestMod);
             EditorSnapshot missingMember = GoodSnapshot();
             missingMember.ModName = null; missingMember.ModNameError = "member PummelMod.m_metaData not found - game version changed?";
-            RpcException me = WriteGuardEvaluator.Evaluate(new WriteSafety(() => true, () => true, new FakeHost()), g, null, missingMember);
+            RpcException me = WriteGuardEvaluator.Evaluate(new WriteSafety(() => true, () => true, () => GameVersionGate.AlwaysTested(), new FakeHost()), g, null, missingMember);
             Check("unreadable name because of a missing game member: refused (fail closed) with a clear message",
                 me != null && me.Code == ErrorCodes.Internal && me.Message.Contains("game version changed"));
             Check("same snapshot through the Lifecycle guard is refused too",
-                Code(true, true, WriteGuard.Lifecycle(a => "PB_TEST_x"), null, missingMember) != null);
+                Code(true, true, WriteGuard.Lifecycle(a => "MCP_x"), null, missingMember) != null);
 
             EditorSnapshot play = GoodSnapshot();
             play.IsEditing = false; play.StateName = "PlayMode";
@@ -170,9 +174,9 @@ namespace PummelPartyMcp.Tests
             Check("AllowPlayMode tool passes in play mode", Code(true, true, WriteGuard.OpenMod(allowPlayMode: true), null, play) == null);
 
             Check("throwing WritesEnabled provider fails closed",
-                WriteGuardEvaluator.Evaluate(new WriteSafety(() => throw new Exception("x"), () => true, new FakeHost()), g, null, GoodSnapshot())?.Code == ErrorCodes.WritesDisabled);
+                WriteGuardEvaluator.Evaluate(new WriteSafety(() => throw new Exception("x"), () => true, () => GameVersionGate.AlwaysTested(), new FakeHost()), g, null, GoodSnapshot())?.Code == ErrorCodes.WritesDisabled);
             Check("throwing PublishBlockComplete provider fails closed",
-                WriteGuardEvaluator.Evaluate(new WriteSafety(() => true, () => throw new Exception("x"), new FakeHost()), g, null, GoodSnapshot())?.Code == ErrorCodes.PublishBlockIncomplete);
+                WriteGuardEvaluator.Evaluate(new WriteSafety(() => true, () => throw new Exception("x"), () => GameVersionGate.AlwaysTested(), new FakeHost()), g, null, GoodSnapshot())?.Code == ErrorCodes.PublishBlockIncomplete);
         }
 
         // ------------------------------------------------------------------ lifecycle guard
@@ -182,31 +186,31 @@ namespace PummelPartyMcp.Tests
             Console.WriteLine("-- unit: Lifecycle guard");
             WriteGuard g = WriteGuard.Lifecycle(a => (string)a);
             EditorSnapshot none = new EditorSnapshot { EditorOpen = true, IsEditing = true, StateName = "Editing" };
-            Check("valid target, no mod open -> allowed", Code(true, true, g, "PB_TEST_New", none) == null);
-            Check("valid target, test mod open -> allowed", Code(true, true, g, "PB_TEST_New", GoodSnapshot()) == null);
+            Check("valid target, no mod open -> allowed", Code(true, true, g, "MCP_New", none) == null);
+            Check("valid target, test mod open -> allowed", Code(true, true, g, "MCP_New", GoodSnapshot()) == null);
             Check("invalid target -> GUARD_NOT_TEST_MOD", Code(true, true, g, "My Real Mod", none) == ErrorCodes.GuardNotTestMod);
-            Check("lower-case target -> GUARD_NOT_TEST_MOD", Code(true, true, g, "pb_test_x", none) == ErrorCodes.GuardNotTestMod);
-            Check("path-like target -> GUARD_NOT_TEST_MOD", Code(true, true, g, "PB_TEST_../My Real Mod", none) == ErrorCodes.GuardNotTestMod);
+            Check("lower-case target -> GUARD_NOT_TEST_MOD", Code(true, true, g, "mcp_x", none) == ErrorCodes.GuardNotTestMod);
+            Check("path-like target -> GUARD_NOT_TEST_MOD", Code(true, true, g, "MCP_../My Real Mod", none) == ErrorCodes.GuardNotTestMod);
             Check("null target -> GUARD_NOT_TEST_MOD", Code(true, true, g, null, none) == ErrorCodes.GuardNotTestMod);
 
             EditorSnapshot realOpen = GoodSnapshot();
             realOpen.ModName = realOpen.FolderName = "Arena Deluxe - Winter";
-            RpcException e = WriteGuardEvaluator.Evaluate(new WriteSafety(() => true, () => true, new FakeHost()), g, "PB_TEST_New", realOpen);
+            RpcException e = WriteGuardEvaluator.Evaluate(new WriteSafety(() => true, () => true, () => GameVersionGate.AlwaysTested(), new FakeHost()), g, "MCP_New", realOpen);
             Check("non-test mod open -> GUARD_NOT_TEST_MOD naming it and saying 'close ... by hand'",
                 e?.Code == ErrorCodes.GuardNotTestMod && e.Message.Contains("Arena Deluxe - Winter") && e.Message.Contains("by hand"));
             EditorSnapshot realNotLoaded = GoodSnapshot();
             realNotLoaded.ModName = realNotLoaded.FolderName = "Arena Deluxe - Winter";
             realNotLoaded.ModLoaded = false;
-            Check("non-test mod open but not loaded -> still GUARD_NOT_TEST_MOD", Code(true, true, g, "PB_TEST_New", realNotLoaded) == ErrorCodes.GuardNotTestMod);
+            Check("non-test mod open but not loaded -> still GUARD_NOT_TEST_MOD", Code(true, true, g, "MCP_New", realNotLoaded) == ErrorCodes.GuardNotTestMod);
             Check("WRITES_DISABLED before target check", Code(false, true, g, "My Real Mod", realOpen) == ErrorCodes.WritesDisabled);
             Check("PUBLISH_BLOCK_INCOMPLETE before target check", Code(true, false, g, "My Real Mod", realOpen) == ErrorCodes.PublishBlockIncomplete);
             EditorSnapshot loading = GoodSnapshot();
             loading.IsLoading = true;
-            Check("BUSY_LOADING while loading", Code(true, true, g, "PB_TEST_New", loading) == ErrorCodes.BusyLoading);
+            Check("BUSY_LOADING while loading", Code(true, true, g, "MCP_New", loading) == ErrorCodes.BusyLoading);
             EditorSnapshot play = GoodSnapshot();
             play.IsEditing = false; play.StateName = "PlayMode";
-            Check("INVALID_STATE in play mode", Code(true, true, g, "PB_TEST_New", play) == ErrorCodes.InvalidState);
-            Check("EDITOR_NOT_OPEN", Code(true, true, g, "PB_TEST_New", new EditorSnapshot()) == ErrorCodes.EditorNotOpen);
+            Check("INVALID_STATE in play mode", Code(true, true, g, "MCP_New", play) == ErrorCodes.InvalidState);
+            Check("EDITOR_NOT_OPEN", Code(true, true, g, "MCP_New", new EditorSnapshot()) == ErrorCodes.EditorNotOpen);
             WriteGuard throwing = WriteGuard.Lifecycle(a => throw new Exception("bad"));
             Check("throwing target accessor -> refused", Code(true, true, throwing, null, none) != null);
         }
@@ -218,8 +222,9 @@ namespace PummelPartyMcp.Tests
             Console.WriteLine("-- unit: guarded invocation through the registry");
             FakeHost host = new FakeHost { Snapshot = GoodSnapshot() };
             bool writes = true, block = true;
+            GameVersionStatus version = GameVersionGate.AlwaysTested();
             int bodyRuns = 0;
-            ToolRegistry reg = new ToolRegistry(new WriteSafety(() => writes, () => block, host));
+            ToolRegistry reg = new ToolRegistry(new WriteSafety(() => writes, () => block, () => version, host));
             reg.Register(ToolDefinition.Write("save_mod", WriteGuard.OpenMod(), null, inv => { bodyRuns++; inv.Complete(new JObject { ["saved"] = true }); }));
             reg.Register(ToolDefinition.Write("open_test_mod", WriteGuard.Lifecycle(a => (string)a), ctx => ctx.GetString("name", true),
                 inv => { bodyRuns++; inv.Complete(new JObject { ["name"] = (string)inv.Args }); }));
@@ -244,20 +249,28 @@ namespace PummelPartyMcp.Tests
             Check("WRITES_DISABLED through registry, body not run", CallCode("save_mod", new JObject()) == ErrorCodes.WritesDisabled && bodyRuns == 1);
             writes = true; block = false;
             Check("PUBLISH_BLOCK_INCOMPLETE through registry, body not run", CallCode("save_mod", new JObject()) == ErrorCodes.PublishBlockIncomplete && bodyRuns == 1);
-            Check("PUBLISH_BLOCK_INCOMPLETE also for lifecycle tools", CallCode("open_test_mod", new JObject { ["name"] = "PB_TEST_X" }) == ErrorCodes.PublishBlockIncomplete && bodyRuns == 1);
+            Check("PUBLISH_BLOCK_INCOMPLETE also for lifecycle tools", CallCode("open_test_mod", new JObject { ["name"] = "MCP_X" }) == ErrorCodes.PublishBlockIncomplete && bodyRuns == 1);
             block = true;
+            version = GameVersionGate.Evaluate("9.9.9", GameVersionGate.TestedVersions, null);
+            Check("GAME_VERSION_UNTESTED through registry (write and lifecycle), body not run",
+                CallCode("save_mod", new JObject()) == ErrorCodes.GameVersionUntested
+                && CallCode("open_test_mod", new JObject { ["name"] = "MCP_X" }) == ErrorCodes.GameVersionUntested && bodyRuns == 1);
+            version = GameVersionGate.Evaluate("9.9.9", GameVersionGate.TestedVersions, "9.9.9");
+            Check("accepted version runs the body again", ((JObject)Call("save_mod", new JObject()))?["saved"]?.Value<bool>() == true && bodyRuns == 2);
+            version = GameVersionGate.AlwaysTested();
+            bodyRuns = 1;
 
             host.Snapshot = GoodSnapshot();
             host.Snapshot.ModName = host.Snapshot.FolderName = "My Real Mod";
             int hygieneBefore = host.HygieneCalls;
             Check("non-test mod open: save refused, body not run, no hygiene",
                 CallCode("save_mod", new JObject()) == ErrorCodes.GuardNotTestMod && bodyRuns == 1 && host.HygieneCalls == hygieneBefore);
-            Check("non-test mod open: lifecycle refused", CallCode("open_test_mod", new JObject { ["name"] = "PB_TEST_X" }) == ErrorCodes.GuardNotTestMod && bodyRuns == 1);
+            Check("non-test mod open: lifecycle refused", CallCode("open_test_mod", new JObject { ["name"] = "MCP_X" }) == ErrorCodes.GuardNotTestMod && bodyRuns == 1);
             host.Snapshot = new EditorSnapshot { EditorOpen = true, IsEditing = true, StateName = "Editing" };
-            Check("lifecycle with no mod open runs, no hygiene", ((JObject)Call("open_test_mod", new JObject { ["name"] = "PB_TEST_X" }))?["name"]?.ToString() == "PB_TEST_X"
+            Check("lifecycle with no mod open runs, no hygiene", ((JObject)Call("open_test_mod", new JObject { ["name"] = "MCP_X" }))?["name"]?.ToString() == "MCP_X"
                 && bodyRuns == 2 && host.HygieneCalls == hygieneBefore);
             Check("lifecycle param type error -> INVALID_PARAMS before the main thread", CallCode("open_test_mod", new JObject { ["name"] = 5 }) == ErrorCodes.InvalidParams
-                && d.Invocations == 7);
+                && d.Invocations == 10);
             Check("lifecycle with non-test target refused", CallCode("open_test_mod", new JObject { ["name"] = "My Real Mod" }) == ErrorCodes.GuardNotTestMod && bodyRuns == 2);
             Check("snapshot captured on the dispatcher thread (same unit as the body)", host.CapturedOnDispatcherOnly);
         }

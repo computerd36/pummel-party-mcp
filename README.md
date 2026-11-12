@@ -1,0 +1,212 @@
+# pummel-party-mcp
+
+pummel-party-mcp lets an AI agent see and edit what is open in Pummel Party's built-in Mod Editor through the Model Context Protocol (MCP): objects, components and their properties, Action Editor logic (triggers and actions), the editor's validator and playtests. It has two parts: a BepInEx 5 plugin that runs inside the game and serves a token-protected API on `127.0.0.1`, and an MCP server (Node.js, stdio) that exposes one tool per plugin method to an MCP client such as Claude Code.
+
+Unofficial project, not affiliated with Rebuilt Games.
+
+It is an editor tool, not a cheat tool. In normal gameplay it does nothing, with one consequence you must know about: **while the plugin is enabled, publishing to the Steam Workshop is blocked** (create, update and delete), on purpose, so that a bug or a bad AI edit cannot reach a live Workshop item. To publish a mod by hand, quit the game, set `[General] PluginEnabled = false` in the plugin config (see [Configuration](#configuration)), start the game, publish as usual, quit, and set it back to `true`.
+
+## Status
+
+Pre-1.0 (0.7.0). Tested on Pummel Party game version `1.14.1k` (Windows, Steam), Unity 2021.3, Mono runtime. Interfaces may change between versions.
+
+## Safety model
+
+What you can check:
+
+- Sandbox mods only. Write tools act only on mods whose name starts with `MCP_` (exact, case-sensitive; letters, digits, `_`, `-` and spaces; at most 64 characters). The rule is hardcoded; there is no setting or allowlist.
+- Real mods cannot be opened, changed, renamed or deleted by the tools. `create_test_mod` and `open_test_mod` refuse while a real mod is open; you close it by hand.
+- No mod deletion, no asset import or removal, no Workshop tool of any kind.
+- Workshop create/update/delete is blocked at two layers: the game's own publish methods and the Steamworks write calls underneath them. It fails closed: if a block target cannot be patched (for example after a game update) or a patch is removed later, every write tool returns `PUBLISH_BLOCK_INCOMPLETE`. `get_status` shows the live state (`publishBlock.complete`).
+- Loopback only. The server binds `127.0.0.1`, every request needs a per-install random token, and requests with an `Origin` header or a non-local `Host` are rejected.
+- Game-version gate (0.7.0): on a game version the plugin was not tested with, write tools are refused with `GAME_VERSION_UNTESTED` until `[Safety] AcceptedGameVersion` equals the running version exactly (tested version: `1.14.1k`; read tools keep working; the config is re-read on the next call, no restart).
+- Writes can be switched off with `[Safety] EnableWrites = false`.
+
+What this does not protect against:
+
+- The editor's own behaviour. If you open a real mod by hand, the game itself may write to its folder (for example it can create missing `.pmeta` files). The plugin only reads in that case, but it cannot stop the editor from doing what it always does.
+- Saving is not atomic (it is the editor's own save). A crash during a save can leave a sandbox mod in a bad state. The plugin never saves automatically, except that `start_playtest` saves the sandbox mod, like the Play button does.
+- The token file is readable by local processes of the same Windows user (and possibly other users, depending on the folder's permissions). A malicious local process is out of scope.
+- A game update can change editor internals in ways the plugin does not detect.
+
+Back up your mod projects before you use this, even though real mods are not touched. The repo has two scripts; the default destination in `backup-mods.ps1` is the author's own choice, so pass your own `-DestinationRoot` (outside the repo, outside the game folder, ideally on another drive):
+
+```powershell
+.\scripts\backup-mods.ps1 -DestinationRoot "D:\PummelBackups"
+.\scripts\verify-backup.ps1 -BackupRoot "D:\PummelBackups"
+```
+
+The backup copies files only, writes a SHA-256 manifest and never modifies the source; the verify script is read-only.
+
+## Requirements
+
+- Pummel Party on Steam, Windows.
+- BepInEx 5, x64, Mono build (developed against 5.4.23.5).
+- .NET 8 SDK, to build the plugin (it targets .NET Framework 4.7.2 and uses reference assemblies from NuGet).
+- Node.js 20 or newer, for the MCP server.
+
+## Install and build
+
+PowerShell, from the repo root. Replace the game folder with yours.
+
+1. Install BepInEx 5 into the game folder. Download `BepInEx_win_x64_5.4.23.5.zip` from the [BepInEx releases](https://github.com/BepInEx/BepInEx/releases/tag/v5.4.23.5) and extract it into the game folder (next to the game's executable). Start the game once and quit; `BepInEx\LogOutput.log` should exist.
+
+2. Build the plugin. `GameDir` tells the build where the game's assemblies are; they are referenced from there and never copied into the repo or the build output, and the repo does not redistribute them.
+
+   ```powershell
+   $game = "C:\Program Files (x86)\Steam\steamapps\common\Pummel Party"
+   dotnet build src\PummelPartyMcp.Plugin\PummelPartyMcp.Plugin.csproj -c Release -p:GameDir="$game"
+   ```
+
+   Without `-p:GameDir` the csproj uses the author's install path. Alternatively create an untracked `PummelPartyMcp.Plugin.csproj.user` next to the project that sets `<GameDir>`.
+
+3. Copy the plugin into the game folder. This is the only change to the game folder besides BepInEx itself.
+
+   ```powershell
+   New-Item -ItemType Directory -Force "$game\BepInEx\plugins\PummelPartyMcp" | Out-Null
+   Copy-Item src\PummelPartyMcp.Plugin\bin\Release\PummelPartyMcp.Plugin.dll "$game\BepInEx\plugins\PummelPartyMcp\"
+   ```
+
+4. Start the game and check `BepInEx\LogOutput.log`. The plugin prints lines like these (each prefixed by BepInEx with level and plugin name):
+
+   ```text
+   PummelPartyMcp 0.7.0 (api v2); game version <version>, Unity <version>
+   Workshop publish block active: 59 methods patched. Publishing to the Workshop is disabled while this plugin is enabled.
+   Listening on http://127.0.0.1:38917/rpc (...); writes enabled, publish block complete
+   ```
+
+   The first run also creates the config file and the token file in `BepInEx\config\`.
+
+5. Build the MCP server.
+
+   ```powershell
+   cd src\PummelPartyMcp.Server
+   npm ci
+   npm run build
+   cd ..\..
+   ```
+
+6. Register it with your MCP client. In this repo, Claude Code picks up the project file `.mcp.json` when started in the repo root:
+
+   ```json
+   {
+     "mcpServers": {
+       "pummel-party-mcp": {
+         "type": "stdio",
+         "command": "node",
+         "args": ["src/PummelPartyMcp.Server/dist/index.js"]
+       }
+     }
+   }
+   ```
+
+   The equivalent command, usable from any folder:
+
+   ```powershell
+   claude mcp add --env PUMMEL_PARTY_MCP_GAME_DIR="$game" pummel-party-mcp -- node "<path to repo>\src\PummelPartyMcp.Server\dist\index.js"
+   ```
+
+Environment variables of the MCP server:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PUMMEL_PARTY_MCP_PORT` | `38917` | Plugin port (must match `[Server] Port`) |
+| `PUMMEL_PARTY_MCP_GAME_DIR` | the author's install path | Game folder; the token is read from `<GameDir>\BepInEx\config\PummelPartyMcp.token` |
+| `PUMMEL_PARTY_MCP_TOKEN_FILE` | derived from the game dir | Full path of the token file; overrides the game dir |
+| `PUMMEL_PARTY_MCP_TIMEOUT_MS` | per tool | Overrides every request timeout (mainly for tests) |
+
+The default game dir in `src/PummelPartyMcp.Server/src/client.ts` is `C:\Program Files (x86)\Steam\steamapps\common\Pummel Party`, the author's path. Unless your game is in that exact place, set `PUMMEL_PARTY_MCP_GAME_DIR` or `PUMMEL_PARTY_MCP_TOKEN_FILE`, otherwise the server cannot find the token. If you use the project `.mcp.json`, add an `"env"` object with the variable to your local copy.
+
+## First use
+
+Start the game, open the Mod Editor from the main menu, then start your MCP client and ask for something like:
+
+> Create a sandbox minigame called MCP_Arena with a 20 by 20 floor and a player spawn, add a trigger zone that changes health, validate it, save it and run an AI-only playtest. Tell me what actually happened to the players.
+
+The agent should follow this sequence:
+
+1. `get_status` and `list_mods`; `create_test_mod` (name starts with `MCP_`).
+2. Build with `create_object`, `add_component`, `set_property`, and the trigger/action tools, or many steps at once with `run_batch`.
+3. Read back with `get_object` / `get_action_graph`.
+4. `validate_mod`, then `save_mod`.
+5. `start_playtest` with `aiOnly: true` (this saves the mod).
+6. `get_playtest_state`, `get_playtest_events`, `screenshot`, `get_log` to see what happened.
+7. `stop_playtest` before editing again.
+
+The server also ships a guide as `usage_guide`; clients that do not show server instructions to the model can call it. The skill file `skills/pummel-modder/SKILL.md` is a short agent-facing version of the workflow.
+
+## Tools
+
+| Purpose | Tools |
+|---|---|
+| Status and reading | `ping`, `get_status`, `get_open_mod`, `get_hierarchy`, `get_object`, `get_action_graph`, `list_assets`, `get_log`, `screenshot` |
+| Mod lifecycle | `list_mods`, `create_test_mod`, `open_test_mod`, `save_mod` |
+| Objects | `create_object`, `duplicate_object`, `delete_object`, `reparent_object`, `set_object`, `set_transform` |
+| Components and properties | `list_component_types`, `add_component`, `remove_component`, `set_property`, `set_properties` |
+| Actions and triggers | `list_action_types`, `list_trigger_types`, `add_action`, `remove_action`, `move_action`, `set_action`, `add_trigger`, `remove_trigger`, `set_trigger` |
+| Validation, playtest, observation | `validate_mod`, `start_playtest`, `stop_playtest`, `get_playtest_state`, `get_playtest_events` |
+| Batch and undo | `run_batch`, `undo` |
+| Guide and self-check | `usage_guide`, `self_test` |
+
+0.7.0 adds the read tool `self_test` and stricter `set_property` rules that follow what each component's inspector really shows. The full contract (parameters, results, error codes, timeouts, play-mode behaviour) is in [docs/plugin-api.md](docs/plugin-api.md); the server is described in [src/PummelPartyMcp.Server/README.md](src/PummelPartyMcp.Server/README.md).
+
+## Limits and known gaps
+
+- No redo (the editor has none). `undo` works like Ctrl+Z; object creation is not undoable (use `delete_object`).
+- No input injection: a playtest is AI-only (`aiOnly: true`) or driven by a human at the keyboard.
+- Some property types are not settable (for example triggers and action lists through `set_property`, `ModWeaponInfo`, `BoardNodeConnection[]`); use the dedicated tools or the editor.
+- No asset import, creation or removal; no editing of mod settings except the player-settings triggers (description, preview image, rounds and end conditions are set by hand; the Use Health setting too).
+- Board mods: connections cannot be edited, so a Board mod cannot be made valid through the plugin; runtime visibility of board playtests is basic.
+- Only tested on Windows, Steam, game version `1.14.1k`.
+
+## Configuration
+
+`BepInEx\config\com.pummelpartymcp.plugin.cfg` (created on first start; read at game start unless noted):
+
+| Key | Default | Effect |
+|---|---|---|
+| `[General] PluginEnabled` | `true` | `false`: the plugin does nothing (no server, no patches, so Workshop publishing works). |
+| `[Safety] EnableWrites` | `true` | Read on every write call. `false`: write tools return `WRITES_DISABLED`. Does not affect the publish block. |
+| `[Safety] AcceptedGameVersion` | not set | 0.7.0: set it to accept an untested game version so writes are allowed again (see below). |
+| `[Server] Enabled` | `true` | `false`: no API server; the publish block stays active. |
+| `[Server] Port` | `38917` | Loopback port (1024-65535). If it cannot be bound the plugin stays idle; the publish block stays active. |
+
+The token is in `BepInEx\config\PummelPartyMcp.token` (64 hex characters, created on first start).
+
+## After a game update
+
+- A new game version is not trusted automatically. Writes are refused with `GAME_VERSION_UNTESTED` until `[Safety] AcceptedGameVersion` is set in the config file. Do that only after you have checked the points below.
+- If a Workshop block target no longer resolves, the block is incomplete and writes stay off (`PUBLISH_BLOCK_INCOMPLETE`). Reading keeps working. Do not publish through the plugin in that state; it is the plugin that blocks publishing, so there is nothing to bypass.
+- Run the read tool `self_test` (it re-resolves every game member the plugin needs, the publish block and the inspector audit; `ok: true` is the evidence to look for) and check `get_log` and `BepInEx\LogOutput.log` for errors; a plugin error naming a missing game member (`game version changed?`) means an editor internal moved.
+- The repo has an offline drift test (`PummelPartyMcp.Plugin.PatchTests`) that loads the game's assemblies for reflection only and checks that every Workshop block target still resolves; see [Development](#development).
+- Back up your mods, try on a fresh `MCP_` mod, and report breakage as an issue.
+
+## Development
+
+Layout:
+
+| Path | Content |
+|---|---|
+| `src/PummelPartyMcp.Plugin` | BepInEx plugin (C#, net472): `Core` (Unity-free: HTTP, auth, dispatch, rules), `Game` (editor access), `Tools`, `Safety`, `Hooks` |
+| `src/PummelPartyMcp.Plugin.Tests` | net8.0 console harness for `Core`; needs no game |
+| `src/PummelPartyMcp.Plugin.PatchTests` | net472 Harmony and drift tests; reads the game DLLs for reflection only |
+| `src/PummelPartyMcp.Server` | MCP server (TypeScript) and its tests |
+| `docs/` | `plugin-api.md` (API reference), `editor-architecture.md` and `architecture/` (how the editor works), `mod-format.md` |
+| `scripts/` | backup and verify scripts |
+| `skills/pummel-modder/` | agent skill |
+
+Tests (PowerShell, from the repo root):
+
+```powershell
+dotnet run -c Release --project src\PummelPartyMcp.Plugin.Tests
+dotnet run -c Release --project src\PummelPartyMcp.Plugin.PatchTests -p:GameDir="$game"
+cd src\PummelPartyMcp.Server; npm test
+```
+
+The patch tests need a local game install with BepInEx (they reference its `0Harmony.dll` and related assemblies). The first two suites print their results to the console; the server tests build the project and run Node's test runner against a fake plugin.
+
+Game DLLs, decompiled game code and other people's mod files must never be committed. `decompiled/`, `lib/`, `*.dll` and similar are in `.gitignore`; keep it that way. `CLAUDE.md` holds the working rules for AI agents that contribute to this repo, and `PLAN.md` the project plan and decision log.
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). Pummel Party and its assets belong to Rebuilt Games and are not included in this repository.

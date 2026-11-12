@@ -75,12 +75,17 @@ namespace PummelPartyMcp.Core
     {
         public Func<bool> WritesEnabled { get; }
         public Func<bool> PublishBlockComplete { get; }
+
+        /// <summary>Live game-version status (guard step 3); re-evaluated on every write call so the config can change.</summary>
+        public Func<GameVersionStatus> GameVersion { get; }
+
         public IEditorGuardHost Host { get; }
 
-        public WriteSafety(Func<bool> writesEnabled, Func<bool> publishBlockComplete, IEditorGuardHost host)
+        public WriteSafety(Func<bool> writesEnabled, Func<bool> publishBlockComplete, Func<GameVersionStatus> gameVersion, IEditorGuardHost host)
         {
             WritesEnabled = writesEnabled ?? throw new ArgumentNullException(nameof(writesEnabled));
             PublishBlockComplete = publishBlockComplete ?? throw new ArgumentNullException(nameof(publishBlockComplete));
+            GameVersion = gameVersion ?? throw new ArgumentNullException(nameof(gameVersion));
             Host = host ?? throw new ArgumentNullException(nameof(host));
         }
     }
@@ -104,6 +109,20 @@ namespace PummelPartyMcp.Core
             {
                 return new RpcException(ErrorCodes.PublishBlockIncomplete,
                     "the Workshop publish block could not be fully installed (see get_status.publishBlock.missing and the BepInEx log); write tools are disabled");
+            }
+            GameVersionStatus version;
+            try
+            {
+                version = safety.GameVersion();
+            }
+            catch
+            {
+                version = null; // fail closed
+            }
+            RpcException untested = GameVersionGate.Refusal(version);
+            if (untested != null)
+            {
+                return untested;
             }
             if (snap == null || !snap.EditorOpen)
             {

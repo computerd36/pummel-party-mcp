@@ -303,44 +303,9 @@ namespace PummelPartyMcp.Core
 
     public static class InspectorClamps
     {
-        private static readonly Dictionary<string, KeyValuePair<double?, double?>> s_table = new Dictionary<string, KeyValuePair<double?, double?>>(StringComparer.Ordinal)
-        {
-            ["ModAudioSource.volume"] = Range(0, 1),                 // ModAudioSourceInspector slider
-            ["ModAudioSource.spatialBlend"] = Range(0, 1),
-            ["ModAudioSource.stereoPanning"] = Range(-1, 1),
-            ["ModBoardSpace.SpawnRotation"] = Range(0, 360),         // ModBoardSpaceInspector slider
-            ["ModBoardSpace.SpawnDistance"] = Range(0, 4),
-            ["ModFireWeapon.FireTime"] = Range(0.1, null),           // Mathf.Max(0.1f, ...)
-            ["ModItem.SecondsBetweenHeldAction"] = Range(0.1, null),
-            ["ModItem.Cooldown"] = Range(0.1, null),
-            ["ModLight.spotAngle"] = Range(0, 180),                  // ModLightInspector slider
-            ["ModParticleSystem.arcSpread"] = Range(0, 1),           // ModParticleSystemInspector slider
-            ["ModSpawner.SpawnCount"] = Range(0, 20),                // Mathf.Clamp(..., 0, 20)
-            ["ModText.OutlineThickness"] = Range(0, 1),              // ModTextInspector sliders
-            ["ModText.ShadowOffsetX"] = Range(-1, 1),
-            ["ModText.ShadowOffsetY"] = Range(-1, 1),
-            ["ModText.ShadowSoftness"] = Range(0, 1),
-            ["ModTrigger.StayTriggerInterval"] = Range(0.1, null),   // ModTriggerInspector: < 0.1 -> 0.1
-            ["ModWater.CellSize"] = Range(0.1, 10),                  // Mathf.Clamp(..., 0.1f, 10f)
-            ["ModWater.WaveHeight"] = Range(0, 1),
-            ["ModWater.WaveSpeed"] = Range(0, 10),
-        };
-
-        private static KeyValuePair<double?, double?> Range(double? min, double? max) => new KeyValuePair<double?, double?>(min, max);
-
-        public static IEnumerable<string> Keys => s_table.Keys;
-
-        public static bool TryGet(string componentType, string property, out double? min, out double? max)
-        {
-            if (s_table.TryGetValue(componentType + "." + property, out KeyValuePair<double?, double?> r))
-            {
-                min = r.Key;
-                max = r.Value;
-                return true;
-            }
-            min = max = null;
-            return false;
-        }
+        // The limits live with the other inspector rules (Core/InspectorRules.cs, one table for clamps, visibility and choices).
+        public static bool TryGet(string componentType, string property, out double? min, out double? max) =>
+            InspectorRules.TryGetClamp(componentType, property, out min, out max);
 
         /// <summary>Clamps a parsed number/integer in place. Returns true if the value changed.</summary>
         public static bool Apply(string componentType, string property, PValue value)

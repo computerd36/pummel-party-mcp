@@ -64,14 +64,14 @@ Recipe for undoable edits: select the object → wait one frame → edit → wai
 
 Consequences for the plugin:
 
-- The `PB_TEST_` guard must cover **opening** a mod, not only writing, because open can write.
-- `PB_TEST_` mods must be created fresh (or have `publishedFileId` forced to 256); never by copying a real mod folder.
+- The `MCP_` guard must cover **opening** a mod, not only writing, because open can write.
+- `MCP_` mods must be created fresh (or have `publishedFileId` forced to 256); never by copying a real mod folder.
 - The UI-only rules (which component / action is allowed where) must be re-implemented in the plugin.
 - Publish blocking is two layers of Harmony prefixes: game methods and the Steamworks UGC write calls
   (list in doc 05). Queries and downloads stay allowed.
 - `redo` (planned in Phase 2) appears not to exist in the editor.
 
-## To verify at runtime (on a `PB_TEST_` mod only)
+## To verify at runtime (on a `MCP_` mod only)
 
 - Undo timing recipe; that creation really is not undoable; that no redo exists.
 - Whether edits to never-selected objects are written by save.

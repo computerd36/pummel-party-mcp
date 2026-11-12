@@ -67,7 +67,7 @@ export function defaultHandler(method, params) {
     case "screenshot":
       return { ok: true, result: { pngBase64: PNG_B64, width: 1, height: 1 } };
     case "list_mods":
-      return { ok: true, result: [{ name: "PB_TEST_a", folderName: "PB_TEST_a", type: "Minigame", isTestMod: true, isOpen: false }] };
+      return { ok: true, result: [{ name: "MCP_a", folderName: "MCP_a", type: "Minigame", isTestMod: true, isOpen: false }] };
     case "create_test_mod":
     case "open_test_mod":
       return { ok: true, result: { name: params.name } };
@@ -96,7 +96,7 @@ export function defaultHandler(method, params) {
       // edit tools: echo the received params so tests can check pass-through
       return { ok: true, result: { echoed: params, changed: true, undoable: true, undoStackLength: 1 } };
     case "validate_mod":
-      return { ok: true, result: { mod: "PB_TEST_a", valid: true, errorCount: 0, issues: [] } };
+      return { ok: true, result: { mod: "MCP_a", valid: true, errorCount: 0, issues: [] } };
     case "start_playtest":
       return { ok: true, result: { playing: true, saved: true, echoed: params } };
     case "stop_playtest":

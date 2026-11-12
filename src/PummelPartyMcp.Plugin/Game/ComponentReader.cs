@@ -60,6 +60,12 @@ namespace PummelPartyMcp.Game
         /// </summary>
         internal static bool ParticleSetterNeedsRenderer(string property) => s_particleRendererProps.Contains(property) || property == "Prop";
 
+        /// <summary>True while a getter of the component would run SetupComponents() (the wrapper pattern with no underlying Unity component yet).</summary>
+        internal static bool WrapperNotReady(ModBehaviour component) => UsesComponentWrapper(component.GetType()) && component.m_component == null;
+
+        /// <summary>ModParticleSystem: the private renderer field is still null (its renderer getters would add a ParticleSystemRenderer).</summary>
+        internal static bool ParticleRendererMissing(ModBehaviour component) => IsUnityNull(Field(component, "m_particleSystemRenderer"));
+
         public static JObject Read(ModBehaviour component, ModReflectedType reflected, ValueConverter converter)
         {
             JObject entry = new JObject
@@ -84,6 +90,16 @@ namespace PummelPartyMcp.Game
                 if (p.hideInInspector)
                 {
                     pj["hiddenInInspector"] = true;
+                }
+                string inspectorHint = InspectorRuleHost.Hint(reflected, p, out bool neverShown);
+                if (inspectorHint != null)
+                {
+                    // What the editor's inspector does with this property (set_property enforces it): shown=false when it is never drawn.
+                    if (neverShown)
+                    {
+                        pj["shown"] = false;
+                    }
+                    pj["inspector"] = inspectorHint;
                 }
                 try
                 {

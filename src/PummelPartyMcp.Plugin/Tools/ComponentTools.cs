@@ -218,6 +218,7 @@ namespace PummelPartyMcp.Tools
                 }
                 row["allowsMultiple"] = !t.disallowMultipleComponent;
                 row["supportsChildren"] = t.supportsChildren;
+                row["customInspector"] = t.hasInspector;
                 row["modTypes"] = new JArray(ComponentRules.ModTypeNames((int)t.modTypeFlags));
                 rows.Add(row);
             }
@@ -377,6 +378,11 @@ namespace PummelPartyMcp.Tools
                 {
                     throw RpcException.InvalidParams($"'{p.name}': {refusal}");
                 }
+                string notDrawn = InspectorRuleHost.NeverDrawn(rt, p);
+                if (notDrawn != null)
+                {
+                    throw RpcException.InvalidParams($"'{p.name}': {notDrawn}");
+                }
                 ValueTypeDesc desc = ValueBuilder.Describe(p.systemType);
                 PValue parsed = ValueParser.Parse(kv.Value, desc, p.name);
                 bool clamped = InspectorClamps.Apply(rt.name, p.name, parsed);
@@ -384,6 +390,22 @@ namespace PummelPartyMcp.Tools
                 PropertyInfo setter = EditCommon.Setter(comp.GetType(), p.name)
                     ?? throw RpcException.InvalidParams($"'{p.name}' has no public setter");
                 prepared.Add(new PreparedValue { Name = p.name, Setter = setter, Value = value, InspectorClamped = clamped });
+            }
+
+            // Visibility conditions and restricted choices of the editor's inspector, evaluated against the values AFTER this call
+            // (so {type: "Spot", spotAngle: 40} works in one call); still before anything is selected or changed.
+            if (rt.hasInspector)
+            {
+                Dictionary<string, object> built = prepared.ToDictionary(pv => pv.Name, pv => pv.Value, StringComparer.Ordinal);
+                IRuleContext rules = InspectorRuleHost.Context(comp, rt, built);
+                foreach (PreparedValue pv in prepared)
+                {
+                    string why = InspectorRules.Check(rt.name, rt.uiName, pv.Name, InspectorRuleHost.Normalize(pv.Value), rules);
+                    if (why != null)
+                    {
+                        throw RpcException.InvalidParams(why.StartsWith("'") ? why : $"'{pv.Name}': {why}");
+                    }
+                }
             }
 
             EditHost host = new EditHost(ed, target.gameObject);

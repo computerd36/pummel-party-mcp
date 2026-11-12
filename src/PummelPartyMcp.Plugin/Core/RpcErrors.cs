@@ -20,6 +20,7 @@ namespace PummelPartyMcp.Core
         public const string GuardNotTestMod = "GUARD_NOT_TEST_MOD";
         public const string InvalidState = "INVALID_STATE";
         public const string AlreadyExists = "ALREADY_EXISTS";
+        public const string GameVersionUntested = "GAME_VERSION_UNTESTED";
     }
 
     /// <summary>Thrown by tools to return a specific error code to the caller.</summary>

@@ -49,7 +49,9 @@ const HINTS: Record<string, string> = {
   WRITES_DISABLED: "Write tools are switched off in the plugin config (Safety.EnableWrites); the human must enable it and restart the game.",
   PUBLISH_BLOCK_INCOMPLETE:
     "The plugin could not install its Workshop safety patches (probably after a game update), so write tools stay disabled. Tell the human.",
-  GUARD_NOT_TEST_MOD: "Only mods whose name starts with PB_TEST_ can be modified; do not retry with a different name for a real mod.",
+  GAME_VERSION_UNTESTED:
+    "The game was updated and this plugin version was not tested with it, so write tools are refused (read tools work). Tell the human; do NOT retry. They can run self_test and, if it is clean, set [Safety] AcceptedGameVersion in the plugin config (no restart).",
+  GUARD_NOT_TEST_MOD: "Only mods whose name starts with MCP_ can be modified; do not retry with a different name for a real mod.",
   INVALID_STATE:
     "See the message for the required state (e.g. save first, close the open editor dialog, release the mouse button, leave play mode, or return to the scene hierarchy), then retry.",
   INVALID_PARAMS: "A parameter or value was refused; the message names the property/rule. Fix the call (see get_object / list_component_types / list_assets; for actions and triggers get_action_graph / list_action_types / list_trigger_types, e.g. a non-editable slot, a hidden target flag, an action the call site does not offer, an unknown parameter name) and retry.",
@@ -104,7 +106,7 @@ export const TOOL_TIMEOUTS_MS: Record<string, number> = {
 };
 
 /** Same rule the plugin enforces for sandbox mod names. */
-export const TEST_MOD_NAME_RE = /^PB_TEST_[A-Za-z0-9_ -]+$/;
+export const TEST_MOD_NAME_RE = /^MCP_[A-Za-z0-9_ -]+$/;
 export function isValidTestModName(name: string): boolean {
   return name.length <= 64 && TEST_MOD_NAME_RE.test(name) && !name.startsWith(" ") && !name.endsWith(" ");
 }

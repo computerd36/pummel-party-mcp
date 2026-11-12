@@ -1,4 +1,4 @@
-# pummel-party-mcp HTTP API (api v2, Phase 2 increment 4 + playtest visibility, plugin 0.6.0)
+# pummel-party-mcp HTTP API (api v2, plugin 0.7.0)
 
 The BepInEx plugin `PummelPartyMcp.Plugin` runs inside Pummel Party and exposes the mod editor's state on a
 local HTTP endpoint. api v2 adds the guard layer, the always-on Workshop publish block and four mod lifecycle
@@ -9,7 +9,7 @@ additive) adds object, transform, component and property editing plus `undo`; se
 `stop_playtest` and `run_batch`, structured error details (`error.data`) and play-mode rules for every tool; see
 [Validation, playtest and batch](#validation-playtest-and-batch). Plugin 0.6.0 (still api v2, additive) adds playtest
 visibility: the read tools `get_playtest_state` and `get_playtest_events`, a small summary in `get_status.playtest`, and the
-capability `"playtestState"`; see [Playtest visibility](#playtest-visibility). Write tools only ever act on `PB_TEST_` mods; see
+capability `"playtestState"`; see [Playtest visibility](#playtest-visibility). Plugin 0.7.0 (still api v2, additive) adds the game-version gate (`GAME_VERSION_UNTESTED`, `[Safety] AcceptedGameVersion`, `gameVersionCheck`), the read tool `self_test`, and enforces the editor inspector's visibility rules in `set_property` / `set_properties`; see [Game-version gate](#game-version-gate), [`self_test`](#self_test-read) and [Inspector visibility rules](#inspector-visibility-rules-plugin-070). Write tools only ever act on `MCP_` mods; see
 [Safety](#safety).
 
 ## Transport
@@ -89,9 +89,10 @@ validator refusal: `{"validation": {...}}`). Clients that ignore `data` still ge
 | `INTERNAL` | unexpected exception, or a game member the plugin needs is missing (`member X.Y not found — game version changed?`) |
 | `WRITES_DISABLED` | write tool called while `[Safety] EnableWrites = false` |
 | `PUBLISH_BLOCK_INCOMPLETE` | write tool called while the Workshop publish block is not complete (`get_status.publishBlock`) |
-| `GUARD_NOT_TEST_MOD` | the open mod (open-mod tools) or the target / open mod (lifecycle tools) is not a `PB_TEST_` mod; the message names it |
+| `GUARD_NOT_TEST_MOD` | the open mod (open-mod tools) or the target / open mod (lifecycle tools) is not a `MCP_` mod; the message names it |
 | `INVALID_STATE` | editor state forbids the call: play mode (also the transitional states `EnteringPlayMode` / `ExitingPlayMode`), no playtest running (`get_playtest_state`), a mod that fails the validator (`start_playtest`), unsaved changes, a prefab being edited, an open editor dialog, a broken editor mod list, an object outside the current editing context, the left mouse button held in the game window, the open mod changed while an edit was pending (the message says what to do) |
 | `ALREADY_EXISTS` | `create_test_mod`: a folder or a mod (Meta name) with that name exists, case-insensitive |
+| `GAME_VERSION_UNTESTED` | write tool called while the running game version is not in the plugin's tested list and not accepted by `[Safety] AcceptedGameVersion` (or the version could not be read); read tools are unaffected. See [Game-version gate](#game-version-gate) |
 
 Edit tools additionally use `NOT_FOUND` (object / component / the edited object was deleted meanwhile),
 `INVALID_PARAMS` (bad value, refused property, a rule the editor's UI enforces) and `TIMEOUT` (the editor did not
@@ -163,14 +164,15 @@ body changes nothing, or the body commits and the caller no longer times out.
 Works with the editor closed. No params.
 
 ```json
-{"pong": true, "pluginVersion": "0.6.0", "gameVersion": "1.15.2", "unityVersion": "2021.3.45f2",
- "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState"]}
+{"pong": true, "pluginVersion": "0.7.0", "gameVersion": "1.14.1k", "unityVersion": "2021.3.45f2",
+ "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate"],
+ "gameVersionCheck": {"running": "1.14.1k", "tested": ["1.14.1k"], "accepted": false, "writesAllowed": true}}
 ```
 
 `readOnlyBuild` was removed in api v2. `capabilities` lists what this build implements (`edit` = the object,
 component, property and undo tools of increment 2; `actions` = the action/trigger tools of increment 3; `playtest` =
 `validate_mod`, `start_playtest`, `stop_playtest`; `batch` = `run_batch`; `playtestState` = `get_playtest_state`,
-`get_playtest_events`); whether
+`get_playtest_events`; `selfTest` = `self_test`; `gameVersionGate` = the version gate); `gameVersionCheck` is the gate status as last loaded from the config (`ping` does not reload the file; `get_status` does). Whether
 writes are currently allowed is in `get_status`
 (`writesEnabled`, `publishBlock.complete`).
 
@@ -182,18 +184,20 @@ No params. Never fails because of editor state.
 
 ```json
 {"editorOpen": true, "editorState": "Editing", "isLoading": false, "modOpen": true,
- "modName": "PB_TEST_Arena", "modType": "Minigame", "modLoaded": true, "isDirty": true,
+ "modName": "MCP_Arena", "modType": "Minigame", "modLoaded": true, "isDirty": true,
  "hasUnsavedEdits": false, "unsavedEditsSource": "tracker",
  "undoStackLength": 1, "prefabContext": null, "playMode": false,
  "activeScene": "ModEditorScene",
  "playtest": {"state": "Editing", "running": false, "startedAt": null, "playModeSince": null, "endedAt": null,
               "playSeconds": null, "startedByPlugin": false, "players": "4 Players", "playerCount": 4, "teams": null,
               "aiOnly": false, "eventCount": 0, "lastEventId": 0, "alivePlayers": null},
- "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState"], "writesEnabled": true,
+ "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate"], "writesEnabled": true,
+ "gameVersionCheck": {"running": "1.14.1k", "tested": ["1.14.1k"], "accepted": false, "writesAllowed": true},
  "publishBlock": {"active": true, "complete": true, "patchedCount": 59, "missing": []}}
 ```
 
 - `writesEnabled`: current value of `[Safety] EnableWrites`.
+- `gameVersionCheck`: `{running, tested[], accepted, writesAllowed}` (+ `readable: false` when the version string could not be read, `forcedUntested: true` when `ForceGameVersionUntested` is on). `accepted` = `[Safety] AcceptedGameVersion` equals `running` exactly; `writesAllowed` = running is tested or accepted. See [Game-version gate](#game-version-gate).
 - `publishBlock`: `active` = at least one blocking patch installed; `complete` = every required target patched
   and no patch failed (write tools need this); `patchedCount` = methods patched (59 expected for game build
   2025-10-16: 10 game methods, 25 `SteamUGC`, 24 `SteamRemoteStorage`; the count at startup); `missing` =
@@ -234,9 +238,9 @@ running or ending (see [Play-mode behaviour](#play-mode-behaviour-of-every-tool)
 
 ```json
 {
-  "name": "PB_TEST_Arena", "folderName": "PB_TEST_Arena", "type": "Minigame", "className": "MinigameMod",
+  "name": "MCP_Arena", "folderName": "MCP_Arena", "type": "Minigame", "className": "MinigameMod",
   "usesHierarchy": true, "usesLighting": true, "usesPostProcessing": true,
-  "metadata": {"MetaDataVersion": 1, "ModVersion": 1, "ModCreatedVersion": 1, "Name": "PB_TEST_Arena",
+  "metadata": {"MetaDataVersion": 1, "ModVersion": 1, "ModCreatedVersion": 1, "Name": "MCP_Arena",
                "ModType": 3, "LastModified": "2026-11-10T17:00:00", "SelectedLightingPreset": "",
                "SelectedPostProcessingPreset": "", "IsUnlocked": false},
   "settingsClass": "MinigameModSettings",
@@ -253,7 +257,7 @@ running or ending (see [Play-mode behaviour](#play-mode-behaviour-of-every-tool)
   (`publishedFileId != 256`) are exposed. **`"256"` is the "never published" sentinel**
   (`ModWorkshopItem.DefaultWorkshopID`), not a Workshop item: the game also uses it at runtime as the local id of every
   unpublished mod (`MinigameDefinition.publishedFileId`, the `PummelModCache/256` folder, `GetModWithWorkshopID(256)`).
-  Do not describe it as a Workshop item or as a "minigame id"; every `PB_TEST_` mod has it (the plugin forces it).
+  Do not describe it as a Workshop item or as a "minigame id"; every `MCP_` mod has it (the plugin forces it).
 
 ### `get_hierarchy`
 
@@ -328,6 +332,7 @@ Search order: current context root, then the other root (scene vs. prefab object
   `[ModIgnore]` excluded): exactly what the inspector, the undo snapshot and `MainScene.scene` use. Each entry is
   `{type, value}`, or `{type, error}` if the getter threw, or `{type, unavailable}` (see below).
   `hiddenInInspector: true` marks `[ModHideInInspector]` properties.
+  `shown: false` marks properties the editor's inspector never draws; `inspector` summarizes the property's inspector rules (visibility condition, restricted choices, clamp); see [Inspector visibility rules](#inspector-visibility-rules-plugin-070).
 - Triggers are summarized as `{triggerType, actionCount}`; use `get_action_graph` for the actions.
 - Nested serializable classes are walked by their Unity-serialized fields (depth limit 8, arrays capped at 512
   items followed by `{"truncatedItems": n}`); deeper levels give `{"truncated": "<type>"}`; types the converter does
@@ -482,7 +487,7 @@ No params. Errors: `EDITOR_NOT_OPEN`. Read-only.
 
 ```json
 [{"name": "My Real Mod", "folderName": "My Real Mod", "type": "Minigame", "isTestMod": false, "isOpen": false},
- {"name": "PB_TEST_Sandbox", "folderName": "PB_TEST_Sandbox", "type": "Minigame", "isTestMod": true, "isOpen": true}]
+ {"name": "MCP_Sandbox", "folderName": "MCP_Sandbox", "type": "Minigame", "isTestMod": true, "isOpen": true}]
 ```
 
 - Source: the editor's cached mod list (`EditorAvailableModManager`), not a rescan (`ReadListOfAvailableMods` would
@@ -511,7 +516,7 @@ call waited in the write queue; refused with `TIMEOUT` before creating anything 
 [Timeouts and the commit point](#timeouts-and-the-commit-point).
 
 ```json
-{"name": "PB_TEST_Arena", "folderName": "PB_TEST_Arena", "type": "Minigame", "publishedFileId": "256"}
+{"name": "MCP_Arena", "folderName": "MCP_Arena", "type": "Minigame", "publishedFileId": "256"}
 ```
 
 `publishedFileId` `"256"` = never published (the game's local id for unpublished mods; not a Workshop item).
@@ -535,7 +540,7 @@ after 30 s (same rules as `create_test_mod`: a load `TIMEOUT` means the mod is b
 check `get_status`).
 
 ```json
-{"name": "PB_TEST_Arena", "folderName": "PB_TEST_Arena", "type": "Minigame", "publishedFileId": "256", "alreadyOpen": false}
+{"name": "MCP_Arena", "folderName": "MCP_Arena", "type": "Minigame", "publishedFileId": "256", "alreadyOpen": false}
 ```
 
 `publishedFileId` `"256"` = never published (the game's local id for unpublished mods; not a Workshop item).
@@ -560,7 +565,7 @@ flag, so the deactivated scene root does not change it, and the prefab is saved 
 case the scene's dirty flag stays set and `Preview.jpg` shows the prefab view.
 
 ```json
-{"saved": true, "name": "PB_TEST_Arena", "isDirty": false, "hasUnsavedEdits": false}
+{"saved": true, "name": "MCP_Arena", "isDirty": false, "hasUnsavedEdits": false}
 ```
 
 `isDirty`: dirty flag of the current undo context right after the save (same source as `get_status.isDirty`).
@@ -598,7 +603,21 @@ Result: an **array** with one entry per registered mod component type, in regist
   addable): the editor's own tooltip text where the editor has one, else the plugin's.
 - `allowsMultiple`: no `[DisallowMultipleComponent]` (more than one per object possible). `supportsChildren`:
   false for types whose object cannot have children (Prefab Instance, Board Space, Item, Text). `modTypes`: the
-  type's mod-type flags (empty for RigidBody and Hittable: never offered).
+  type's mod-type flags (empty for RigidBody and Hittable: never offered). `customInspector`: the type has a hand-written inspector (its rules are in [Inspector visibility rules](#inspector-visibility-rules-plugin-070)).
+
+### `self_test` (read)
+
+No params; works with the editor closed. Changes nothing. After a game update it re-resolves every game member the plugin looks up by name (fields, properties, methods, the enum values and properties the inspector rules name; one central registry, `Core/RequiredMembers.cs`, the same list the offline drift test checks), re-checks the publish block and compares the custom-inspector components with the audited snapshot.
+
+```json
+{"ok": true, "gameVersion": "1.14.1k", "gameVersionCheck": {"running": "1.14.1k", "tested": ["1.14.1k"], "accepted": false, "writesAllowed": true},
+ "membersChecked": 439, "missingMembers": [],
+ "publishBlock": {"active": true, "complete": true, "patchedCount": 59, "missing": [], "targetsChecked": 64, "unresolvedTargets": []},
+ "inspectorAudit": {"customInspectorComponents": 21, "unauditedProperties": []},
+ "notes": ["self_test resolves members by name only (existence, type, signature); it cannot tell whether a member still behaves the same."]}
+```
+
+`ok` is true when no member is missing, the publish block is complete and every target resolves, the audit finds no new custom inspector or property, and the version is readable. An untested version does not make `ok` false (that is what the test is for): `notes` then says how to accept it. Use the result as evidence before setting `[Safety] AcceptedGameVersion`.
 
 ---
 
@@ -962,9 +981,8 @@ the same limits when writing and lists the affected properties in `inspectorClam
 `.SpawnDistance` 0-4; `ModFireWeapon.FireTime` >= 0.1; `ModItem.SecondsBetweenHeldAction` >= 0.1, `.Cooldown` >= 0.1;
 `ModLight.spotAngle` 0-180; `ModParticleSystem.arcSpread` 0-1; `ModSpawner.SpawnCount` 0-20;
 `ModText.OutlineThickness` 0-1, `.ShadowOffsetX` / `.ShadowOffsetY` -1..1, `.ShadowSoftness` 0-1;
-`ModTrigger.StayTriggerInterval` >= 0.1; `ModWater.CellSize` 0.1-10, `.WaveHeight` 0-1, `.WaveSpeed` 0-10.
+`ModParticleSystem.radiusThickness` 0-1, `.arc` 0-360 (drag limits), `ModParticleSystem.arcSpread` 0-1 (listed above), `ModTrigger.StayTriggerInterval` >= 0.1; `ModWater.CellSize` 0.1-10, `.WaveHeight` 0-1, `.WaveSpeed` 0-10.
 Setters may clamp further; `applied` shows the value actually stored.
-
 Properties whose getters have side effects (read side, see `get_object`) are written through their setters after the
 object has been selected and snapshotted (the editor's snapshot runs every getter of the selected object anyway):
 `ModItem.ItemPrefab` / `DroppedItemPrefab` (the setter stores the asset and its guid), `ModPrefabInstance.PrefabReference`
@@ -987,6 +1005,326 @@ applied). Their `...GUID` siblings and `ModScriptReference.scriptValues` are ref
 
 `applied`: each written property read back after the editor recorded the step, in `get_object`'s `{type, value}`
 shape. Errors: guard codes, `INVALID_PARAMS`, `NOT_FOUND`, `INVALID_STATE`, `TIMEOUT`, `INTERNAL`.
+
+#### Inspector visibility rules (plugin 0.7.0)
+
+The editor draws a component in one of two ways. 21 component types have a hand-written inspector (`[ModCustomInspector]`;
+`ModAINavigationInspector` exists in the game but is attached to nothing, so AI Navigation Node uses the generic path)
+that decides which properties are drawn, when, with which choices and which limits; every other component is drawn by the
+generic loop over its reflected properties. `set_property` / `set_properties` apply the same rules, so the plugin cannot
+produce a value the editor's UI cannot produce (audit of game build 1.14.1k, from the decompiled inspectors).
+
+- **Never drawn** (the custom inspector has no control for it, or draws something else under its label): refused with
+  `INVALID_PARAMS`, e.g. `'startSize': the editor's inspector does not offer 'startSize' on Particle System (never drawn), so the editor UI cannot set it`.
+- **Drawn only under a condition**: refused while the condition is false, naming the condition and the state after the
+  call, e.g. `'spotAngle' is only shown by the editor's inspector while type is Spot (type is Point after this call); set the controlling property first (or in the same set_properties call)`.
+  The condition is evaluated against the values **after** the call's other values, so
+  `{"type": "Spot", "spotAngle": 40}` works in one call and `{"TriggerOnHit": true, "TriggerOnEnter": true}` is refused.
+  A condition the plugin cannot evaluate (the controlling value is unreadable, e.g. a wrapper component that is not set up
+  yet) never blocks the write.
+- **Restricted choices**: an enum value the inspector's dropdown omits, or a flag its buttons cannot toggle, is refused:
+  `'rolloffMode': the editor's inspector does not offer the value Custom (not offered: Custom)`,
+  `'shapeType': the editor's inspector cannot choose Mesh; it offers only Sphere, Hemisphere, Box, BoxShell, BoxEdge, Cone, ConeVolume or Donut`.
+- **Limits** the inspector re-applies while drawing (sliders, `Mathf.Clamp`, minimums) are clamped as before and listed in
+  `inspectorClamped` (table above); they are also in the rules below.
+- A property **without a rule** is always drawn. Properties of types the plugin cannot write anyway (triggers,
+  `ModWeaponInfo`, `ModComplexFloat`, `SerializableGuid`, ...) are refused as listed above, before any rule.
+- Components **without** a custom inspector (everything except the 21 below): the generic inspector honours only
+  `[ModHideInInspector]` (refused, as before), `[ModHeader]` (a label and an optional separator), `[Multiline]` (the text
+  box height) and the property's type. It has no control for `char`, `short`, `ushort`, `long`, `ulong`, `MinMaxCurve`,
+  `Burst`, `SerializableGuid`, `BoardNodeConnection` and the simple-animation types, so such a property would be refused
+  with `the editor's generic inspector draws no control for '<name>' (type ...)`; no generic component of 1.14.1k has one
+  (all those properties belong to components with a custom inspector). No range or conditional attributes exist.
+- `get_object` marks what it knows for each property of a component: `"inspector": "<rule summary>"` (e.g.
+  `"shown while type is Spot; clamped 0..180"`) and `"shown": false` when the property is never drawn. `list_component_types`
+  has `customInspector` per type. Nothing else is needed to discover the rules: read the component with `get_object` after
+  `add_component`, or use the tables below.
+
+Uncertain cases the plugin allows (the source is ambiguous or depends on state it does not model): `ModBoardSpace.CustomGoalSpawn`
+and `.BlockGoalSpawn` (drawn only while the space can support a goal spawn: depends on the board graph); `ModNavMeshAgent.agentTypeID` (the inspector's 'Agent Type' combo discards its result and its 'Quality'
+dropdown writes this property, so the UI only produces 0..4); `ModParticleSystem.noiseRemapCurveY/Z` (the inspector wires all
+three axes to `noiseRemapCurveX`, so the UI produces Y and Z equal to X); the particle `Prop` / stretch / module sub-properties
+are checked only against the controlling value, not against the collapsing header being open (UI state).
+The Material asset inspector (`CustomBoardSpaceInspector`) belongs to assets, not to components, and is out of scope.
+
+Per component (generated from `Core/InspectorRules.cs`; a unit test keeps this block equal to the table):
+
+<!-- inspector-rules:begin (generated from Core/InspectorRules.cs; a test keeps it in sync) -->
+
+**ModAudioSource**
+
+| Property | Rule |
+|---|---|
+| `volume` | clamped 0..1 |
+| `spatialBlend` | clamped 0..1 |
+| `stereoPanning` | shown while spatialBlend is not 1; clamped -1..1 |
+| `rolloffMode` | shown while spatialBlend is not 0; not offered: Custom |
+| `minDistance` | shown while spatialBlend is not 0 |
+| `maxDistance` | shown while spatialBlend is not 0 |
+| `useDopplerEffect` | shown while spatialBlend is not 0 |
+
+All other properties of ModAudioSource are always drawn.
+
+**ModBoardSpace**
+
+| Property | Rule |
+|---|---|
+| `nodeEventType` | never shown |
+| `nodeEventAction` | never shown |
+| `hasInteraction` | never shown |
+| `baseNodeType` | not offered: MapEvent, Trophy, Weapon |
+| `ModCustomBoardSpace` | shown while baseNodeType is Custom |
+| `ConsumeStepOnPass` | shown while baseNodeType is Custom |
+| `StopRocket` | shown while baseNodeType is Custom |
+| `DisabledOnStart` | shown while baseNodeType is not Start or Pathing |
+| `SpawnRotation` | shown while CustomGoalSpawn is on; clamped 0..360 |
+| `SpawnDistance` | shown while CustomGoalSpawn is on; clamped 0..4 |
+| `CustomGoalSpawn` | note: drawn only while the space can support a goal spawn (depends on the board graph: not at the end of a teleport, not an intersection, not Pathing/Graveyard or a custom space that cannot be landed on); not checked by the plugin |
+| `BlockGoalSpawn` | note: drawn only while the space can support a goal spawn (board graph); not checked by the plugin |
+
+All other properties of ModBoardSpace are always drawn.
+
+**ModBoardSpaceEvent**: every settable property is always drawn without restrictions.
+
+**ModDestructible**: every settable property is always drawn without restrictions.
+
+**ModFireWeapon**
+
+| Property | Rule |
+|---|---|
+| `FireTime` | minimum 0.1 |
+| `BeamCooldown` | shown while the weapon's damage type is Beam |
+
+All other properties of ModFireWeapon are always drawn.
+
+**ModItem**
+
+| Property | Rule |
+|---|---|
+| `ItemPrefabGUID` | never shown |
+| `DroppedItemPrefabGUID` | never shown |
+| `ItemSlot` | shown while ItemType is not Pickup |
+| `UniqueDropPrefab` | shown while ItemType is not Pickup |
+| `UniquePickup` | shown while ItemType is not Pickup; note: for Pickup items the inspector resets UniquePickup to false and ItemPickupPriority to 0 every frame |
+| `ItemPickupPriority` | shown while ItemType is not Pickup |
+| `HeldPositionOffset` | shown while ItemType is not Pickup |
+| `HeldRotationOffset` | shown while ItemType is not Pickup |
+| `SecondsBetweenHeldAction` | shown while ItemType is not Pickup; minimum 0.1 |
+| `CanBeDropped` | shown while ItemType is not Pickup |
+| `AutoDropAfterTime` | shown while ItemType is not Pickup |
+| `DropOnDeath` | shown while ItemType is not Pickup |
+| `ItemHoldAnimation` | shown while ItemType is not Worn or Pickup |
+| `DroppedItemPrefab` | shown while ItemType is not Pickup and UniqueDropPrefab is on |
+| `CustomItemBeaconColor` | shown while ItemBeaconColor is Custom |
+| `WeaponType` | shown while ItemType is Weapon |
+| `Cooldown` | shown while ItemType is Carried or Weapon; minimum 0.1 |
+| `HasLimitedUses` | shown while ItemType is Carried or Weapon |
+| `DropAfterUses` | shown while ItemType is Carried or Weapon and HasLimitedUses is on |
+| `DropAfterTime` | shown while ItemType is not Pickup and AutoDropAfterTime is on |
+| `DisappearWhenDropped` | shown while ItemType is not Pickup and CanBeDropped is on or AutoDropAfterTime is on or DropOnDeath is on |
+
+All other properties of ModItem are always drawn.
+
+**ModLight**
+
+| Property | Rule |
+|---|---|
+| `range` | shown while type is not Directional |
+| `spotAngle` | shown while type is Spot; clamped 0..180 |
+
+All other properties of ModLight are always drawn.
+
+**ModLogic**: every settable property is always drawn without restrictions.
+
+**ModMeshCollider**
+
+| Property | Rule |
+|---|---|
+| `mesh` | shown while no mesh renderer on the object provides the mesh |
+
+All other properties of ModMeshCollider are always drawn.
+
+**ModMover**
+
+| Property | Rule |
+|---|---|
+| `Direction` | shown while DirectionType is Custom |
+| `RotationAxis` | shown while RotationAxisType is Custom |
+
+All other properties of ModMover are always drawn.
+
+**ModNavMeshAgent**
+
+| Property | Rule |
+|---|---|
+| `speed` | never shown |
+| `quality` | never shown |
+| `autoTraverseOffMeshLink` | never shown |
+| `agentTypeID` | note: uncertain: the 'Agent Type' combo discards its result and the 'Quality' dropdown writes agentTypeID, so the UI only produces 0..4 (ObstacleAvoidanceType values); not enforced |
+
+All other properties of ModNavMeshAgent are always drawn.
+
+**ModNote**: every settable property is always drawn without restrictions.
+
+**ModParticleSystem**
+
+| Property | Rule |
+|---|---|
+| `startSize` | never shown |
+| `arcSpeed` | never shown |
+| `allowRoll` | never shown |
+| `shadowBias` | never shown |
+| `animationMode` | never shown |
+| `fps` | never shown |
+| `startSizeY` | shown while startSize3D is on |
+| `startSizeZ` | shown while startSize3D is on |
+| `startRotationX` | shown while startRotation3D is on |
+| `startRotationY` | shown while startRotation3D is on |
+| `randomSeed` | shown while autoRandomSeed is off |
+| `simulationSpace` | not offered: Custom |
+| `shapeType` | only Sphere, Hemisphere, Box, BoxShell, BoxEdge, Cone, ConeVolume, Donut |
+| `angle` | shown while shapeType is Cone or ConeVolume |
+| `length` | shown while shapeType is Cone or ConeVolume |
+| `radius` | shown while shapeType is not Box, BoxShell or BoxEdge |
+| `radiusThickness` | shown while shapeType is not Box, BoxShell or BoxEdge; clamped 0..1 |
+| `arc` | shown while shapeType is not Box, BoxShell or BoxEdge; clamped 0..360 |
+| `arcMode` | shown while shapeType is not Box, BoxShell or BoxEdge |
+| `arcSpread` | shown while shapeType is not Box, BoxShell or BoxEdge; clamped 0..1 |
+| `donutRadius` | shown while shapeType is Donut |
+| `boxThickness` | shown while shapeType is BoxShell or BoxEdge |
+| `speed` | shown while separateAxes is off |
+| `speedX` | shown while separateAxes is on |
+| `speedY` | shown while separateAxes is on |
+| `speedZ` | shown while separateAxes is on |
+| `velocityOverLifeTimeSpace` | shown while separateAxes is on |
+| `forceOverLifetimeRandomize` | shown while forceOverLifetimeX is TwoConstants |
+| `sizeOverLifetimeSize` | shown while sizeOverLifetimeSeparateAxes is off |
+| `sizeOverLifetimeX` | shown while sizeOverLifetimeSeparateAxes is on |
+| `sizeOverLifetimeY` | shown while sizeOverLifetimeSeparateAxes is on |
+| `sizeOverLifetimeZ` | shown while sizeOverLifetimeSeparateAxes is on |
+| `sizeBySpeedSize` | shown while sizeBySpeedSeparateAxes is off |
+| `sizeBySpeedSizeX` | shown while sizeBySpeedSeparateAxes is on |
+| `sizeBySpeedSizeY` | shown while sizeBySpeedSeparateAxes is on |
+| `sizeBySpeedSizeZ` | shown while sizeBySpeedSeparateAxes is on |
+| `rotationOverLifetimeX` | shown while rotationOverLifetimeSeparateAxes is on |
+| `rotationOverLifetimeY` | shown while rotationOverLifetimeSeparateAxes is on |
+| `rotationBySpeedY` | shown while rotationBySpeedSeparateAxes is on |
+| `rotationBySpeedZ` | shown while rotationBySpeedSeparateAxes is on |
+| `noiseStrength` | shown while noiseSeparateAxes is off |
+| `noiseStrengthX` | shown while noiseSeparateAxes is on |
+| `noiseStrengthY` | shown while noiseSeparateAxes is on |
+| `noiseStrengthZ` | shown while noiseSeparateAxes is on |
+| `noiseOctaveMultiplier` | shown while noiseOctaves is greater than 1 |
+| `noiseOctaveScale` | shown while noiseOctaves is greater than 1 |
+| `noiseRemapCurve` | shown while noiseRemapEnabled is on and noiseSeparateAxes is off |
+| `noiseRemapCurveX` | shown while noiseRemapEnabled is on and noiseSeparateAxes is on |
+| `noiseRemapCurveY` | shown while noiseRemapEnabled is on and noiseSeparateAxes is on; note: uncertain: the inspector's three-axis widget is wired to noiseRemapCurveX for all three axes, so the UI only produces Y and Z equal to X; not enforced |
+| `noiseRemapCurveZ` | shown while noiseRemapEnabled is on and noiseSeparateAxes is on |
+| `rowIndex` | shown while rowMode is Custom |
+| `frameOverTime` | shown while timeMode is Lifetime |
+| `cycleCount` | shown while timeMode is Lifetime |
+| `speedRange` | shown while timeMode is Speed |
+| `Prop` | shown while renderMode is Mesh |
+| `cameraVelocityScale` | shown while renderMode is Stretch |
+| `velocityScale` | shown while renderMode is Stretch |
+| `lengthScale` | shown while renderMode is Stretch |
+| `freeformStretching` | shown while renderMode is Stretch |
+| `rotateWithStretchDirection` | shown while renderMode is Stretch and freeformStretching is on |
+
+All other properties of ModParticleSystem are always drawn.
+
+**ModPlayerSpawn**
+
+| Property | Rule |
+|---|---|
+| `LineLength` | shown while SpawnShape is Line |
+| `Radius` | shown while SpawnShape is Circle |
+| `SpawnDistribution` | shown while SpawnShape is Line or Circle |
+| `SharedSpawn` | shown while SpawnUsageType is InitialSpawn |
+| `AllowedPlayers` | shown while Advanced is on |
+| `PlayerCountMask` | shown while Advanced is on |
+
+All other properties of ModPlayerSpawn are always drawn.
+
+**ModPrefabInstance**
+
+| Property | Rule |
+|---|---|
+| `PrefabGUID` | never shown |
+
+All other properties of ModPrefabInstance are always drawn.
+
+**ModProp**
+
+| Property | Rule |
+|---|---|
+| `tintColor` | shown while customMaterials holds no material |
+
+All other properties of ModProp are always drawn.
+
+**ModSimpleAnimator**
+
+| Property | Rule |
+|---|---|
+| `UseLateUpdate` | never shown |
+
+All other properties of ModSimpleAnimator are always drawn.
+
+**ModSpawner**
+
+| Property | Rule |
+|---|---|
+| `SpawnCount` | clamped 0..20 |
+| `PrefabGUIDs` | never shown |
+| `Interval1` | shown while Type is AlwaysSpawn |
+| `Delay` | shown while Type is SpawnOnDestruction |
+| `SpawnPoints` | shown while LocationType is OnTargets |
+
+All other properties of ModSpawner are always drawn.
+
+**ModText**
+
+| Property | Rule |
+|---|---|
+| `Font` | not offered: COUNT |
+| `HorizontalAlignment` | only Left, Center, Right, Justified |
+| `FontStyles` | flags only Bold, Italic, Underline, Strikethrough |
+| `OutlineColor` | shown while Outline is on |
+| `OutlineThickness` | shown while Outline is on; clamped 0..1 |
+| `ShadowColor` | shown while Shadow is on |
+| `ShadowOffsetX` | shown while Shadow is on; clamped -1..1 |
+| `ShadowOffsetY` | shown while Shadow is on; clamped -1..1 |
+| `ShadowSoftness` | shown while Shadow is on; clamped 0..1 |
+
+All other properties of ModText are always drawn.
+
+**ModTrigger**
+
+| Property | Rule |
+|---|---|
+| `Center` | shown while TriggerShape is not CustomCollider |
+| `Size` | shown while TriggerShape is Box |
+| `Radius` | shown while TriggerShape is Sphere or Capsule |
+| `Height` | shown while TriggerShape is Capsule |
+| `TriggerOnEnter` | shown while TriggerOnHit is off and TriggerShape is not CustomCollider |
+| `TriggerOnExit` | shown while TriggerOnHit is off and TriggerShape is not CustomCollider |
+| `TriggerOnStay` | shown while TriggerOnHit is off and TriggerShape is not CustomCollider |
+| `StayTriggerInterval` | shown while TriggerOnHit is off and TriggerShape is not CustomCollider and TriggerOnStay is on; minimum 0.1 |
+
+All other properties of ModTrigger are always drawn.
+
+**ModWater**
+
+| Property | Rule |
+|---|---|
+| `CellSize` | clamped 0.1..10 |
+| `WaveHeight` | clamped 0..1 |
+| `WaveSpeed` | clamped 0..10 |
+
+All other properties of ModWater are always drawn.
+
+<!-- inspector-rules:end -->
+
 
 ### `undo` (write)
 
@@ -1390,7 +1728,7 @@ File > Validate Mod, the toolbar's Play button and the Publish dialog (which ena
 result has no errors).
 
 ```json
-{"mod": "PB_TEST_Arena", "modType": "Minigame", "valid": false, "canPlaytest": false, "canPublishPerValidator": false,
+{"mod": "MCP_Arena", "modType": "Minigame", "valid": false, "canPlaytest": false, "canPublishPerValidator": false,
  "errorCount": 1, "warningCount": 2, "infoCount": 0,
  "issues": [
    {"severity": "error", "message": "There are no player spawns in your map.",
@@ -1499,7 +1837,7 @@ mods).
    was saved and the playtest is starting (check `get_status`, then `stop_playtest`; do not retry blindly).
 
 ```json
-{"playing": true, "saved": true, "state": "PlayMode", "mod": "PB_TEST_Arena", "modType": "Minigame",
+{"playing": true, "saved": true, "state": "PlayMode", "mod": "MCP_Arena", "modType": "Minigame",
  "players": "4 Players", "playerCount": 4, "teams": null, "aiOnly": true, "validated": true,
  "validation": {"valid": true, "errorCount": 0, "warningCount": 2, "infoCount": 0, "issues": ["..."]},
  "secondsToPlayMode": 3.4, "note": "Entering play mode saved the mod's files ..."}
@@ -1556,7 +1894,7 @@ message that says why: `Editing` (start one; `get_playtest_events` still has the
 starting, retry), `ExitingPlayMode` (ending; read `get_playtest_events`), editor closed.
 
 ```json
-{"running": true, "mod": "PB_TEST_Arena", "modType": "Minigame", "playtest": 1, "paused": false,
+{"running": true, "mod": "MCP_Arena", "modType": "Minigame", "playtest": 1, "paused": false,
  "useHealth": false, "note": "useHealth is off in the Minigame Settings (player settings): ... ANY Change Health whose result is 0 or less ... kills the player at once ...",
  "respawn": {"enabled": true, "time": 3, "invulnerableTime": 1},
  "minigame": {"type": "simple", "state": "Playing", "round": 1, "rounds": 2, "endCondition": "Timer", "placement": "MostPoints",
@@ -1850,7 +2188,7 @@ exactly what was applied; revert by hand with `delete_object` or one `undo` per 
 ### End-to-end example
 
 ```text
-1. create_test_mod {"name": "PB_TEST_E2E", "type": "Minigame"}
+1. create_test_mod {"name": "MCP_E2E", "type": "Minigame"}
 2. run_batch {"steps": [
      {"id": "floor", "tool": "create_object", "params": {"kind": "cube", "name": "Floor",
         "position": {"x": 0, "y": -0.5, "z": 0}, "scale": {"x": 20, "y": 1, "z": 20}}},
@@ -1892,9 +2230,13 @@ exactly what was applied; revert by hand with `delete_object` or one `undo` per 
 | Key | Default | Effect |
 |---|---|---|
 | `[General] PluginEnabled` | `true` | Read at game start. `false`: the plugin does nothing at all (no server, no patches, one log line). Use this to publish by hand. |
-| `[Safety] EnableWrites` | `true` | Read on every write call. `false`: every write tool returns `WRITES_DISABLED`. Does not affect the publish block. |
+| `[Safety] EnableWrites` | `true` | Read on every write call (the plugin reloads the file when its modification time changed, see below). `false`: every write tool returns `WRITES_DISABLED`. Does not affect the publish block. |
+| `[Safety] AcceptedGameVersion` | empty | A game version you accept although the plugin was not tested with it. Applies only to that exact string (case-sensitive; surrounding whitespace in the cfg line is ignored); the next game update closes the gate again. Read on every write call. See [Game-version gate](#game-version-gate). |
+| `[Safety] ForceGameVersionUntested` | `false` | Test switch: treats the running version as untested even if it is in the tested list. Can only make the gate stricter; it never accepts a version. |
 | `[Server] Enabled` | `true` | `false`: no RPC server; the publish block stays active. |
 | `[Server] Port` | `38917` | Read at game start. If the port cannot be bound (already in use), one Error is logged and the plugin stays idle: no dispatcher, frame poller, save watch or undo observer runs and no tool is served. The Workshop publish block stays active. |
+
+**Config reload.** BepInEx 5.4.23 does not watch the `.cfg` file, so a plain edit would only apply after a game restart. The plugin therefore stats the file on every guarded call (write tools, `get_status`, `self_test`) and calls `ConfigFile.Reload()` when its modification time changed; `EnableWrites`, `AcceptedGameVersion` and `ForceGameVersionUntested` follow edits without a restart (a malformed file keeps the values already loaded). `ping` runs on the HTTP thread and reports the values loaded at the last reload. `PluginEnabled`, `Enabled` and `Port` are still read at game start only.
 
 ### Token file
 
@@ -1910,10 +2252,14 @@ trusted, or tighten the folder's ACL by hand.
 
 ### Test-mod rule
 
-A name is a test-mod name iff it starts with the exact, case-sensitive prefix `PB_TEST_`, has at least one more
+A name is a test-mod name iff it starts with the exact, case-sensitive prefix `MCP_`, has at least one more
 character, is at most 64 characters long, consists only of ASCII `A-Z a-z 0-9 _ -` and spaces, and has no leading
-or trailing space. `pb_test_x`, `PB_TEST_`, `PB_TEST_a.b`, `PB_TEST_../x` and non-ASCII look-alikes are not. The
+or trailing space. `mcp_x`, `MCP_`, `MCP_a.b`, `MCP_../x` and non-ASCII look-alikes are not. The
 prefix is hardcoded; there is no configuration, allowlist or bypass.
+
+### Game-version gate
+
+The plugin replicates editor call sequences and reads private game members, so after a game update it may silently misbehave. `Application.version` (the string logged at startup and returned by `ping` as `gameVersion`) is compared with the list of tested versions compiled into the plugin (`1.14.1k`). The comparison is exact (ordinal, case-sensitive, no trimming). If the running version is not in the list, the plugin logs a Warning at startup, **read tools keep working** and **every write tool is refused with `GAME_VERSION_UNTESTED`** (the message names the running version, the tested versions and how to accept), unless `[Safety] AcceptedGameVersion` equals the running version exactly. If the version cannot be read at all, it counts as untested and cannot be accepted. The check is step 3 of the central guard (after `EnableWrites` and the publish block, before the editor-state checks), so no write tool, lifecycle tool or batch step can skip it; the publish block is not affected by it. Workflow after an update: call `self_test`; if `ok` is true, set `[Safety] AcceptedGameVersion = <version>` in the cfg (no restart, see Config reload) and verify with a small edit on a `MCP_` mod. To test the gate without an update set `[Safety] ForceGameVersionUntested = true` (stricter only), then clear it.
 
 ### Guard (central, in the tool registry)
 
@@ -1923,9 +2269,10 @@ body, when the call's turn in the write queue comes (see [Threading](#threading)
 
 1. `[Safety] EnableWrites` → `WRITES_DISABLED`
 2. publish block complete → `PUBLISH_BLOCK_INCOMPLETE`
-3. editor open → `EDITOR_NOT_OPEN`
-4. not loading → `BUSY_LOADING`
-5. kind **OpenMod** (`save_mod`, `create_object`, `duplicate_object`, `delete_object`, `reparent_object`,
+3. game version tested or accepted → `GAME_VERSION_UNTESTED` (also when the version cannot be read)
+4. editor open → `EDITOR_NOT_OPEN`
+5. not loading → `BUSY_LOADING`
+6. kind **OpenMod** (`save_mod`, `create_object`, `duplicate_object`, `delete_object`, `reparent_object`,
    `set_object`, `set_transform`, `add_component`, `remove_component`, `set_property`, `set_properties`, `undo`,
    `add_action`, `remove_action`, `move_action`, `set_action`, `add_trigger`, `remove_trigger`, `set_trigger`,
    `start_playtest`, `run_batch`, and every write step inside a batch; `stop_playtest` with the play-mode option):

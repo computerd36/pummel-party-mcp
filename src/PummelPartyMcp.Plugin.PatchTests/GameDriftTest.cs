@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using PummelPartyMcp.Core;
 using PummelPartyMcp.Safety;
 
 namespace PummelPartyMcp.PatchTests
@@ -54,6 +55,7 @@ namespace PummelPartyMcp.PatchTests
                 check("every target belongs to the game or Steamworks.NET assembly", targets.Where(t => t.Method != null)
                     .All(t => t.Method.DeclaringType.Assembly == game || t.Method.DeclaringType.Assembly == steam));
                 ReflectedMembers(game, check);
+                RegistryAndAudit(game, check);
             }
             catch (Exception e)
             {
@@ -99,6 +101,50 @@ namespace PummelPartyMcp.PatchTests
             check("WorkshopController.CurrentBackgroundLoadMod / CurrentActiveMod are static properties",
                 modWorkshopController?.GetProperty("CurrentBackgroundLoadMod", BindingFlags.Public | BindingFlags.Static) != null
                 && modWorkshopController.GetProperty("CurrentActiveMod", BindingFlags.Public | BindingFlags.Static) != null);
+        }
+
+        /// <summary>
+        /// The central registry (Core/RequiredMembers.cs, the same list the runtime self_test tool resolves) against the real game
+        /// assembly, and the inspector audit snapshot: the custom-inspector components and their reflected properties must be exactly
+        /// the ones audited, so a game update that adds, renames or attaches an inspector is caught until the inspectors are re-read.
+        /// </summary>
+        private static void RegistryAndAudit(Assembly game, Action<string, bool> check)
+        {
+            System.Collections.Generic.List<string> problems = RequiredMembers.ResolveAll(game);
+            foreach (string p in problems)
+            {
+                Console.WriteLine("    unresolved registry member: " + p);
+            }
+            check($"every member of the central registry resolves in the real assembly ({RequiredMembers.All.Count} members, {problems.Count} problems)", problems.Count == 0);
+
+            Type[] types = SafeTypes(game);
+            string[] inspectorTypes = types
+                .Where(t => CustomAttributeData.GetCustomAttributes(t).Any(a => a.AttributeType.Name == "ModSerialized")
+                         && CustomAttributeData.GetCustomAttributes(t).Any(a => a.AttributeType.Name == "ModCustomInspector"))
+                .Select(t => t.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+            check("the custom-inspector components are exactly the 21 audited (" + string.Join(", ", inspectorTypes) + ")",
+                inspectorTypes.SequenceEqual(InspectorRules.CustomInspectorComponents.OrderBy(n => n, StringComparer.Ordinal)));
+
+            foreach (string name in InspectorRules.CustomInspectorComponents)
+            {
+                Type t = game.GetType(name, false);
+                if (t == null)
+                {
+                    check("audited component " + name + " exists", false);
+                    continue;
+                }
+                string[] actual = t.GetProperties(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public)
+                    .Where(p => p.GetGetMethod(false) != null && p.GetGetMethod(false).GetBaseDefinition() == p.GetGetMethod(false))
+                    .Where(p => !CustomAttributeData.GetCustomAttributes(p).Any(a => a.AttributeType.Name == "ModIgnore"))
+                    .Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+                string[] audited = InspectorRules.AuditedProperties[name].Split(' ').OrderBy(n => n, StringComparer.Ordinal).ToArray();
+                bool same = actual.SequenceEqual(audited);
+                if (!same)
+                {
+                    Console.WriteLine("    " + name + ": new = [" + string.Join(", ", actual.Except(audited)) + "], gone = [" + string.Join(", ", audited.Except(actual)) + "]");
+                }
+                check($"audit snapshot of {name} equals its reflected properties ({actual.Length})", same);
+            }
         }
 
         /// <summary>

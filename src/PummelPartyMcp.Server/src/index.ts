@@ -20,7 +20,7 @@ const PLAYER_TRIGGERS = "weaponHitTrigger, tickTrigger, onDeathTrigger, onRespaw
 const GUIDE = [
   "pummel-party-mcp drives the Pummel Party Mod Editor through a plugin inside the running game.",
 
-  "SAFETY: write tools act only on sandbox mods named PB_TEST_ (^PB_TEST_[A-Za-z0-9_ -]+$, max 64 chars, no leading/trailing space); anything else is refused (GUARD_NOT_TEST_MOD). Real mods can never be changed; Workshop publishing is blocked and has no tool. create_test_mod/open_test_mod are refused while a real mod is open (the human closes it). Writes need Safety.EnableWrites (get_status: writesEnabled, publishBlock.complete).",
+  "SAFETY: write tools act only on sandbox mods named MCP_ (^MCP_[A-Za-z0-9_ -]+$, max 64 chars, no leading/trailing space); anything else is refused (GUARD_NOT_TEST_MOD). Real mods can never be changed; Workshop publishing is blocked and has no tool. create_test_mod/open_test_mod are refused while a real mod is open (the human closes it). Writes need Safety.EnableWrites and a tested or accepted game version (get_status: writesEnabled, publishBlock, gameVersionCheck).",
 
   "WORKFLOW: get_status -> list_mods -> open_test_mod or create_test_mod -> get_hierarchy (guids) -> edits (create_object, set_transform, add_component, set_property, ...; many at once: run_batch) -> get_object to verify -> validate_mod -> save_mod -> start_playtest (aiOnly true runs unattended) -> get_playtest_state / get_playtest_events -> stop_playtest. Edits stay in memory until save_mod.",
   "ACTIONS: create_object kind trigger/logic; for a Trigger component set_property TriggerOnEnter (or TriggerOnExit/TriggerOnStay/TriggerOnHit) true to make its slot editable -> get_action_graph -> list_action_types with that trigger address -> add_action -> get_action_graph to verify -> save_mod. Logic components hold a trigger list (add_trigger, set_trigger, remove_trigger; Triggers[0], ...); other components have fixed slots. set_property cannot set triggers or actions.",
@@ -28,18 +28,18 @@ const GUIDE = [
   "EDIT RULES: edit tools need the Editing state and return INVALID_STATE while an editor dialog is open, the left mouse button is held in the game window, or play mode is active (stop_playtest, or wait / tell the human, then retry). Every edit selects the edited object. Replies carry changed, undoable, undoStackLength (plus undoPending/note). One call = one undo step. undo has no redo; creating an object is not undoable (use delete_object). Undoing a component add pushes an extra snapshot (extraUndoEntries): one more undo re-adds it. Player-settings trigger edits (scope playerSettings) are NOT undoable: written by save_mod.",
 
   "PLAYTEST: validate_mod first. start_playtest SAVES the open sandbox mod, applies players/aiOnly, presses Play, returns in PlayMode (limit 60 s); INVALID_STATE on validator errors (error.data.validation; validateFirst false = Run With Errors), an open prefab or dialog, or a BoardSpace mod. aiOnly true: AIs play, rounds run by themselves; otherwise a human plays player 1 (no input is sent). VERIFY, never assume a trigger or action worked: get_playtest_state (running only: players alive/health/score/position/deaths, minigame state/round/time, useHealth + note) and get_playtest_events (ring of 500: player_died/respawned, health_changed, score_changed, round_started/ended, minigame_finished, trigger_fired, action_executed; page with sinceId; cleared when the next playtest starts, so stop_playtest first and read afterwards works). Also get_status.playtest, get_log, screenshot. HEALTH: with useHealth off (default) any Change Health leaving 0 or less kills at once, whatever the amount; hit points need Use Health in the Minigame Settings (by hand). During play these also work: ping, get_status, get_log, screenshot, list_mods, list_component_types, get_hierarchy (EDIT-TIME scene), list_assets/list_trigger_types/list_action_types without address. INVALID_STATE: get_object, get_action_graph, list_action_types with address, get_open_mod, validate_mod and all edit/lifecycle tools incl. save_mod, undo, run_batch. stop_playtest before editing. After a start TIMEOUT: get_status, then stop_playtest; do not retry blindly.",
-  "MOD ID: publishedFileId \"256\" (get_open_mod, create/open_test_mod) means never published: the game's local id for unpublished mods. It is not a Workshop item or a minigame id.",
+  "MOD ID: publishedFileId \"256\" means never published (the game's local id for unpublished mods), not a Workshop item or a minigame id.",
   "MINIMAL VALID MINIGAME: NumberOfRounds > 0 (default 1) plus at least one ACTIVE Player Spawn (create_object kind playerSpawn; defaults cover all counts, players and respawn) = valid true. Warnings never block (empty description, no preview image, no collider below a spawn: cube/plane/prop have one). Board mods cannot be made valid via the plugin.",
   "BATCH: run_batch runs 1-100 steps {tool, params?, id?} in order in one write-queue turn (limit 120 s); each write step has its own guard, commit and undo step. Allowed: the edit tools, undo, save_mod and the get_/list_ read tools in its schema (not lifecycle, playtest, screenshot, ping, get_status, get_log, get_open_mod, validate_mod). NO ROLLBACK (object creation is not undoable): stopOnError (default true) stops at the first failed step and results lists what was applied; revert with delete_object or undo per step; false = attempt all; nothing is saved without a save_mod step. Step failures are in results ({ok, result|error}), not a call error; the call fails only on up-front validation (INVALID_PARAMS naming the step, nothing run) or a guard. id [A-Za-z][A-Za-z0-9_-]{0,63}, unique. PLACEHOLDERS: a string VALUE (any depth, not keys) in params starting with $ is a reference $<id>(.name|[n]){1,8} into an EARLIER step's result (no forward/self refs), replaced by that JSON value of any type before the step runs: \"$floor.guid\", \"$dup.objects[0].guid\". \"$$5\" = literal \"$5\"; any other $ string is refused up front; a reference to a failed step or missing path fails that step.",
 
-  "CLAMPING: values may be clamped. Transform: world position within -1000..1000, rotation -3600..3600, scale 0.001..1000 per axis. Setter/inspector limits too (Wait m_seconds 0..3600, m_volume 0..1, Timer m_interval.min >= 0.1). See applied / clamped / inspectorClamped.",
+  "CLAMPING: values may be clamped. Transform: world position within -1000..1000, rotation -3600..3600, scale 0.001..1000 per axis. Setter/inspector limits too (Wait m_seconds 0..3600, m_volume 0..1, Timer m_interval.min >= 0.1). See applied / clamped / inspectorClamped. set_property follows the inspector: never-drawn, conditional (spotAngle only while type is Spot; checked after the call's other values) and omitted choices are refused (get_object: shown, inspector).",
 
   `ADDRESSES: objects by guid (ModTransform guid from get_hierarchy/get_object). Components by guid, class name (ModLight) or UI name (Light), case-insensitive. Trigger address: {guid, component?, trigger, path?}, or {scope:"playerSettings", trigger, path?} (Minigame only; no guid/component). trigger = the triggerName from get_action_graph (OnEnterActions, OnUseTrigger, Triggers[0], ...); player-settings names: ${PLAYER_TRIGGERS}. component only when several components have a trigger of that name. path (max 8 steps {action, choice}) enters nested Display Popup lists: each step = a Display Popup action in the current list + a 0-based choice whose On Select list becomes the edited one. Some slots are editable only while a component flag is on; get_action_graph reports editable/reason and the action tools refuse non-editable slots.`,
 
   "PROPERTY VALUES (set_property/set_properties; the shapes get_object returns): Boolean; integers (3.0 ok); Single/Double finite number; String (max 16384); enum name (case-insensitive) or defined integer, flags joined by comma (\"OnSelf, OnTargets\"); Vector2/3/4, Quaternion {x,y[,z[,w]]} or array of 2-4 numbers; Color {r,g,b,a?} 0-1; Color32 0-255 ints; Rect {x,y,width,height}; LayerMask integer; asset references null, a guid or {guid} (from list_assets; registered:false refused); scene-object references null, a component guid or an object guid; arrays a JSON array (max 1024); AnimationCurve {keys:[{time,value,inTangent?,outTangent?}]} (max 256); MinMaxCurve a number or {mode:Constant|TwoConstants|Curve|TwoCurves, constant|constantMin+constantMax|curve|curveMin+curveMax, curveMultiplier?}; MinMaxGradient a color or {mode:Color|TwoColors|Gradient|RandomColor|TwoGradients, color|colorMin+colorMax|gradient|gradientMin+gradientMax}, gradient {mode?, colorKeys:[{color,time}], alphaKeys:[{alpha,time}]}.",
   "PROPERTY RULES: names as get_object lists them (unique case-insensitive match ok). Values are validated first: if one fails nothing changes. NOT settable (INVALID_PARAMS): triggers/action lists (use the action tools), guid and hiddenInInspector properties, ModComplexFloat, ModWeaponInfo, SimpleModHitAction, ModSimpleAnimation[], BoardNodeConnection[], Burst[], byte[]; on a prefab instance only Transform and Prefab Instance. A throwing setter returns INTERNAL naming the properties already set; one undo reverts them.",
 
-  "ACTION PARAMETERS (add_action, set_action, add_trigger, set_trigger): {name: value}, max 64; names are the fields get_action_graph reports (m_seconds), alias without m_ accepted; unknown names, wrong types, bad enums or references are refused and nothing changes. Shapes as PROPERTY VALUES plus: ModComplexFloat/Int a number (= Constant) or {valueType?:Constant|RandomBetweenTwoValues, min?, max?}; ModAssetReference<T> null, guid or {guid}; reference arrays replace the list; DamageInstance an object with any of damage, ragdoll, ragdollVel, hitAnim, removeKeys, blood, bloodVel, bloodAmount, sound, volume; Display Popup m_choices an array patch (element i updates choice i, null = unchanged; keys m_buttonText, m_costType, m_costAmount, m_itemCostType, m_choiceIconReference). list_action_types shows names, types, enums, defaults, limits.",
+  "ACTION PARAMETERS (add_action, set_action, add_trigger, set_trigger): {name: value}, max 64; names are the fields get_action_graph reports (m_seconds), alias without m_ accepted; unknown names, wrong types, bad enums or references are refused and nothing changes. Shapes as PROPERTY VALUES plus: ModComplexFloat/Int a number (= Constant) or {valueType?:Constant|RandomBetweenTwoValues, min?, max?}; ModAssetReference<T> null, guid or {guid}; reference arrays replace the list; DamageInstance an object with any of damage, ragdoll, ragdollVel, hitAnim, removeKeys, blood, bloodVel, bloodAmount, sound, volume; Display Popup m_choices an array patch (element i updates choice i, null = unchanged; keys m_buttonText, m_costType, m_costAmount, m_itemCostType, m_choiceIconReference).",
   "TARGETS: target actions (not e.g. Wait) have targetFlags (Source, Receiver, Advanced) and, with Advanced, a targets list. targetFlags: names joined by comma (\"Source, Advanced\"), an array of names, an integer 0-7 (Source=1, Receiver=2, Advanced=4), or \"0\"/\"\"/\"None\". Flags whose toggle is hidden at the call site or for the action are refused (see callSite in get_action_graph; availableTargetFlags, targetFlagsLocked, appendTargetFlags, targetType in list_action_types). targets: references (object guid, component guid or {guid}; null = empty entry), max 1024, replaced as a whole, only with Advanced in the flags; each must resolve to the action's targetType and be a registered object (scene triggers: scene objects; prefab triggers: the same prefab). Default call-site flags apply on APPEND only.",
 ].join("\n\n");
 
@@ -210,7 +210,7 @@ register(
 );
 register(
   "get_status",
-  "Editor/mod status: editorState, modOpen/modName, hasUnsavedEdits, undoStackLength, prefabContext, playtest (running, playSeconds, minigame/board, eventCount, alivePlayers), writesEnabled, publishBlock. Never fails because of editor state; shows why other tools fail.",
+  "Editor/mod status: editorState, modOpen/modName, hasUnsavedEdits, undoStackLength, prefabContext, playtest (running, playSeconds, minigame/board, eventCount, alivePlayers), writesEnabled, publishBlock, gameVersionCheck {writesAllowed,...}. Never fails because of editor state; shows why other tools fail.",
   {},
   READ_ONLY,
 );
@@ -311,7 +311,7 @@ register(
 );
 register(
   "list_mods",
-  "Lists the editor's mod projects [{ name, folderName, type, isTestMod, isOpen }]; isTestMod = PB_TEST_ sandbox. Needs the Mod Editor open (EDITOR_NOT_OPEN otherwise); no mod needs to be loaded.",
+  "Lists the editor's mod projects [{ name, folderName, type, isTestMod, isOpen }]; isTestMod = MCP_ sandbox. Needs the Mod Editor open (EDITOR_NOT_OPEN otherwise); no mod needs to be loaded.",
   {},
   READ_ONLY,
 );
@@ -359,11 +359,18 @@ register(
   { narrow: "use a smaller max, or sinceId" },
 );
 
+register(
+  "self_test",
+  "Read-only check of the game members, publish block and inspector audit the plugin relies on: { ok, missingMembers, publishBlock, inspectorAudit, notes }. Evidence for the human before accepting an untested game version.",
+  {},
+  READ_ONLY,
+);
+
 // ---------------------------------------------------------------------------
 // Mod lifecycle (write)
 // ---------------------------------------------------------------------------
 
-const NAME_RULE = "^PB_TEST_[A-Za-z0-9_ -]+$, max 64 chars, no leading/trailing space.";
+const NAME_RULE = "^MCP_[A-Za-z0-9_ -]+$, max 64 chars, no leading/trailing space.";
 const nameSchema = z
   .string()
   .refine(isValidTestModName, { message: `Invalid sandbox mod name. ${NAME_RULE}` })
@@ -388,7 +395,7 @@ register(
 );
 register(
   "save_mod",
-  `Saves the open sandbox mod to disk (waits up to 30 s). Only works while a PB_TEST_ sandbox mod is open.${RULES}`,
+  `Saves the open sandbox mod to disk (waits up to 30 s). Only works while a MCP_ sandbox mod is open.${RULES}`,
   {},
   WRITE_IDEMPOTENT,
 );

@@ -140,7 +140,7 @@ Caveat on the headline: "starts without a click in a dedicated publish dialog" i
 * Template creation (`EditorSystem.CreateNewMod`, EditorSystem.cs:823-846) copies the template folder including its `WorkshopItem.json` (and so its id), and forces 256 only in the load-finished callback. A folder copied by other means (the plugin, the user, a file manager) keeps the source id. [C]
 * **Duplicate-id consequences** (two local folders with the same id):
   * Publishing from either folder targets the same remote item and replaces its content, title, description, tags, visibility, metadata and (if "Update Videos/Images" is on) all previews. Last upload wins. [C]
-  * A `PB_TEST_` copy of the real published mod that keeps the real id is one click from overwriting the live item. Any plugin-created or cloned mod must have its id forced to 256 before it is opened in the editor, in addition to blocking the publish chain. [C/I]
+  * A `MCP_` copy of the real published mod that keeps the real id is one click from overwriting the live item. Any plugin-created or cloned mod must have its id forced to 256 before it is opened in the editor, in addition to blocking the publish chain. [C/I]
   * `PublishedModsPopup.LinkWorkshopAndLocalData` (PublishedModsPopup.cs:120-134) uses first-match lookup, so only one duplicate is shown as installed. [C]
   * In-game, `WorkshopController.RemoveMod(ulong)` (WorkshopController.cs:731) removes every loaded mod with that id; `GetModWithWorkshopID` (768) returns the first match; `PrepareMods` (350) filters play-mode mods by id equality with the current mod. All unpublished mods share 256, so they also collide in-memory. [C]
   * `ModCacheSystem` keys texture caches by id (ModCacheSystem.cs:18); `RemoveActiveItem` deletes that cache folder (WorkshopModInstaller.cs:836). Local cache only. [C]
@@ -218,7 +218,7 @@ Harmony **prefix** patches returning `false`, with a safe default `__result`. In
 | `WorkshopBrowserItem.Delete()` | Remote delete | UI entry | WorkshopBrowserItem.cs:386 | No |
 | `WorkshopBrowserItem.Upvote(bool)`; `WorkshopVotePopup.VoteOnItem(ulong, bool)` (private) | Remote vote | UI entry | WorkshopBrowserItem.cs:356; WorkshopVotePopup.cs:94 | No |
 | `WorkshopBrowserItem.OnClick()`, `OnFavorite()`; `WorkshopModInstaller.Subscribe(PublishedFileId_t)`, `UnSubscribe(PublishedFileId_t)`; `ActiveUGCItem.Subscribe(...)`, `UnSubscribe(...)` | Subscription / favourites changes. `Subscribe` also fires automatically after a successful publish | UI entry / wrapper | WorkshopBrowserItem.cs:327, 392; WorkshopModInstaller.cs:93, 100, 742, 747, 1191 | No. Loading already-subscribed mods reads `GetSubscribedItems`; lobby auto-install uses `AddTempActiveItem`, which does not call these |
-| Companion safeguard (not a Workshop call): force `publishedFileId = 256` for every plugin-created or cloned mod, in memory and in JSON, before the editor opens it; consider refusing `PummelMod.SaveWorkshopItemDetails()` for non-`PB_TEST_` mods | Prevents the duplicate-id overwrite scenario | n/a | EditorSystem.cs:823-846; PummelMod.cs:594 | n/a |
+| Companion safeguard (not a Workshop call): force `publishedFileId = 256` for every plugin-created or cloned mod, in memory and in JSON, before the editor opens it; consider refusing `PummelMod.SaveWorkshopItemDetails()` for non-`MCP_` mods | Prevents the duplicate-id overwrite scenario | n/a | EditorSystem.cs:823-846; PummelMod.cs:594 | n/a |
 
 ### 8.2 Layer (ii): Steamworks.NET static methods (fail closed)
 

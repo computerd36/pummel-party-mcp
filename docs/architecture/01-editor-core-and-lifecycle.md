@@ -131,7 +131,7 @@ They are smoke/fuzz steps with RANDOM targets (random name from `AutomatedTestSy
 - UI: File > Rename Mod (`MainMenuWidget.cs:102`) -> `RenameModPopup(title, modPath)` -> OK -> `EditorSystem.RenameMod(modPath, newName)`.
 - `EditorSystem.RenameMod(string modPath, string newName)` (`:1172`): sets `CurrentPrefab = null` if a mod is open; if the target folder already exists it pushes a Yes/No popup and does nothing else; otherwise **`Directory.Move(old, new)`**, then for the current mod `CurrentMod.RenameMod(newName)` (updates `m_metaData.Name`, `m_modRootDirectory`, `workshopItem.title`; rewrites Meta.json + WorkshopItem.json; `RefreshImportedFiles()`; board/minigame also rewrite MapDetails.json / MinigameDefinitionData.json), or for any other mod the static `PummelMod.RenameUnloadedMod(newFolder, newName)` (`PummelMod.cs:254`; rewrites Meta.json, WorkshopItem.json, map/minigame details). Finally `GetAvailableModManager().ReadListOfAvailableMods(ModFolder)`. Exceptions produce popups.
 - Rename of an open mod is not a full save (scene/assets are not rewritten) but does bump `LastModified`.
-- Folder name == mod name, so rename moves the folder. **Implication for the `PB_TEST_` guard: validate both the source and the NEW name (otherwise a sandbox mod could be renamed out of the sandbox, or something renamed into it).** `RenameMod` does no name validation of its own.
+- Folder name == mod name, so rename moves the folder. **Implication for the `MCP_` guard: validate both the source and the NEW name (otherwise a sandbox mod could be renamed out of the sandbox, or something renamed into it).** `RenameMod` does no name validation of its own.
 
 ### Delete mod (for completeness) [C]
 Exists only inside UI handlers (`MainMenuWidget.DeleteModResult` `:283`, `LoadModPopup.DeleteModResult` `:211`): `SetCurrentMod(null)` if it is the open mod, then recursive `Directory.Delete` of the mod folder. There is no callable `EditorSystem.DeleteMod`. The plugin should not implement it.
@@ -237,11 +237,11 @@ Searched the whole `Assembly-CSharp` tree for: `SaveCurrentMod`, `DelayedSave`, 
 | 10 | Workshop publish | `WorkshopPopup.PublishMod` (`WorkshopPopup.cs:460`) calls `pm.Save()`; `WorkshopModInstaller.OnCreateItem` (`:1042`) calls `DelayedSave()` | **Never implement or call (project hard rule 5).** |
 | 11 | Editor init/destroy | `ImGui.SaveIniSettingsToDisk` | layout `.ini` in persistentDataPath (not in a mod folder) |
 | 12 | PlayerPrefs | `CurrentUIZoomPercent` setter, player-count combo | Unity PlayerPrefs, not mod data |
-| 13 | Exit-time reinstall thread | `RunExitModEditorLogic` -> `WorkshopModInstaller.ReinstallMod(id)` | only for published mods whose playtest ran (`AddModToReinstallOnExit` when `publishedFileId != 256`); PB_TEST_ mods are unpublished so unaffected [I] |
+| 13 | Exit-time reinstall thread | `RunExitModEditorLogic` -> `WorkshopModInstaller.ReinstallMod(id)` | only for published mods whose playtest ran (`AddModToReinstallOnExit` when `publishedFileId != 256`); MCP_ mods are unpublished so unaffected [I] |
 
-Implications for "plugin writes only to PB_TEST_ mods":
-- #1 and #4 are the dangerous implicit ones. **Starting a playtest saves the open mod, and leaving a prefab saves that prefab.** If a protected mod is open, a plugin-triggered playtest WILL overwrite its files (at minimum Meta.json `LastModified`). Playtest and every write tool must verify the folder name of `CurrentMod.GetModPath()` starts with `PB_TEST_`.
-- Opening a protected mod is not strictly read-only (#7 can create `.pmeta`), and any later implicit #1/#4 would write to it. Policy suggestion (not from code): the plugin should refuse to open non-`PB_TEST_` mods, or treat them as read-only and never call `SetEditorState(EnteringPlayMode)` or change `CurrentPrefab` while one is open.
+Implications for "plugin writes only to MCP_ mods":
+- #1 and #4 are the dangerous implicit ones. **Starting a playtest saves the open mod, and leaving a prefab saves that prefab.** If a protected mod is open, a plugin-triggered playtest WILL overwrite its files (at minimum Meta.json `LastModified`). Playtest and every write tool must verify the folder name of `CurrentMod.GetModPath()` starts with `MCP_`.
+- Opening a protected mod is not strictly read-only (#7 can create `.pmeta`), and any later implicit #1/#4 would write to it. Policy suggestion (not from code): the plugin should refuse to open non-`MCP_` mods, or treat them as read-only and never call `SetEditorState(EnteringPlayMode)` or change `CurrentPrefab` while one is open.
 - After `RenameMod` the folder leaf changes; always re-derive identity from `GetModPath()`, not from a cached name.
 
 ---

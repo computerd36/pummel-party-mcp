@@ -368,7 +368,7 @@ namespace PummelPartyMcp.Tests
             Console.WriteLine("-- unit: registry serialises write tools");
             ManualDispatcher d = new ManualDispatcher();
             FakeHost host = new FakeHost();
-            ToolRegistry reg = new ToolRegistry(new WriteSafety(() => true, () => true, host));
+            ToolRegistry reg = new ToolRegistry(new WriteSafety(() => true, () => true, () => GameVersionGate.AlwaysTested(), host));
             List<string> events = new List<string>();
             WriteInvocation pending = null;
             reg.Register(ToolDefinition.Write("slow", WriteGuard.OpenMod(), null, inv => { events.Add("slow-start"); pending = inv; }));
@@ -401,7 +401,7 @@ namespace PummelPartyMcp.Tests
                 Captures++;
                 return new EditorSnapshot
                 {
-                    EditorOpen = true, ModOpen = true, ModLoaded = true, ModName = "PB_TEST_A", FolderName = "PB_TEST_A",
+                    EditorOpen = true, ModOpen = true, ModLoaded = true, ModName = "MCP_A", FolderName = "MCP_A",
                     IsEditing = true, StateName = "Editing",
                 };
             }
@@ -665,7 +665,7 @@ namespace PummelPartyMcp.Tests
             // 1. Timeout before commit: the caller gets TIMEOUT; the edit never runs, also when the baseline comes later.
             {
                 MainThreadDispatcher d = new MainThreadDispatcher(TimeSpan.FromSeconds(3));
-                ToolRegistry reg = new ToolRegistry(new WriteSafety(() => true, () => true, guardHost));
+                ToolRegistry reg = new ToolRegistry(new WriteSafety(() => true, () => true, () => GameVersionGate.AlwaysTested(), guardHost));
                 FakeEditHost eh = new FakeEditHost { Selected = true, Baseline = false };
                 EditPipeline pipe = null;
                 int applied = 0;
@@ -701,7 +701,7 @@ namespace PummelPartyMcp.Tests
             // 2. Deadline reached after commit: the caller waits (bounded) and gets the success result; applied once.
             {
                 MainThreadDispatcher d = new MainThreadDispatcher(TimeSpan.FromSeconds(3));
-                ToolRegistry reg = new ToolRegistry(new WriteSafety(() => true, () => true, guardHost));
+                ToolRegistry reg = new ToolRegistry(new WriteSafety(() => true, () => true, () => GameVersionGate.AlwaysTested(), guardHost));
                 FakeEditHost eh = new FakeEditHost { Selected = true, Baseline = true };
                 EditPipeline pipe = null;
                 int applied = 0;
@@ -734,7 +734,7 @@ namespace PummelPartyMcp.Tests
             // 3. Queued call that cannot start in time: fails before touching anything; the body never runs.
             {
                 MainThreadDispatcher d = new MainThreadDispatcher(TimeSpan.FromSeconds(3));
-                ToolRegistry reg = new ToolRegistry(new WriteSafety(() => true, () => true, guardHost));
+                ToolRegistry reg = new ToolRegistry(new WriteSafety(() => true, () => true, () => GameVersionGate.AlwaysTested(), guardHost));
                 WriteInvocation held = null;
                 int secondRuns = 0;
                 reg.Register(ToolDefinition.Write("slow", WriteGuard.OpenMod(), null, inv => held = inv, TimeSpan.FromSeconds(10)));

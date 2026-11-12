@@ -30,6 +30,8 @@
     <Compile Include="..\PummelPartyMcp.Plugin\Core\RpcErrors.cs" Link="Core\RpcErrors.cs" />
     <Compile Include="..\PummelPartyMcp.Plugin\Core\PublishBlockStatus.cs" Link="Core\PublishBlockStatus.cs" />
     <Compile Include="..\PummelPartyMcp.Plugin\Hooks\SaveWatch.cs" Link="Hooks\SaveWatch.cs" />
+    <Compile Include="..\PummelPartyMcp.Plugin\Core\RequiredMembers.cs" Link="Core\RequiredMembers.cs" />
+    <Compile Include="..\PummelPartyMcp.Plugin\Core\InspectorRules.cs" Link="Core\InspectorRules.cs" />
   </ItemGroup>
 
   <ItemGroup>

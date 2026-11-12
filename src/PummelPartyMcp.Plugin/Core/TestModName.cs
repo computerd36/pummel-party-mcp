@@ -9,7 +9,7 @@ namespace PummelPartyMcp.Core
     public static class TestModName
     {
         /// <summary>Exact, case-sensitive (ordinal) prefix.</summary>
-        public const string Prefix = "PB_TEST_";
+        public const string Prefix = "MCP_";
 
         public const int MaxLength = 64;
 

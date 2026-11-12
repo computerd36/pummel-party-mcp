@@ -385,7 +385,7 @@ namespace PummelPartyMcp.Tests
                 Captures++;
                 return new EditorSnapshot
                 {
-                    EditorOpen = true, ModOpen = true, ModLoaded = true, ModName = "PB_TEST_A", FolderName = "PB_TEST_A",
+                    EditorOpen = true, ModOpen = true, ModLoaded = true, ModName = "MCP_A", FolderName = "MCP_A",
                     IsEditing = State == "Editing", StateName = State,
                 };
             }
@@ -397,7 +397,7 @@ namespace PummelPartyMcp.Tests
             Console.WriteLine("-- unit: run_batch through the registry (guard per step)");
             StateHost host = new StateHost();
             bool writes = true;
-            ToolRegistry reg = new ToolRegistry(new WriteSafety(() => writes, () => true, host));
+            ToolRegistry reg = new ToolRegistry(new WriteSafety(() => writes, () => true, () => GameVersionGate.AlwaysTested(), host));
             List<string> ran = new List<string>();
             reg.Register(ToolDefinition.Write("create_object", WriteGuard.OpenMod(), ctx => ctx.GetString("name"), inv =>
             {
@@ -469,9 +469,9 @@ namespace PummelPartyMcp.Tests
             {
                 EditorSnapshot s = new EditorSnapshot
                 {
-                    EditorOpen = true, ModOpen = true, ModLoaded = true, ModName = "PB_TEST_A", FolderName = "PB_TEST_A", IsEditing = false, StateName = st,
+                    EditorOpen = true, ModOpen = true, ModLoaded = true, ModName = "MCP_A", FolderName = "MCP_A", IsEditing = false, StateName = st,
                 };
-                WriteSafety safety = new WriteSafety(() => true, () => true, new StateHost());
+                WriteSafety safety = new WriteSafety(() => true, () => true, () => GameVersionGate.AlwaysTested(), new StateHost());
                 Check($"edit tool (OpenMod) refused in {st}", WriteGuardEvaluator.Evaluate(safety, WriteGuard.OpenMod(), null, s)?.Code == ErrorCodes.InvalidState);
                 Check($"stop_playtest guard (OpenMod allowPlayMode) passes in {st}", WriteGuardEvaluator.Evaluate(safety, WriteGuard.OpenMod(allowPlayMode: true), null, s) == null);
                 EditorSnapshot real = new EditorSnapshot
@@ -480,7 +480,7 @@ namespace PummelPartyMcp.Tests
                 };
                 Check($"stop_playtest guard still refuses a non-test mod in {st}", WriteGuardEvaluator.Evaluate(safety, WriteGuard.OpenMod(allowPlayMode: true), null, real)?.Code == ErrorCodes.GuardNotTestMod);
                 Check($"stop_playtest guard still needs writes enabled in {st}",
-                    WriteGuardEvaluator.Evaluate(new WriteSafety(() => false, () => true, new StateHost()), WriteGuard.OpenMod(allowPlayMode: true), null, s)?.Code == ErrorCodes.WritesDisabled);
+                    WriteGuardEvaluator.Evaluate(new WriteSafety(() => false, () => true, () => GameVersionGate.AlwaysTested(), new StateHost()), WriteGuard.OpenMod(allowPlayMode: true), null, s)?.Code == ErrorCodes.WritesDisabled);
             }
         }
 

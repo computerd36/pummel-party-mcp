@@ -14,7 +14,7 @@ const entry = join(here, "..", "dist", "index.js");
 const READ_TOOLS = [
   "usage_guide", "ping", "get_status", "get_open_mod", "get_hierarchy", "get_object", "get_action_graph",
   "list_assets", "list_component_types", "list_action_types", "list_trigger_types", "get_log", "screenshot", "list_mods",
-  "validate_mod", "get_playtest_state", "get_playtest_events",
+  "validate_mod", "get_playtest_state", "get_playtest_events", "self_test",
 ];
 const SIZE_LIMIT = 40000;
 
@@ -168,8 +168,8 @@ test("unknown arguments are rejected by name and never reach the plugin", async 
     // the now exposed parameters pass through
     await call(s.client, "get_log", { includeEditor: true, max: 5 });
     assert.deepEqual(JSON.parse(s.fake.requests.at(-1).body).params, { includeEditor: true, max: 5 });
-    await call(s.client, "create_test_mod", { name: "PB_TEST_z", discardUnsaved: true });
-    assert.deepEqual(JSON.parse(s.fake.requests.at(-1).body).params, { name: "PB_TEST_z", discardUnsaved: true });
+    await call(s.client, "create_test_mod", { name: "MCP_z", discardUnsaved: true });
+    assert.deepEqual(JSON.parse(s.fake.requests.at(-1).body).params, { name: "MCP_z", discardUnsaved: true });
   } finally {
     await s.close();
   }
@@ -181,7 +181,7 @@ test("usage_guide is served locally and equals the server instructions", async (
     const r = await s.client.callTool({ name: "usage_guide", arguments: {} });
     assert.notEqual(r.isError, true);
     assert.equal(r.content[0].text, s.client.getInstructions());
-    assert.match(r.content[0].text, /PB_TEST_/);
+    assert.match(r.content[0].text, /MCP_/);
     assert.equal(s.fake.requests.length, 0, "usage_guide must not call the plugin");
   } finally {
     await s.close();

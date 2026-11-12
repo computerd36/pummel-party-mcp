@@ -34,6 +34,7 @@ namespace PummelPartyMcp.Tests
             Console.WriteLine("pummel-party-mcp core test harness");
             UnitTests();
             GuardTests.Run((name, ok) => Check(name, ok));
+            InspectorAndVersionTests.Run((name, ok) => Check(name, ok));
             EditCoreTests.Run((name, ok) => Check(name, ok));
             ActionCoreTests.Run((name, ok) => Check(name, ok));
             PlaytestBatchTests.Run((name, ok) => Check(name, ok));

@@ -12,10 +12,11 @@ namespace PummelPartyMcp.Tools
     {
         private static EditServices s_services;
 
-        public static readonly string[] Capabilities = { "read", "write", "edit", "actions", "playtest", "batch", "playtestState" };
+        public static readonly string[] Capabilities = { "read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate" };
 
         /// <param name="publishBlock">Live publish-block status (re-verifies the required prefixes on every call).</param>
-        public static void Register(ToolRegistry registry, PluginRuntimeInfo info, Func<bool> writesEnabled, Func<PublishBlockStatus> publishBlock, EditServices services)
+        public static void Register(ToolRegistry registry, PluginRuntimeInfo info, Func<bool> writesEnabled, Func<PublishBlockStatus> publishBlock,
+            Func<GameVersionStatus> gameVersionPeek, Func<GameVersionStatus> gameVersionMain, EditServices services)
         {
             s_services = services;
             // Answered on the HTTP thread from values cached at startup: works with the editor closed and even
@@ -29,6 +30,8 @@ namespace PummelPartyMcp.Tools
                 ["apiVersion"] = PluginInfo.ApiVersion,
                 ["sessionId"] = info.SessionId,
                 ["capabilities"] = new JArray(Capabilities),
+                // HTTP thread: the last loaded config values (the guard and get_status reload the file on the main thread).
+                ["gameVersionCheck"] = SelfTestTool.VersionJson(gameVersionPeek()),
             }));
 
             registry.Register(ToolDefinition.Read("get_status", ctx => ctx.OnMainThread(() =>
@@ -36,6 +39,7 @@ namespace PummelPartyMcp.Tools
                 JObject status = GetStatus();
                 status["capabilities"] = new JArray(Capabilities);
                 status["writesEnabled"] = writesEnabled();
+                status["gameVersionCheck"] = SelfTestTool.VersionJson(gameVersionMain());
                 PublishBlockStatus block = publishBlock();
                 status["publishBlock"] = new JObject
                 {

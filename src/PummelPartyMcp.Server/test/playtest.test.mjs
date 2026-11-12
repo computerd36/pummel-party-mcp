@@ -209,7 +209,7 @@ test("annotations of the new tools", async () => {
   try {
     const { tools } = await s.client.listTools();
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));
-    assert.equal(tools.length, 41);
+    assert.equal(tools.length, 42);
     assert.equal(by.validate_mod.annotations.readOnlyHint, true);
     assert.deepEqual(by.validate_mod.inputSchema.properties ?? {}, {});
     assert.deepEqual(

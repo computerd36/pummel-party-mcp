@@ -17,7 +17,7 @@ const EXPECTED = [
   "set_transform", "add_component", "remove_component", "set_property", "set_properties", "undo",
   "list_action_types", "list_trigger_types", "add_action", "remove_action", "move_action", "set_action",
   "add_trigger", "remove_trigger", "set_trigger",
-  "validate_mod", "get_playtest_state", "get_playtest_events", "start_playtest", "stop_playtest", "run_batch",
+  "validate_mod", "get_playtest_state", "get_playtest_events", "self_test", "start_playtest", "stop_playtest", "run_batch",
 ].sort();
 const WRITES = [
   "create_test_mod", "open_test_mod", "save_mod",
@@ -53,7 +53,7 @@ test("end to end over stdio MCP", async () => {
       assert.equal(t.inputSchema.type, "object");
       assert.ok(t.description && t.description.length > 20);
     }
-    assert.equal(tools.length, 41);
+    assert.equal(tools.length, 42);
     for (const t of tools) {
       if (WRITES.includes(t.name)) {
         assert.equal(t.annotations.readOnlyHint, false, t.name);
@@ -93,7 +93,7 @@ test("end to end over stdio MCP", async () => {
     assert.match(shot.content[1].text, /1 x 1/);
 
     // client-side name validation: invalid names never reach the plugin
-    const badNames = ["MyMod", "pb_test_x", "PB_TEST_", "PB_TEST_a/b", "PB_TEST_" + "a".repeat(62), "PB_TEST_a ", "PB_TEST_a\n"];
+    const badNames = ["MyMod", "mcp_x", "Mcp_x", "MCP_", "MCP", "MCPx", " MCP_x", "MCP_x ", "MCP_a/b", "MCP_a\\b", "MCP_a\n", "MCP_" + "a".repeat(61), "\u041CCP_x", "M\u0421P_x", "MC\u0420_x", "\u039CCP_x", "\uFF2DCP_x", "MCP\uFF3Fx", "MCP_\uFF58", "PB_TEST_x", "PB_TEST_Sandbox", "pb_test_x"];
     for (const name of badNames) {
       for (const tool of ["create_test_mod", "open_test_mod"]) {
         const n0 = fake.requests.length;
@@ -107,16 +107,16 @@ test("end to end over stdio MCP", async () => {
         assert.equal(fake.requests.length, n0, "must not reach plugin");
       }
     }
-    const create = await client.callTool({ name: "create_test_mod", arguments: { name: "PB_TEST_My Mod-1", type: "Board" } });
+    const create = await client.callTool({ name: "create_test_mod", arguments: { name: "MCP_My Mod-1", type: "Board" } });
     assert.notEqual(create.isError, true);
-    assert.deepEqual(JSON.parse(fake.requests.at(-1).body), { method: "create_test_mod", params: { name: "PB_TEST_My Mod-1", type: "Board" } });
-    await client.callTool({ name: "open_test_mod", arguments: { name: "PB_TEST_x", discardUnsaved: true } });
-    assert.deepEqual(JSON.parse(fake.requests.at(-1).body), { method: "open_test_mod", params: { name: "PB_TEST_x", discardUnsaved: true } });
+    assert.deepEqual(JSON.parse(fake.requests.at(-1).body), { method: "create_test_mod", params: { name: "MCP_My Mod-1", type: "Board" } });
+    await client.callTool({ name: "open_test_mod", arguments: { name: "MCP_x", discardUnsaved: true } });
+    assert.deepEqual(JSON.parse(fake.requests.at(-1).body), { method: "open_test_mod", params: { name: "MCP_x", discardUnsaved: true } });
     await client.callTool({ name: "save_mod", arguments: {} });
     assert.deepEqual(JSON.parse(fake.requests.at(-1).body), { method: "save_mod", params: {} });
     const lm = await client.callTool({ name: "list_mods", arguments: {} });
     assert.equal(JSON.parse(lm.content[0].text)[0].isTestMod, true);
-    const max = await client.callTool({ name: "create_test_mod", arguments: { name: "PB_TEST_" + "a".repeat(56) } });
+    const max = await client.callTool({ name: "create_test_mod", arguments: { name: "MCP_" + "a".repeat(60) } });
     assert.notEqual(max.isError, true, "64-char name is valid");
 
     // ---- editing tools ----
@@ -221,7 +221,7 @@ test("end to end over stdio MCP", async () => {
     assert.match(instructions, /APPEND only/);
     assert.match(instructions, /editable/);
     assert.match(instructions, /NOT undoable/);
-    assert.match(instructions, /PB_TEST_/);
+    assert.match(instructions, /MCP_/);
     assert.match(instructions, /Workshop publishing is blocked/);
 
     const objAddr = { guid: "g", component: "ModTrigger", trigger: "OnEnterActions" };
