@@ -9,7 +9,7 @@ additive) adds object, transform, component and property editing plus `undo`; se
 `stop_playtest` and `run_batch`, structured error details (`error.data`) and play-mode rules for every tool; see
 [Validation, playtest and batch](#validation-playtest-and-batch). Plugin 0.6.0 (still api v2, additive) adds playtest
 visibility: the read tools `get_playtest_state` and `get_playtest_events`, a small summary in `get_status.playtest`, and the
-capability `"playtestState"`; see [Playtest visibility](#playtest-visibility). Plugin 0.7.0 (still api v2, additive) adds the game-version gate (`GAME_VERSION_UNTESTED`, `[Safety] AcceptedGameVersion`, `gameVersionCheck`), the read tool `self_test`, and enforces the editor inspector's visibility rules in `set_property` / `set_properties`; see [Game-version gate](#game-version-gate), [`self_test`](#self_test-read) and [Inspector visibility rules](#inspector-visibility-rules-plugin-070). Plugin 0.8.0 (still api v2, additive) adds mod settings: `list_mod_settings`, `get_mod_settings`, `set_mod_settings` and `capture_preview_image`, the capability `"settings"`, and the settings rule tables; see [Mod settings](#mod-settings). Plugin 0.8.0 also adds the asset tools (`get_asset`, `list_asset_rules`, `import_asset`, `set_import_settings`, `create_material`, `set_material`, `remove_asset`), the capability `"assets"` and the `[Assets]` config section; see [Assets](#assets-import-import-settings-materials-removal). Write tools only ever act on `MCP_` mods; see
+capability `"playtestState"`; see [Playtest visibility](#playtest-visibility). Plugin 0.7.0 (still api v2, additive) adds the game-version gate (`GAME_VERSION_UNTESTED`, `[Safety] AcceptedGameVersion`, `gameVersionCheck`), the read tool `self_test`, and enforces the editor inspector's visibility rules in `set_property` / `set_properties`; see [Game-version gate](#game-version-gate), [`self_test`](#self_test-read) and [Inspector visibility rules](#inspector-visibility-rules-plugin-070). Plugin 0.8.0 (still api v2, additive) adds mod settings: `list_mod_settings`, `get_mod_settings`, `set_mod_settings` and `capture_preview_image`, the capability `"settings"`, and the settings rule tables; see [Mod settings](#mod-settings). Plugin 0.8.0 also adds the asset tools (`get_asset`, `list_asset_rules`, `import_asset`, `set_import_settings`, `create_material`, `set_material`, `remove_asset`), the capability `"assets"` and the `[Assets]` config section; see [Assets](#assets-import-import-settings-materials-removal). Plugin 0.8.0 also adds the prefab tools (`create_prefab`, `open_prefab`, `close_prefab`), the capability `"prefabs"` and the write protection around every `.pfab` the editor writes (also in `save_mod`); see [Prefabs](#prefabs-create-open-close-the-pfab-write-protection). Write tools only ever act on `MCP_` mods; see
 [Safety](#safety).
 
 ## Transport
@@ -91,7 +91,7 @@ validator refusal: `{"validation": {...}}`). Clients that ignore `data` still ge
 | `PUBLISH_BLOCK_INCOMPLETE` | write tool called while the Workshop publish block is not complete (`get_status.publishBlock`) |
 | `GUARD_NOT_TEST_MOD` | the open mod (open-mod tools) or the target / open mod (lifecycle tools) is not a `MCP_` mod; the message names it |
 | `INVALID_STATE` | editor state forbids the call: play mode (also the transitional states `EnteringPlayMode` / `ExitingPlayMode`), no playtest running (`get_playtest_state`), a mod that fails the validator (`start_playtest`), unsaved changes, a prefab being edited, an open editor dialog, a broken editor mod list, an object outside the current editing context, the left mouse button held in the game window, the open mod changed while an edit was pending (the message says what to do) |
-| `ALREADY_EXISTS` | `create_test_mod`: a folder or a mod (Meta name) with that name exists, case-insensitive; `import_asset`: no free name (`name`, `name (1)` ... `(20)` all taken); `create_material`: the file the editor would create (or the requested name) already exists |
+| `ALREADY_EXISTS` | `create_test_mod`: a folder or a mod (Meta name) with that name exists, case-insensitive; `import_asset`: no free name (`name`, `name (1)` ... `(20)` all taken); `create_prefab`: the file the editor would write already exists on disk, or no free name up to `_99`; `create_material`: the file the editor would create (or the requested name) already exists |
 | `ASSET_IN_USE` | `remove_asset` (references, or the preview image) and `set_import_settings` (a compression change would break references): `error.data` lists them |
 | `IMPORT_FAILED` | `import_asset`: the game's importer rejected the copied file; the copy was removed (`error.data.cleanedUp`), the source was not touched |
 | `GAME_VERSION_UNTESTED` | write tool called while the running game version is not in the plugin's tested list and not accepted by `[Safety] AcceptedGameVersion` (or the version could not be read); read tools are unaffected. See [Game-version gate](#game-version-gate) |
@@ -167,7 +167,7 @@ Works with the editor closed. No params.
 
 ```json
 {"pong": true, "pluginVersion": "0.7.0", "gameVersion": "1.14.1k", "unityVersion": "2021.3.45f2",
- "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings", "assets"],
+ "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings", "assets", "prefabs"],
  "gameVersionCheck": {"running": "1.14.1k", "tested": ["1.14.1k"], "accepted": false, "writesAllowed": true}}
 ```
 
@@ -193,7 +193,7 @@ No params. Never fails because of editor state.
  "playtest": {"state": "Editing", "running": false, "startedAt": null, "playModeSince": null, "endedAt": null,
               "playSeconds": null, "startedByPlugin": false, "players": "4 Players", "playerCount": 4, "teams": null,
               "aiOnly": false, "eventCount": 0, "lastEventId": 0, "alivePlayers": null},
- "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings", "assets"], "writesEnabled": true,
+ "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings", "assets", "prefabs"], "writesEnabled": true,
  "gameVersionCheck": {"running": "1.14.1k", "tested": ["1.14.1k"], "accepted": false, "writesAllowed": true},
  "publishBlock": {"active": true, "complete": true, "patchedCount": 59, "missing": []}}
 ```
@@ -567,6 +567,19 @@ mod's Meta name is missing from the editor's mod list, the entry is added first 
 Saving while a prefab is being edited is allowed, as with Ctrl+S: the scene file stores each object's own active
 flag, so the deactivated scene root does not change it, and the prefab is saved with the other assets. In that
 case the scene's dirty flag stays set and `Preview.jpg` shows the prefab view.
+
+Prefab files are protected: `PummelMod.Save` rewrites **every** prefab of the mod in place (`PummelPrefab.Save` opens the
+`.pfab` with `FileMode.Create` and serialises straight into it), and a truncated `.pfab` makes the whole mod fail to load.
+So before the save every prefab is serialised in memory (the dry run); one that throws refuses the call with
+`INVALID_STATE` naming it, **nothing is saved**. A safety copy of each prefab's `.pfab` and `.pmeta` is kept in memory; after
+the save each file is verified (header, length equal to the dry run, `.pmeta` valid JSON) and any failing file is put back
+(written next to the target and swapped in). If a file failed, or the editor's save itself threw, the call fails with
+`INTERNAL`, `error.data.prefabs` lists every prefab's outcome, the mod does not count as saved (`hasUnsavedEdits` stays true) and
+the message says which files were restored. The reply of a good save adds `prefabsVerified` (number of prefabs checked). The
+scene file (`MainScene.scene`) and the other data files are not covered by this protection: the game serialises the scene into
+a `MemoryStream` first and then writes the bytes (`ModDataReaderWriter.SaveScene`), so a serializer exception cannot truncate
+it; a full disk during that final write could (not changed in this increment). Saves made by the user (Ctrl+S, autosave, leaving
+a prefab in the UI) are not protected by the plugin.
 
 ```json
 {"saved": true, "name": "MCP_Arena", "isDirty": false, "hasUnsavedEdits": false}
@@ -2357,7 +2370,9 @@ No params. Returns `import` (extensions, destination folders, live limits from t
 `{guid}` (any asset except runtime entries). Returns the `list_assets` row (`guid`, `name`, `type`, `className`,
 `location`, `relativePath`, `fileExists`, `sizeBytes`), `ownCustomAsset` (external and inside the open mod's `Assets`),
 and for the mod's own assets: textures `width`/`height`/`importSettings`/`importSettingFields`; props `vertices`,
-`triangles`, `subMeshes`, `importSettings`; audio clips `lengthSeconds`, `frequency`, `channels`; materials `shader`,
+`triangles`, `subMeshes`, `importSettings`; audio clips `lengthSeconds`, `frequency`, `channels`; prefabs `isOpen`, `objectCount`, `objects` (the prefab's object tree in the
+`get_hierarchy` node shape; the guids work with `get_object`), `instanceCount` and `instances` (`[{guid, name}]`: Prefab
+Instance objects in the scene that use it; spawners, items and actions that use it are in `references`); materials `shader`,
 `knownShader`, `properties` (in the shapes `set_material` accepts) and `propertyFields`; `removable` (+ `removableReason`);
 `references`: `{count, items: [{kind, owner, ownerGuid?, where}], scanComplete, objectsScanned}` where `kind` is
 `component`, `action`, `material` or `setting`. The scan reads every scene and prefab object with the plugin's own value
@@ -2426,15 +2441,18 @@ the existing tools: `set_property` on a renderer's `materials` array or a prop's
 
 `{guid, force?}`. Allowed only when **all** hold: the asset is external, in the open mod's asset list and its **full
 file path is strictly inside** the mod's `Assets` folder ("external" alone is not enough, doc 07 H11); its class is a
-texture, prop (mesh), audio clip or material (prefabs are refused: removal nulls every instance and the plugin has no
-prefab context tools yet); it is not a built-in asset, not the open prefab, not selected with unapplied import settings;
+texture, prop (mesh), audio clip, material or **prefab** (`.pfab`); it is not a built-in asset, not the open prefab, not selected with unapplied import settings;
 for a prop the nested mesh asset points at the same file (the editor's removal deletes that path too); and it is not
 the mod's preview image (never removed, even with `force`: set it to null or another texture first). The editor's own
 `PummelMod.RemoveAsset` is then called, which destroys the Unity object, deletes `<file>` and `<file>.pmeta` and unlists
 the asset; a selected (non-dirty) asset is deselected first. Before that the references are scanned (see `get_asset`): any
 reference, or an incomplete scan, refuses the call with `ASSET_IN_USE` (`error.data` = the references) unless
 `force: true`; with `force` the reply lists `referencesNulled` — they become null at the next `save_mod` (in memory they
-point at a destroyed object until then). Reply: `removed`, `deletedFiles`, `undoable: false`, `note`.
+point at a destroyed object until then). For a prefab the scan covers Prefab Instance objects in the scene, Spawner prefab
+lists, item prefabs, Spawn Prefab / Give Minigame Item / Set Player Visual action parameters and settings; references held by
+objects inside the prefab itself (an item prefab naming itself) are ignored, because they go away with it. The editor's removal
+(`PummelPrefab.OnDestroy`) sets every scene instance's reference to none (they show "Missing Prefab" and are saved without a
+prefab); the prefab's undo stack stays in the editor's list (harmless). Reply: `removed`, `deletedFiles`, `undoable: false`, `note`.
 
 ### Reply fields common to the write tools
 
@@ -2530,6 +2548,122 @@ Audio clips, materials and prefabs have no import-setting fields (materials: `se
 Shaders without a known inspector are accepted by `create_material`/`set_material` for the shader choice only; their properties are refused (the generic inspector is not supported).
 
 <!-- asset-rules:end -->
+
+## Prefabs (create, open, close, the .pfab write protection)
+
+Plugin 0.8.0 (api v2, additive, capability `"prefabs"`). Three write tools, guard **OpenMod** (open, loaded `MCP_` sandbox mod,
+Editing state, writes enabled, publish block complete, game version accepted): `create_prefab`, `open_prefab`, `close_prefab`.
+None is allowed inside `run_batch`; edits inside an already open prefab are batched like any other edit. Prefab removal is
+`remove_asset` (see [Assets](#assets-import-import-settings-materials-removal)); there is no rename or duplicate of prefabs.
+All refuse (`INVALID_STATE`) while an editor dialog is open or an asset with unapplied import settings is selected.
+
+### The truncated-file hazard and how every prefab write is protected
+
+`PummelPrefab.Save` truncates the `.pfab` (`File.Open(path, FileMode.Create)`) and serialises straight into the file stream
+(`ModHierarchySerializer.SaveTransform`). A component whose serialisation throws, a full disk or a crash leaves a truncated file,
+and a truncated prefab makes the **whole mod fail to load** (`PummelPrefabImporter` reads past the end). The game's own paths that
+write a prefab: `Create > Prefab` (`EditorSystem.CreateNewPrefab`), leaving the prefab context (the `CurrentPrefab` setter), the
+Apply/Reimport button, and every `PummelMod.Save`. The plugin wraps the three it triggers (create, close, `save_mod`):
+
+1. **Dry run** (before anything is written): the same `SaveTransform` call runs against a `MemoryStream` for the in-memory
+   prefab (it writes no file; the editor's own undo snapshot makes the same call every frame). Any exception refuses the
+   operation (`INVALID_STATE`, the prefab and the cause named, nothing written). For `create_prefab fromObject` the source
+   subtree is dry-run (the copy serialises like its source); the new prefab itself is dry-run right after creation.
+2. **Safety copy**: the previous `.pfab` and `.pmeta` bytes are read into memory (limit 64 MB per file; no temp file is made
+   before the write). A prefab that did not exist is recorded as new.
+3. **Verification** after the editor wrote: the `.pfab` exists; starts with the header `03 'P' 'M' 'H' 01 00 00 00` (identifier
+   `PMH`, version 1.0, what `ModHierarchySerializer.SaveVersion` writes); is at least 19 bytes; has exactly the length of the
+   dry run (identical bytes, or identical except the root object's active flag, are reported as `identicalToSerialisation`;
+   same length but other content is kept with a warning); was actually rewritten when it should have been; and the `.pmeta` is
+   non-empty valid JSON. There is no read-only parse entry in the game (`LoadTransform` instantiates objects and touches editor
+   state), so the length equality with the in-memory serialisation is the completeness proof; a structural parse is not done.
+4. **Repair** on any failure: an existing prefab gets its previous bytes back (written to `<file>.mcp-restore.tmp` in the same
+   folder, swapped in with `File.Replace`, verified, temp removed even on error); a new prefab's `.pfab` and `.pmeta` are
+   removed, after re-checking that each path is strictly inside the mod's `Assets` folder and is a `.pfab`/`.pmeta`
+   (the same rules as the asset import cleanup); the registered asset of a failed `create_prefab` is unregistered
+   (`PummelMod.RemoveAsset`, which also destroys the copy). The error says what was restored or removed (`restoreProblem` if
+   even that failed). No temp file is left behind.
+
+`ReimportAsset(prefab)` is never called (it destroys the in-memory prefab before it parses the file, doc 07 H6).
+
+### `create_prefab` (write, guard OpenMod)
+
+`{name?, fromObject?}`. Needs the scene context (a prefab being edited: `INVALID_STATE`, call `close_prefab` first). Calls
+`EditorSystem.CreateNewPrefab(ModTransform)`: an empty prefab, or - with `fromObject` (a scene object guid) - an instantiated
+copy of that object and its children (the Asset Browser drag-and-drop). Refused: a subtree containing a Prefab Instance or Board
+Space component (the editor's own rule); a subtree whose components or actions hold references to **objects** (action targets,
+object properties): the editor copies those references unchanged (the copy gets fresh object and component guids, but the stored
+references are not remapped when a prefab is created, only when an instance is made), so they would keep pointing at scene objects
+- the plugin refuses and lists them (`INVALID_PARAMS`) instead of letting them break silently; a subtree that cannot be serialised.
+References to assets (materials, textures, sounds) are fine. The source objects stay exactly as they were in the scene (no
+instance replaces them; `create_object kind prefabInstance` places one). The prefab root is reset to position 0, rotation 0,
+scale 1; its active flag follows the source; it is deactivated in memory afterwards like every closed prefab.
+
+Names: the editor names the file from asset names only (case-sensitively) and would overwrite an existing file that has no
+loaded asset (NTFS is case-insensitive). The plugin asks the editor which name it would use (`GetUniqueAssetName`), refuses if that
+file (or its `.pmeta`) exists on disk or the name has characters outside `A-Z a-z 0-9 space _ . ( ) -` (rename the source object
+first with `set_object`), and picks a free name itself: `name` (or the source object's name, or `Prefab_<n>`), then `_1`..`_99`,
+checked against asset names (case-insensitive) and files. `nameAdjusted` is true when a requested name had to change. A name
+different from the editor's is applied with `ModAssetExternal.Rename` afterwards (both target files checked free first).
+
+```json
+{"asset": {"guid": "...", "name": "Crate", "type": "Prefab", "relativePath": "Assets/Prefabs/Crate.pfab", "sizeBytes": 412, "fileExists": true},
+ "requestedName": "Crate", "nameAdjusted": false, "fromObject": {"guid": "...", "name": "Crate"},
+ "objects": {"guid": "...", "name": "Crate", "active": true, "components": [], "children": []},
+ "written": {"files": ["Assets/Prefabs/Crate.pfab", "Assets/Prefabs/Crate.pfab.pmeta"], "sizeBytes": 412, "verified": true, "identicalToSerialisation": true, "immediately": true},
+ "persisted": true, "undoable": false, "note": "..."}
+```
+
+The files exist on disk when the call returns, even if `save_mod` is never called. Not undoable (remove with `remove_asset`).
+Errors: `INVALID_PARAMS` (bad name, source rules), `INVALID_STATE`, `ALREADY_EXISTS`, `INTERNAL` (the editor failed or wrote a bad file;
+the message says what was cleaned up), `TIMEOUT` (nothing changed before the commit point).
+
+### `open_prefab` (write, guard OpenMod)
+
+`{guid}`: enters the edit context like a double-click in the Asset Browser (`EditorSystem.CurrentPrefab = prefab`: clears the
+selection, remembers the scene camera, activates the prefab object, hides the scene). Only prefabs of the open sandbox mod
+(own custom asset, file inside `Assets`) can be opened. **Refused while another prefab is open** (opening one from the editor saves
+the open one without the instance refresh and without the plugin's protection). No file is written. The reply has `opened`
+(the asset row), `context: "prefab"`, `objects` (tree), `undoStackLength` (this prefab's own stack) and a warning when the prefab
+cannot be serialised right now (`close_prefab`/`save_mod` would refuse).
+
+### `close_prefab` (write, guard OpenMod)
+
+No params. Needs an open prefab (`INVALID_STATE` otherwise). Runs the sequence of the UI's "Return to Hierarchy" handler
+(`HierarchyWidget`): clear selection, `isEnabled` from the active state, `ModPrefabInstance.ForceUpdate` on **every instance in
+the scene** that references the prefab (the only place the editor refreshes live instances), clear selection, then
+`CurrentPrefab = null`, whose setter **saves the prefab** (`.pfab` + `.pmeta`) and hides it. The UI's final `ReimportAsset` is
+skipped (see above). The dry run and the safety copy happen before any change; the verification and repair after. Reply:
+`closed` (`guid`, `name`, `relativePath`), `context: "scene"`, `savedToDisk: true`, `file` (`sizeBytes`, `verified`,
+`identicalToSerialisation`), `instancesRefreshed`, `instances` (`[{guid, name}]`), `reimported: false`, `undoable: false`. On a
+failed write the call fails with `INTERNAL`: the previous file is back, the edits are still in memory (the message says whether the
+prefab is still open), and you should fix the cause and retry; if refreshing instances fails the prefab stays open and nothing is saved.
+The prefab's undo history stays in the editor and is available again after `open_prefab` (it is not on disk). The plugin's
+unsaved-edits flag stays set until `save_mod` (the file is saved, the mod is not).
+
+### Which tools work while a prefab is open
+
+| Tool | Prefab open |
+|---|---|
+| `get_status` | `prefabContext: {name, guid}` |
+| `get_hierarchy` | `context: "prefab"`, the prefab object is the root; `get_object` / `get_action_graph` work on prefab objects (open or not) |
+| `create_object`, `duplicate_object`, `delete_object`, `reparent_object`, `set_object`, `set_transform`, `add_component`, `remove_component`, `set_property(ies)`, action/trigger tools | work on the prefab's objects; the prefab root cannot be moved or deleted; `create_object kind prefabInstance` and `boardSpace` and the components Prefab Instance / Board Space are refused inside a prefab (the editor disables them); objects of the scene are `INVALID_STATE` ("a prefab is being edited") |
+| `undo` | the open prefab's own undo manager (`EditorSystem.GetUndoManager()`); the scene's stack is untouched |
+| `save_mod` | works (also writes the open prefab, protected) |
+| `run_batch` | edits inside the open prefab may be batched; `create_prefab`, `open_prefab`, `close_prefab` may not |
+| `create_prefab`, `open_prefab` | refused (`INVALID_STATE`; `close_prefab` first) |
+| `import_asset`, `set_import_settings`, `remove_asset` | refused (`INVALID_STATE`) |
+| `create_material`, `set_material`, mod settings tools | allowed (they do not touch the prefab); `capture_preview_image` refused |
+| `create_test_mod`, `open_test_mod` | refused (leaving the mod would save the prefab outside the protection) |
+| `start_playtest` | refused (the Play button would save the prefab and leave the context); `validate_mod` works but does not see scene objects |
+
+### Unverified in the game
+
+The calls were checked against the decompiled source, the drift test against the real assembly (IL of `CreateNewPrefab`, the
+`CurrentPrefab` setter, `PummelPrefab.Save`, the Return to Hierarchy handler) and unit tests on real temp directories; not run in
+the game: instantiating a scene subtree with live components (awake side effects of the copy), the exact bytes the real
+serializer writes (the header is read from the game's static constructor), `ForceUpdate` on many instances, and the visual result
+of closing a prefab. The in-game script is `docs/phase4-ingame-tests.local.md` (local), section C.
 
 ## Validation, playtest and batch
 
@@ -2953,7 +3087,7 @@ Allowed tools: `create_object`, `duplicate_object`, `delete_object`, `reparent_o
 `set_action`, `add_trigger`, `remove_trigger`, `set_trigger`, `undo`, `save_mod`, `set_mod_settings`, and the read tools `get_object`,
 `get_hierarchy`, `get_action_graph`, `get_mod_settings`, `list_mod_settings`, `list_mods`, `list_assets`, `list_component_types`, `list_action_types`,
 `list_trigger_types`. Refused: `run_batch`, `create_test_mod`, `open_test_mod`, `start_playtest`, `stop_playtest`,
-`screenshot`, `capture_preview_image`, `import_asset`, `set_import_settings`, `create_material`, `set_material`, `remove_asset` (named reason), and every other tool (`ping`, `get_status`, `get_log`, `get_open_mod`, `validate_mod`,
+`screenshot`, `capture_preview_image`, `import_asset`, `set_import_settings`, `create_material`, `set_material`, `remove_asset`, `create_prefab`, `open_prefab`, `close_prefab` (named reason; edits inside an already open prefab may be batched like any other edit), and every other tool (`ping`, `get_status`, `get_log`, `get_open_mod`, `validate_mod`,
 unknown names).
 
 **Up-front validation** (any failure refuses the whole batch with `INVALID_PARAMS` naming the step, e.g.
@@ -3098,7 +3232,7 @@ body, when the call's turn in the write queue comes (see [Threading](#threading)
    `set_object`, `set_transform`, `add_component`, `remove_component`, `set_property`, `set_properties`, `undo`,
    `add_action`, `remove_action`, `move_action`, `set_action`, `add_trigger`, `remove_trigger`, `set_trigger`,
    `start_playtest`, `run_batch`, `set_mod_settings`, `capture_preview_image`, `import_asset`, `set_import_settings`,
-   `create_material`, `set_material`, `remove_asset`, and every write step inside a batch; `stop_playtest` with the play-mode option):
+   `create_material`, `set_material`, `remove_asset`, `create_prefab`, `open_prefab`, `close_prefab`, and every write step inside a batch; `stop_playtest` with the play-mode option):
    a mod is open (`NO_MOD_OPEN`) and loaded (`BUSY_LOADING`); its Meta name **and**
    folder name pass the rule (`GUARD_NOT_TEST_MOD`, message names the mod); state is `Editing` (`INVALID_STATE`;
    every state other than `Editing`, i.e. also `EnteringPlayMode` and `ExitingPlayMode`, is refused). Only
@@ -3175,9 +3309,9 @@ Item details; custom board spaces are read-only (see [Mod settings](#mod-setting
 no editing of board connections (`BoardNodeConnection[]`), so a Board mod cannot be made validator-clean through the
 plugin yet; no redo (the editor has none); no copy/paste/duplicate of
 actions (the Action Editor has none); no editing of Set Connection Active connection mappings or of the Display
-Popup's hidden timer fields; no prefab asset editing context switch (open/close a prefab by hand), no layer/tag or per-component enable
-editing, no prefab creation or removal. Assets: import only from local absolute paths (no UNC/network/device paths), no
+Popup's hidden timer fields; no layer/tag or per-component enable
+editing, no rename or duplicate of prefabs. Assets: import only from local absolute paths (no UNC/network/device paths), no
 mesh import of `.mtl` files, no import of `.bmp`, `.pmat`, `.pfab` or `.pgf`, no overwrite or replace of an existing asset, no
-rename or duplicate of assets, no prefab removal, no material properties for shaders without a known inspector, no
+rename or duplicate of assets, no material properties for shaders without a known inspector, no
 audio/OBJ import settings beyond what the inspector offers. No delete, rename or close of mods. No Workshop functionality of any
 kind; publishing is blocked (see [Safety](#safety)).

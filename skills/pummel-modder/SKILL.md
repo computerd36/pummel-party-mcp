@@ -63,6 +63,17 @@ Details: `usage_guide` topic `assets` and `docs/plugin-api.md`. Start with `list
 - `set_import_settings` (texture compression/filter/wrap, prop recalculateNormals) applies like the inspector's Apply; a compression change is refused (`ASSET_IN_USE`) while components, actions or the preview image still use the texture.
 - `get_asset {guid}` shows `references` (every use) and `removable`. `remove_asset` is refused with `ASSET_IN_USE` while the asset is used; clear the references, or pass `force: true` only with the human's OK. Not undoable. None of the asset write tools works inside `run_batch`.
 
+## Prefabs
+
+Details: `usage_guide` topic `assets` (PREFABS) and `docs/plugin-api.md` (Prefabs).
+
+- `create_prefab {name?, fromObject?}` writes `Assets/Prefabs/<name>.pfab` + `.pmeta` NOW (not undoable). Empty, or a copy of a scene object and its children; the scene object stays as it is (no instance replaces it). It refuses a subtree with Prefab Instance / Board Space components or with action targets / object references (they would silently keep pointing at the scene): for such content create an empty prefab and build it inside. A taken name gets `_n` (`nameAdjusted`).
+- `open_prefab {guid}` enters the edit context (no file written); then use `get_hierarchy` (context `prefab`) and the normal edit tools and `undo` (the prefab has its own undo stack); `create_object kind prefabInstance` is not possible inside a prefab. Edits stay in memory.
+- `close_prefab` SAVES the prefab (verified) and refreshes every instance in the scene; until then instances show the old version. Always close before `create_prefab`, `import_asset`, `remove_asset`, lifecycle tools or `start_playtest` (all refuse while a prefab is open); `save_mod` works with one open.
+- Place an instance with `create_object kind prefabInstance {prefab: guid}`; use it with a Spawn Prefab action or a Spawner (`list_assets type Prefab`); `get_asset` shows the prefab's objects, instances and references. `remove_asset` also removes prefabs (refused while instances, spawners, items or actions use it, unless `force`).
+- Every prefab write (create, close, each prefab in `save_mod`) is dry-run in memory first, verified afterwards and restored if it came out bad: if a call fails with `INVALID_STATE` saying a prefab cannot be serialised, nothing was written; fix or delete the object that throws. If `INTERNAL` says a file was restored, the in-memory edits are intact: fix the cause and retry.
+- `create_prefab`, `open_prefab`, `close_prefab` do not work inside `run_batch`; edits inside an open prefab may be batched.
+
 ## Minimal valid minigame
 
 `validate_mod` runs the editor's own validator (same as the Play button). A Minigame mod is valid when:
@@ -113,7 +124,7 @@ What to conclude: verify, never assume. A trigger "worked" only if the events or
 
 ## Errors and the next step
 
-- `INVALID_STATE`: read the message: dialog open, mouse held, play mode active (`stop_playtest`), validator errors, unsaved edits (save first), prefab being edited (the human returns to the scene), wrong editing context. Fix the state, or ask the human, then retry.
+- `INVALID_STATE`: read the message: dialog open, mouse held, play mode active (`stop_playtest`), validator errors, unsaved edits (save first), prefab being edited (`close_prefab`), wrong editing context. Fix the state, or ask the human, then retry.
 - `TIMEOUT`: read the message. "nothing was changed" / "safe to retry" means before the commit point: retrying is safe. A message saying the mod was created, is being opened, or that the change was applied means it may already have happened: `get_status`, `list_mods`, `get_object` first, never retry blindly. After a `start_playtest` timeout: `get_status`, then `stop_playtest`. A client-side timeout without a plugin reply is ambiguous: check before retrying a write.
 - `GUARD_NOT_TEST_MOD`: the target or open mod is not a `MCP_` mod. Stop; do not rename or retry.
 - `PUBLISH_BLOCK_INCOMPLETE`: the plugin's Workshop safety patches are not all in place (for example after a game update). Writes stay off; tell the human; read tools still work.

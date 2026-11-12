@@ -57,7 +57,8 @@ const ASSETS_TOPIC =
   "USE: textures are referenced by guid in a material (set_material _MainTex), mesh props with create_object kind prop {prop: guid}, audio clips in a Play Sound action's clip parameter or as music/ambience (set_mod_settings music Music/Ambience), a texture as the preview image (set_mod_settings details previewImage = guid). " +
   "IMPORT SETTINGS: set_import_settings {guid, values} for the mod's own textures (compression Normal|HighQuality|None, filterMode Point|Bilinear|Trilinear, wrapMode Repeat|Clamp|Mirror|MirrorOnce) and props (recalculateNormals). Applied like the inspector's Apply: .pmeta written and, for compression/recalculateNormals, the file re-imported. A re-import swaps the texture object, so a texture used by components, actions or the preview image is refused for compression changes (ASSET_IN_USE lists them; filterMode/wrapMode are applied in place and always allowed); materials' texture slots are re-pointed automatically. Audio, materials and prefabs have no import settings. " +
   "MATERIALS: create_material {name?, shader?, properties?} creates Assets/Materials/<name>.pmat + .pmeta NOW (the editor's Create > Material, default shader unless shader = a built-in Shader name or guid) and saves the properties; set_material {guid, shader?, properties} changes only the mod's own materials and saves them at once (like Apply). properties = {key: value} per shader as listed by list_asset_rules (Standard / Standard Decal Receiver: _Mode Opaque|Cutout|Fade|Transparent, _Cutoff, _MainTex, _Color, _MetallicGlossMap, _Metallic, _Glossiness, _BumpMap, _ParallaxMap, _Parallax, _OcclusionMap, Emission, _EmissionColor, _EmissionMap, Tiling, Offset; three more shaders have their own short lists). Colours {r,g,b,a?} 0..1 (emission up to 64), vectors {x,y}, textures null or a Texture asset guid; ranges are clamped to the shader's own range (see clamped); conditional properties (_Cutoff only in Cutout, _Parallax only with a height map, _EmissionColor/_EmissionMap only with Emission) must have their controlling property in the same call or before. Shaders without a known inspector accept no properties. Assign a material with set_property on a renderer's 'materials' (or a prop's 'customMaterials') using the material guid. Materials are not undoable; reply has previous. Not allowed in run_batch. " +
-  "REMOVE: remove_asset {guid, force?} deletes the file and its .pmeta NOW (not undoable) and only for the mod's own custom textures, props, audio clips and materials (never built-in assets, prefabs or the open prefab). It is refused with ASSET_IN_USE and the list of references (objects/components, action parameters and targets, materials' texture slots, settings such as music/ambience) unless force true, which removes anyway: the references then become null at the next save_mod (referencesNulled). The mod's preview image is never removed (set it to null or another texture first). save_mod + get_asset/list_assets afterwards confirms the state.";
+  "REMOVE: remove_asset {guid, force?} deletes the file and its .pmeta NOW (not undoable) and only for the mod's own custom textures, props, audio clips, materials and prefabs (never built-in assets or the open prefab; a removed prefab leaves its instances empty). It is refused with ASSET_IN_USE and the list of references (objects/components, action parameters and targets, materials' texture slots, settings such as music/ambience) unless force true, which removes anyway: the references then become null at the next save_mod (referencesNulled). The mod's preview image is never removed (set it to null or another texture first). save_mod + get_asset/list_assets afterwards confirms the state.\n\n" +
+  "PREFABS: create_prefab {name?, fromObject?} makes a prefab through the editor (Create > Prefab, or dragging a scene object onto the Asset Browser): an empty one, or a copy of the scene object fromObject (guid) with its children. Assets/Prefabs/<name>.pfab + .pmeta are written NOW (not undoable), the source object stays untouched in the scene (no instance replaces it), the copy gets new object/component guids and its root sits at the origin. Refused: a subtree containing a Prefab Instance or Board Space, or whose actions/components reference scene objects (the editor copies those references unchanged, so they would keep pointing at the scene); a name that exists as an asset or as a file is never reused (a free _n name is chosen and reported: nameAdjusted). open_prefab {guid} enters the prefab edit context (the Asset Browser double-click; no file is written): get_hierarchy then shows the prefab and object/component/property/action tools and undo (the prefab's own undo stack) work on it; edits stay in memory. close_prefab {} saves the prefab to disk NOW (.pfab + .pmeta, verified) and refreshes every instance in the scene (the Return to Hierarchy sequence); until then instances show the old version. While a prefab is open create_prefab, open_prefab, import_asset, remove_asset, create_test_mod/open_test_mod and start_playtest are refused (call close_prefab); save_mod works and also writes the open prefab. create_prefab/open_prefab/close_prefab are not allowed in run_batch; edits inside an open prefab may be batched. Place an instance with create_object kind prefabInstance {prefab: guid}; use it with a Spawn Prefab action or Spawner (list_assets type Prefab). SAFETY OF THE FILES: a prefab file the game fails to write completely makes the whole mod unloadable, so every prefab write (create, close, save_mod) is dry-run in memory first (a prefab that cannot be serialised refuses the call, nothing written), the file is checked afterwards (header, length) and a bad one is restored from a copy taken before (new ones are removed): the reply or the error says so. get_asset on a prefab shows its object tree, scene instances and references.";
 
 const P = (...prefixes: string[]) => PARAGRAPHS.filter((p) => prefixes.some((x) => p.startsWith(x)));
 
@@ -554,8 +555,29 @@ register(
   WRITE_IDEMPOTENT,
 );
 register(
+  "create_prefab",
+  "Creates a prefab like the editor: empty, or a copy of scene object fromObject. Writes Assets/Prefabs/<name>.pfab + .pmeta NOW (verified); not undoable. See usage_guide assets.",
+  {
+    name: z.string().max(64).optional().describe("Prefab name; an existing one gets _n."),
+    fromObject: nonEmpty().optional().describe("Scene object guid."),
+  },
+  WRITE,
+);
+register(
+  "open_prefab",
+  "Enters a prefab's edit context (writes no file; edits stay in memory). See usage_guide assets.",
+  { guid: guidSchema },
+  WRITE,
+);
+register(
+  "close_prefab",
+  "Leaves the open prefab: SAVES it to disk NOW (verified) and refreshes its scene instances. See usage_guide assets.",
+  {},
+  WRITE,
+);
+register(
   "remove_asset",
-  `DELETES one of the mod's own custom assets (texture, prop, audio clip, material) and its .pmeta from the sandbox mod NOW; not undoable. Refused with ASSET_IN_USE (references listed) while it is used, unless force true (references become null).${RULES}`,
+  `DELETES one of the mod's own custom assets (texture, prop, audio clip, material, prefab) and its .pmeta from the sandbox mod NOW; not undoable. Refused with ASSET_IN_USE (references listed) while it is used, unless force true (references become null).${RULES}`,
   { guid: guidSchema, force: z.boolean().optional().describe("Default false.") },
   WRITE_DESTRUCTIVE,
 );

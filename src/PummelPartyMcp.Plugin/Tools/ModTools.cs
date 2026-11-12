@@ -289,6 +289,18 @@ namespace PummelPartyMcp.Tools
             PummelMod mod = ed.CurrentMod; // guard: loaded test mod, not loading, state Editing
             EditorAvailableModManager manager = ed.GetAvailableModManager();
             RefuseIfBrokenModList(manager);
+
+            // PummelMod.Save rewrites every prefab in place (FileMode.Create, serialising straight into the file): one that throws while
+            // being written leaves a truncated .pfab, and a truncated prefab makes the whole mod fail to load. So: dry-run every prefab
+            // in memory first (refuse, nothing saved, when one cannot be serialised), keep a safety copy of each file, and verify them all
+            // after the save; any that fails is restored (the save's other files stay saved).
+            string assetsFull = AssetAccess.AssetsFolderOf(mod);
+            List<PrefabFileJob> jobs = new List<PrefabFileJob>();
+            foreach (PummelPrefab p in PrefabAccess.SavedPrefabs(mod))
+            {
+                jobs.Add(PrefabAccess.Prepare(p, assetsFull));
+            }
+
             inv.Commit(SaveBudget); // TIMEOUT (nothing saved) if the caller gave up or too little time is left
             EnsureListed(manager, mod);
             GameEditorGuardHost.EnforceDefaultWorkshopId(mod, log);
@@ -296,7 +308,27 @@ namespace PummelPartyMcp.Tools
             // Saving while a prefab is being edited is what Ctrl+S does as well: the scene serializer stores
             // activeSelf, so the (deactivated) hierarchy root does not change the saved scene; the edited prefab is
             // saved with the other assets. Only the hierarchy's dirty flag stays set and Preview.jpg shows the prefab view.
-            ed.SaveCurrentMod();
+            Exception saveError = null;
+            try
+            {
+                ed.SaveCurrentMod();
+            }
+            catch (Exception e)
+            {
+                saveError = e;
+            }
+            List<PrefabFileOutcome> outcomes = jobs.Select(PrefabWriteGuard.Finish).ToList();
+            List<PrefabFileOutcome> failed = outcomes.Where(o => !o.Ok).ToList();
+            if (saveError != null || failed.Count > 0)
+            {
+                s_services?.MarkEdit(mod, "save_mod (incomplete)"); // the mod must not look saved
+                log.Error("save_mod: " + (saveError?.Message ?? "prefab verification failed"));
+                throw new RpcException(ErrorCodes.Internal,
+                    (saveError != null ? $"the editor's save threw ({saveError.GetType().Name}: {saveError.Message}); " : "the save finished, but ") +
+                    (failed.Count > 0 ? "these prefab files failed the check and were put back as they were before the save: " + PrefabWriteGuard.Describe(failed) + ". " : string.Empty) +
+                    "The mod is NOT fully saved (other files may have been written); the in-memory edits are intact, fix the cause and call save_mod again",
+                    new JObject { ["prefabs"] = new JArray(outcomes.Select(o => (JToken)o.ToJson()).ToArray()) });
+            }
             s_services?.OnSaved(); // also done by the SaveCurrentMod postfix; idempotent
             log.Info($"save_mod: saved '{EditorAccess.ModFolderName(mod)}'");
             bool? dirty = EditorAccess.IsDirty(ed);
@@ -307,6 +339,7 @@ namespace PummelPartyMcp.Tools
                 ["name"] = EditorAccess.ModName(mod),
                 ["isDirty"] = dirty.HasValue ? new JValue(dirty.Value) : JValue.CreateNull(),
                 ["hasUnsavedEdits"] = unsaved.HasValue ? new JValue(unsaved.Value) : JValue.CreateNull(),
+                ["prefabsVerified"] = outcomes.Count,
             });
         }
 

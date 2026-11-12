@@ -58,6 +58,7 @@ namespace PummelPartyMcp.PatchTests
                 RegistryAndAudit(game, check);
                 SettingsDrift(game, check);
                 AssetsDrift(game, check);
+                PrefabsDrift(game, check);
             }
             catch (Exception e)
             {
@@ -251,6 +252,120 @@ namespace PummelPartyMcp.PatchTests
             check("PummelMod.AddAsset(string, string, bool copy) is unchanged (never called by the plugin; doc 07 hazards H1/H2)", addAsset != null);
             MethodInfo createMat = game.GetType("EditorSystem", false)?.GetMethod("CreateNewMaterial", all);
             check("EditorSystem.CreateNewMaterial writes a .pmat (create_material checks the file name first)", createMat != null && LdStrs(createMat).Contains(".pmat"));
+        }
+
+        /// <summary>Names ("Type.Method") of the methods called (call/callvirt) in a method body; unresolvable operands are skipped.</summary>
+        private static HashSet<string> Calls(MethodBase method)
+        {
+            HashSet<string> result = new HashSet<string>(StringComparer.Ordinal);
+            byte[] il = method.GetMethodBody()?.GetILAsByteArray();
+            if (il == null)
+            {
+                return result;
+            }
+            for (int i = 0; i + 4 < il.Length; i++)
+            {
+                if (il[i] != 0x28 && il[i] != 0x6F)
+                {
+                    continue;
+                }
+                int token = BitConverter.ToInt32(il, i + 1);
+                if ((token >> 24) != 0x0A && (token >> 24) != 0x06)
+                {
+                    continue;
+                }
+                try
+                {
+                    MethodBase m = method.Module.ResolveMethod(token);
+                    result.Add(m.DeclaringType.Name + "." + m.Name);
+                }
+                catch (Exception)
+                {
+                    // an operand byte that only looked like a call
+                }
+            }
+            return result;
+        }
+
+        /// <summary>Names of static fields assigned right after a given one-byte opcode (e.g. ldc.i4.1) in a method body.</summary>
+        private static List<string> ConstStores(MethodBase method, byte ldc)
+        {
+            List<string> names = new List<string>();
+            byte[] il = method.GetMethodBody()?.GetILAsByteArray();
+            for (int i = 0; il != null && i + 5 < il.Length; i++)
+            {
+                if (il[i] == ldc && il[i + 1] == 0x80)
+                {
+                    try
+                    {
+                        names.Add(method.Module.ResolveField(BitConverter.ToInt32(il, i + 2)).Name);
+                    }
+                    catch (Exception)
+                    {
+                        // not a field token
+                    }
+                }
+            }
+            return names;
+        }
+
+        /// <summary>
+        /// Prefab tools (plugin 0.8.0): the game facts the .pfab write protection and the Return to Hierarchy sequence rest on, read from
+        /// the real assembly's IL (reflection only, nothing runs).
+        /// </summary>
+        private static void PrefabsDrift(Assembly game, Action<string, bool> check)
+        {
+            const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+            List<RequiredMember> members = RequiredMembers.All.Where(m => m.UsedBy != null && (m.UsedBy.IndexOf("prefab", StringComparison.OrdinalIgnoreCase) >= 0
+                || m.UsedBy.IndexOf("pfab", StringComparison.OrdinalIgnoreCase) >= 0 || m.UsedBy.StartsWith("dry run", StringComparison.Ordinal))).ToList();
+            List<string> problems = new List<string>();
+            foreach (RequiredMember m in members)
+            {
+                string why = RequiredMembers.Resolve(game, m);
+                if (why != null)
+                {
+                    problems.Add(m.Kind + " " + m.Id + ": " + why);
+                }
+            }
+            foreach (string p in problems)
+            {
+                Console.WriteLine("    prefab drift: " + p);
+            }
+            check($"every member the prefab tools use resolves in the real game ({members.Count} members; {problems.Count} problems)", problems.Count == 0 && members.Count >= 12);
+
+            Type ser = game.GetType("ModHierarchySerializer", false);
+            Type pp = game.GetType("PummelPrefab", false);
+            Type ed = game.GetType("EditorSystem", false);
+            Type hw = game.GetType("HierarchyWidget", false);
+            MethodBase cctor = ser?.TypeInitializer;
+            check("the .pfab header: ModHierarchySerializer's static constructor assigns \"PMH\" and major version 1 (the plugin checks 03 'PMH' 01 00 00 00)",
+                cctor != null && LdStrs(cctor).Contains("PMH") && ConstStores(cctor, 0x17).Contains("MajorVersion"));
+            MethodInfo saveVersion = ser?.GetMethod("SaveVersion", all);
+            check("SaveVersion writes identifier, major and minor (the 8-byte header the plugin checks)", saveVersion != null && Calls(saveVersion).Contains("BinaryWriter.Write"));
+            MethodInfo saveTransform = ser?.GetMethod("SaveTransform", all);
+            check("SaveTransform writes version, hierarchy, component list and component values (what the dry run runs)",
+                saveTransform != null && new[] { "ModHierarchySerializer.SaveVersion", "ModHierarchySerializer.SaveHierarchy", "ModHierarchySerializer.SaveComponents", "ModHierarchySerializer.SaveComponentValues" }.All(Calls(saveTransform).Contains));
+            MethodInfo prefabSave = pp?.GetMethod("Save", all);
+            check("PummelPrefab.Save serialises with ModHierarchySerializer.SaveTransform straight into File.Open (the truncating write the plugin guards)",
+                prefabSave != null && Calls(prefabSave).Contains("ModHierarchySerializer.SaveTransform") && Calls(prefabSave).Contains("File.Open") && Calls(prefabSave).Contains("ModAssetExternal.Save"));
+            MethodInfo create = ed?.GetMethod("CreateNewPrefab", all);
+            check("CreateNewPrefab registers the asset, saves the prefab and names the file from asset names (create_prefab verifies after it)",
+                create != null && new[] { "PummelMod.AddAsset", "ModAssetExternal.Save", "PummelMod.get_FullPrefabsFolder", "Directory.CreateDirectory" }.All(Calls(create).Contains) && LdStrs(create).Contains(".pfab") && LdStrs(create).Contains("/Prefabs/"));
+            MethodInfo setter = ed?.GetProperty("CurrentPrefab", all)?.GetSetMethod();
+            check("the CurrentPrefab setter saves the prefab it leaves", setter != null && Calls(setter).Contains("ModAssetExternal.Save") && Calls(setter).Contains("EditorSelectionManager.DeselectAllObjectsAndGizmos"));
+            MethodInfo modSave = game.GetType("PummelMod", false)?.GetMethod("Save", Type.EmptyTypes);
+            check("PummelMod.Save rewrites every external asset (save_mod protects all prefabs)", modSave != null && Calls(modSave).Contains("ModAssetExternal.Save"));
+            MethodBase handler = hw == null ? null : hw.GetMethods(all).Cast<MethodBase>().Concat(hw.GetNestedTypes(all).SelectMany(n => n.GetMethods(all)).Cast<MethodBase>())
+                .FirstOrDefault(m => m.GetMethodBody() != null && LdStrs(m).Any(x => x.Contains("Return to Hierarchy")));
+            HashSet<string> hc = handler == null ? new HashSet<string>() : Calls(handler);
+            check("the Return to Hierarchy handler refreshes instances (ForceUpdate), leaves the context and reimports (the plugin does the first two only)",
+                handler != null && hc.Contains("ModPrefabInstance.ForceUpdate") && hc.Contains("EditorSystem.set_CurrentPrefab") && hc.Contains("EditorSystem.ReimportAsset") && hc.Contains("EditorSelectionManager.DeselectAllObjectsAndGizmos"));
+            MethodInfo reimport = ed?.GetMethod("ReimportAsset", all);
+            check("ReimportAsset saves and re-imports the file (the destructive step close_prefab skips)", reimport != null && Calls(reimport).Contains("ModAssetExternal.Save") && Calls(reimport).Contains("PummelMod.ImportFile"));
+            MethodInfo loadMeta = game.GetType("PummelPrefabImporter", false)?.GetMethod("LoadMetaData", all);
+            check("PummelPrefabImporter destroys the in-memory prefab object before it parses the file (hazard H6)", loadMeta != null && Calls(loadMeta).Contains("Object.DestroyImmediate"));
+            MethodInfo onDestroy = pp?.GetMethod("OnDestroy", all);
+            check("a prefab asset's OnDestroy nulls the scene instances' reference (remove_asset reports them as empty)", onDestroy != null && Calls(onDestroy).Contains("ModPrefabInstance.set_PrefabReference"));
         }
 
         private static void SettingsDrift(Assembly game, Action<string, bool> check)

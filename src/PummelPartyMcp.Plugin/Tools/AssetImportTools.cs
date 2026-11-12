@@ -295,9 +295,34 @@ namespace PummelPartyMcp.Tools
                     }
                 }
             }
-            else if (a is PummelPrefab && own)
+            else if (a is PummelPrefab pf && own)
             {
-                result["note"] = "prefabs are read-only here (no prefab tools in this plugin version); use get_object / get_hierarchy for the objects that use it";
+                result["isOpen"] = ed.CurrentPrefab != null && ReferenceEquals(ed.CurrentPrefab, pf);
+                JObject tree = PrefabAccess.TreeOf(pf);
+                if (tree != null)
+                {
+                    int count = 0;
+                    Stack<JToken> st = new Stack<JToken>();
+                    st.Push(tree);
+                    while (st.Count > 0)
+                    {
+                        JToken n = st.Pop();
+                        count++;
+                        if (n is JObject no && no["children"] is JArray kids)
+                        {
+                            foreach (JToken k in kids)
+                            {
+                                st.Push(k);
+                            }
+                        }
+                    }
+                    result["objectCount"] = count;
+                    result["objects"] = tree;
+                }
+                List<ModPrefabInstance> insts = PrefabAccess.SceneInstances(ed, pf);
+                result["instanceCount"] = insts.Count;
+                result["instances"] = PrefabAccess.InstancesJson(insts);
+                result["note"] = "objects = the prefab's object tree (guids work with get_object; edit it with open_prefab + the edit tools); instances = Prefab Instance objects in the scene; references (below) also lists spawners, items and actions that use it";
             }
 
             if (own)
@@ -411,7 +436,7 @@ namespace PummelPartyMcp.Tools
                     ["builtInShaderAssets"] = shaders,
                     ["note"] = "create_material/set_material accept any built-in Shader asset (name or guid) but expose properties only for the shaders with an entry in shaderRules; other shaders' properties are refused (the generic inspector is not supported)",
                 },
-                ["removal"] = "remove_asset: own custom textures, props, audio clips and materials only; refused while referenced unless force (the preview image is never removed); not undoable",
+                ["removal"] = "remove_asset: own custom textures, props, audio clips, materials and prefabs only (not the open prefab); refused while referenced unless force (the preview image is never removed); not undoable",
             };
         }
 
@@ -1036,6 +1061,12 @@ namespace PummelPartyMcp.Tools
             ModAssetExternal ext = (ModAssetExternal)a;
 
             AssetAccess.RefResult refs = AssetAccess.FindReferences(r.Ed, r.Mod, a);
+            if (a is PummelPrefab ownPrefab && ownPrefab.PrefabObject != null)
+            {
+                // objects inside the prefab itself go away with it: a reference held by them (e.g. an item prefab naming itself) does not count
+                HashSet<string> own = new HashSet<string>(ownPrefab.PrefabObject.GetComponentsInChildren<ModTransform>(true).Select(t => EditorAccess.GuidOf(t)));
+                refs.Items = refs.Items.Where(i => i.OwnerGuid == null || !own.Contains(i.OwnerGuid)).ToList();
+            }
             if (refs.PreviewImage)
             {
                 throw new RpcException(ErrorCodes.AssetInUse,
@@ -1092,6 +1123,10 @@ namespace PummelPartyMcp.Tools
                 ["undoable"] = false,
                 ["note"] = "the file and its .pmeta were deleted from the mod's Assets folder NOW (the editor has no undo for this).",
             };
+            if (a is PummelPrefab)
+            {
+                result["note"] = result["note"] + " Prefab instances that used it are now empty (Missing Prefab) and saved without a prefab at the next save_mod.";
+            }
             if (remaining.Count > 0 || stillListed)
             {
                 result["warnings"] = new JArray(

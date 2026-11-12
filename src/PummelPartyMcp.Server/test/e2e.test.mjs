@@ -20,6 +20,7 @@ const EXPECTED = [
   "validate_mod", "get_playtest_state", "get_playtest_events", "self_test", "start_playtest", "stop_playtest", "run_batch",
   "list_mod_settings", "get_mod_settings", "set_mod_settings", "capture_preview_image",
   "get_asset", "list_asset_rules", "import_asset", "set_import_settings", "create_material", "set_material", "remove_asset",
+  "create_prefab", "open_prefab", "close_prefab",
 ].sort();
 const WRITES = [
   "create_test_mod", "open_test_mod", "save_mod",
@@ -28,6 +29,7 @@ const WRITES = [
   "add_action", "remove_action", "move_action", "set_action", "add_trigger", "remove_trigger", "set_trigger",
   "start_playtest", "stop_playtest", "run_batch", "set_mod_settings", "capture_preview_image",
   "import_asset", "set_import_settings", "create_material", "set_material", "remove_asset",
+  "create_prefab", "open_prefab", "close_prefab",
 ];
 const IDEMPOTENT = ["save_mod", "set_mod_settings", "set_import_settings", "set_material", "set_transform", "set_object", "set_property", "set_properties", "set_action", "set_trigger", "stop_playtest"];
 const DESTRUCTIVE = ["delete_object", "remove_component", "remove_action", "remove_trigger", "undo", "run_batch", "remove_asset"];
@@ -56,7 +58,7 @@ test("end to end over stdio MCP", async () => {
       assert.equal(t.inputSchema.type, "object");
       assert.ok(t.description && t.description.length > 20);
     }
-    assert.equal(tools.length, 53);
+    assert.equal(tools.length, 56);
     for (const t of tools) {
       if (WRITES.includes(t.name)) {
         assert.equal(t.annotations.readOnlyHint, false, t.name);
@@ -318,6 +320,12 @@ test("end to end over stdio MCP", async () => {
     await rejects("add_trigger", {}, "add_trigger without guid");
     await rejects("remove_trigger", { guid: "g" }, "remove_trigger without trigger");
     await rejects("set_trigger", { guid: "g", trigger: "Triggers[0]" }, "set_trigger with nothing to set");
+    await rejects("open_prefab", {}, "open_prefab without guid");
+    await rejects("open_prefab", { guid: "g", extra: 1 }, "open_prefab with an unknown parameter");
+    await rejects("close_prefab", { guid: "g" }, "close_prefab takes no parameters");
+    await rejects("create_prefab", { name: "x".repeat(65) }, "create_prefab name too long");
+    await rejects("create_prefab", { fromObject: "" }, "create_prefab empty fromObject");
+    await rejects("create_prefab", { name: "ok", unknown: true }, "create_prefab with an unknown parameter");
 
     // plugin error becomes isError result
     const bad = await client.callTool({ name: "get_status", arguments: {} });

@@ -142,6 +142,7 @@ namespace PummelPartyMcp
                 ActionTools.Register(registry);
                 AssetTools.Register(registry);
                 AssetImportTools.Register(registry, m_edit, () => { config.RefreshIfChanged(); return config.AssetLimits; });
+                PrefabTools.Register(registry, m_edit);
                 LogTools.Register(registry, m_logRing, info);
                 ScreenshotTool.Register(registry, this);
                 ModTools.Register(registry, m_poller, log, m_edit);

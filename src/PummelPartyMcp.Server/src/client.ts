@@ -104,6 +104,10 @@ export const TOOL_TIMEOUTS_MS: Record<string, number> = {
   create_material: 40000,
   set_material: 40000,
   remove_asset: 40000,
+  // prefab tools: the plugin's own limit is 30 s
+  create_prefab: 40000,
+  open_prefab: 40000,
+  close_prefab: 40000,
   // action/trigger write tools (the plugin's own limit is 15 s)
   add_action: 20000,
   remove_action: 20000,

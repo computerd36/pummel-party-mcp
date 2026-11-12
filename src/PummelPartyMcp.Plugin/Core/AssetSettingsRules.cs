@@ -658,7 +658,7 @@ namespace PummelPartyMcp.Core
 
     public static class AssetRemovalRules
     {
-        public static readonly string[] AllowedClasses = { "PummelTexture", "PummelProp", "PummelAudioClip", "PummelMaterial" };
+        public static readonly string[] AllowedClasses = { "PummelTexture", "PummelProp", "PummelAudioClip", "PummelMaterial", "PummelPrefab" };
 
         /// <summary>Null when the asset may be removed (apart from references); otherwise why not. Pure.</summary>
         public static string Check(RemovalFacts f)
@@ -669,16 +669,18 @@ namespace PummelPartyMcp.Core
             }
             if (!AllowedClasses.Contains(f.ClassName))
             {
-                return f.ClassName == "PummelPrefab"
-                    ? "prefabs cannot be removed with this tool (removing one nulls every instance in the scene and the prefab's edit context is not touched by the plugin)"
-                    : $"assets of class {f.ClassName} cannot be removed with this tool (allowed: textures, props/meshes, audio clips, materials)";
+                return $"assets of class {f.ClassName} cannot be removed with this tool (allowed: textures, props/meshes, audio clips, materials, prefabs)";
             }
             if (string.IsNullOrEmpty(f.FilePath) || !AssetImportRules.IsStrictlyUnder(f.AssetsFolder, f.FilePath))
             {
                 return "its file is not strictly inside the open mod's Assets folder (the editor would delete that path), so it is not removed";
             }
             string ext = System.IO.Path.GetExtension(f.FilePath).ToLowerInvariant();
-            if (!AssetImportRules.AllowedExtensions.Contains(ext) && ext != ".pmat")
+            if ((f.ClassName == "PummelPrefab") != (ext == ".pfab"))
+            {
+                return $"its file extension '{ext}' does not match its asset class";
+            }
+            if (!AssetImportRules.AllowedExtensions.Contains(ext) && ext != ".pmat" && ext != ".pfab")
             {
                 return $"its file extension '{ext}' is not one this plugin handles";
             }

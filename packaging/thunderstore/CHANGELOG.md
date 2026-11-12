@@ -6,6 +6,9 @@
 - `usage_guide` has topics; the server instructions are short.
 - Asset tools (capability `assets`, config section `[Assets]`): `import_asset` (copies a local `.png .jpg .jpeg .obj .wav .mp3 .ogg` into the sandbox mod; the source is only read; never overwrites; size limits `MaxImportFileMB` 50 and `MaxModAssetsMB` 500), `set_import_settings`, `create_material`, `set_material`, `remove_asset` (only the mod's own custom assets; refused while referenced unless `force`), `get_asset` (with references) and `list_asset_rules`; `list_assets` gains `location`. This replaces the earlier rule that the plugin never imports or removes assets. Imports, material changes and removals write or delete files immediately and are not undoable.
 
+- Prefab tools (capability `prefabs`): `create_prefab` (empty, or a copy of a scene object; refuses subtrees with Prefab Instance / Board Space components or object references; never reuses a name or overwrites a file), `open_prefab` and `close_prefab` (enter/leave the prefab edit context like the UI; closing saves the prefab and refreshes its instances). `remove_asset` also removes the mod's own prefabs; `get_asset` shows a prefab's object tree and scene instances. Prefab files are written immediately and are not undoable.
+- `.pfab` write protection: a prefab the game fails to write completely makes the whole mod unloadable, so create, close and every prefab in `save_mod` are dry-run in memory first, verified afterwards (header, length) and restored from a copy taken before the write if bad (a new prefab's files are removed). A prefab that cannot be serialised now refuses `save_mod` before anything is written.
+
 ## 0.7.0
 
 - Game-version gate: write tools are refused with `GAME_VERSION_UNTESTED` on a game version the plugin was not tested with, until `[Safety] AcceptedGameVersion` equals the running version.

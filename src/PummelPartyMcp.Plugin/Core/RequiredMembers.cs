@@ -304,6 +304,35 @@ namespace PummelPartyMcp.Core
             M("StandardShaderInspector", "UpdateKeywords", "set_material (what the inspector runs after each change)", "PummelMaterial");
             M("DefaultShaderInspector", "UpdateKeywords", "set_material", "PummelMaterial");
             E("MaterialRenderingMode", null, "Opaque=0", "Cutout=1", "Fade=2", "Transparent=3");
+            AddPrefabs(l);
+        }
+
+        /// <summary>The prefab tools (plugin 0.8.0): create_prefab, open_prefab, close_prefab, the save_mod protection, remove_asset on prefabs.</summary>
+        private static void AddPrefabs(List<RequiredMember> l)
+        {
+            const string use = "prefab tools";
+            void F(string type, string name, string fieldType, string u = use, bool isStatic = false) =>
+                l.Add(new RequiredMember { Kind = "field", Type = type, Name = name, Extra = fieldType, IsStatic = isStatic, UsedBy = u });
+            void P(string type, string name, string u = use) =>
+                l.Add(new RequiredMember { Kind = "property", Type = type, Name = name, UsedBy = u });
+            void M(string type, string name, string u, params string[] parameters) =>
+                l.Add(new RequiredMember { Kind = "method", Type = type, Name = name, Params = parameters, UsedBy = u });
+
+            M("EditorSystem", "CreateNewPrefab", "create_prefab (writes Assets/Prefabs/<name>.pfab and .pmeta)", "ModTransform");
+            P("EditorSystem", "CurrentPrefab", "open_prefab / close_prefab (the setter saves the prefab it leaves)");
+            F("EditorSystem", "m_prefabsRoot", "UnityEngine.Transform", "prefab tools (create cleanup, hierarchy scans)");
+            M("EditorSelectionManager", "DeselectAllObjectsAndGizmos", "close_prefab (the Return to Hierarchy sequence)");
+            M("ModPrefabInstance", "ForceUpdate", "close_prefab (instance refresh, as Return to Hierarchy)", "PummelPrefab");
+            P("ModPrefabInstance", "PrefabReference", "close_prefab / get_asset (instances of a prefab)");
+            F("PummelPrefab", "isEnabled", "System.Boolean");
+            P("PummelPrefab", "PrefabObject");
+            M("PummelPrefab", "Save", "the call every prefab write goes through (dry run, verify, restore around it)");
+            M("ModHierarchySerializer", "SaveTransform", "dry run of a .pfab (writes to a MemoryStream)", "System.IO.BinaryWriter", "UnityEngine.Transform", "System.Boolean", "System.Boolean");
+            F("ModHierarchySerializer", "Identifier", "System.String", "the .pfab header (PMH)", true);
+            F("ModHierarchySerializer", "MajorVersion", "System.UInt16", "the .pfab header version", true);
+            F("ModHierarchySerializer", "MinorVersion", "System.UInt16", "the .pfab header version", true);
+            P("ModAssetExternal", "HideAndDontSave", "save_mod protection (the prefabs PummelMod.Save rewrites)");
+            F("ModPrefab", "targetPrefab", "PummelPrefab", "create_prefab cleanup");
         }
 
         // ------------------------------------------------------------------ type lookup across assemblies

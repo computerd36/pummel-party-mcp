@@ -199,6 +199,9 @@ test("usage_guide: topics exist, are non-empty, are served locally; instructions
     assert.match(assets, /UNC/);
     assert.match(assets, /MaxImportFileMB/);
     assert.match(assets, /never removed/);
+    assert.match(assets, /PREFABS: create_prefab/);
+    assert.match(assets, /close_prefab \{\} saves the prefab to disk NOW/);
+    assert.match(assets, /SAFETY OF THE FILES/);
     const bad = await call(s.client, "usage_guide", { topic: "nope" });
     assert.equal(bad.isError, true);
     assert.equal(s.fake.requests.length, 0, "usage_guide must not call the plugin");

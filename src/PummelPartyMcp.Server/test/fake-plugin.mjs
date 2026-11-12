@@ -1,13 +1,29 @@
 import http from "node:http";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, rmdirSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 export const TEST_ROOT = join(tmpdir(), "pummel-party-mcp-test");
 
+// The parent folder is shared by the test files (separate processes): each removes it on exit, but rmdir only
+// succeeds when it is empty, so another process's live temp folder is never touched.
+process.on("exit", () => {
+  try {
+    rmdirSync(TEST_ROOT);
+  } catch {
+    // not empty (another test process is still running) or already gone
+  }
+});
+
 export function makeTempDir() {
-  mkdirSync(TEST_ROOT, { recursive: true });
-  return mkdtempSync(join(TEST_ROOT, "t-"));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      mkdirSync(TEST_ROOT, { recursive: true });
+      return mkdtempSync(join(TEST_ROOT, "t-"));
+    } catch (e) {
+      if (attempt >= 3 || e.code !== "ENOENT") throw e;
+    }
+  }
 }
 
 export function removeDir(d) {
@@ -114,6 +130,9 @@ export function defaultHandler(method, params) {
     case "create_material":
     case "set_material":
     case "remove_asset":
+    case "create_prefab":
+    case "open_prefab":
+    case "close_prefab":
       return { ok: true, result: { echoed: params, undoable: false } };
     case "run_batch":
       return { ok: true, result: { completed: params.steps.length, total: params.steps.length, echoed: params } };

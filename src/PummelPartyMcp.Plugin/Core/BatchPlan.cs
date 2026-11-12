@@ -40,6 +40,9 @@ namespace PummelPartyMcp.Core
             ["set_import_settings"] = "it re-imports an asset and writes files; call it outside the batch",
             ["create_material"] = "it creates files immediately and is not undoable; call it outside the batch",
             ["set_material"] = "it writes the material's files immediately and is not undoable; call it outside the batch",
+            ["create_prefab"] = "it writes a .pfab and .pmeta immediately and is not undoable; call it outside the batch",
+            ["open_prefab"] = "it changes the editing context (scene to prefab); call it outside the batch, then batch the edits inside the open prefab",
+            ["close_prefab"] = "it saves the prefab file, refreshes its instances and changes the editing context; call it outside the batch",
             ["remove_asset"] = "it deletes files immediately and is not undoable; call it outside the batch",
             ["capture_preview_image"] = "it needs several frames (the editor renders the screenshot at the end of the next frames); call it outside the batch",
         };

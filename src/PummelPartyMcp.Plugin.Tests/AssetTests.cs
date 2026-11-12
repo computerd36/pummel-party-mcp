@@ -593,7 +593,12 @@ namespace PummelPartyMcp.Tests
             Check("no file path -> refused", AssetRemovalRules.Check(Facts(assets, file: "")) != null);
             Check("a built-in asset -> refused", AssetRemovalRules.Check(Facts(assets, external: false, builtIn: true))?.Contains("built-in") == true);
             Check("a non-external asset -> refused", AssetRemovalRules.Check(Facts(assets, external: false)) != null);
-            Check("prefabs -> refused here", AssetRemovalRules.Check(Facts(assets, "PummelPrefab", Path.Combine(assets, "Prefabs", "p.pfab")))?.Contains("prefab") == true);
+            Check("an own prefab (.pfab) passes the class/path guard; the open prefab, a wrong extension and a prefab outside Assets do not",
+                AssetRemovalRules.Check(Facts(assets, "PummelPrefab", Path.Combine(assets, "Prefabs", "p.pfab"))) == null
+                && AssetRemovalRules.Check(new RemovalFacts { IsExternal = true, ClassName = "PummelPrefab", AssetsFolder = assets, FilePath = Path.Combine(assets, "Prefabs", "p.pfab"), IsOpenPrefab = true }) != null
+                && AssetRemovalRules.Check(Facts(assets, "PummelPrefab", Path.Combine(assets, "Prefabs", "p.png"))) != null
+                && AssetRemovalRules.Check(Facts(assets, "PummelTexture", Path.Combine(assets, "Prefabs", "p.pfab"))) != null
+                && AssetRemovalRules.Check(Facts(assets, "PummelPrefab", Path.Combine(s_root, "Elsewhere", "p.pfab"))) != null);
             Check("visual scripts and unknown classes -> refused", AssetRemovalRules.Check(Facts(assets, "PummelVisualScript", Path.Combine(assets, "Scripts", "s.pgf"))) != null && AssetRemovalRules.Check(Facts(assets, "ModAsset")) != null);
             Check("the open prefab -> refused", AssetRemovalRules.Check(new RemovalFacts { IsExternal = true, ClassName = "PummelTexture", AssetsFolder = assets, FilePath = Path.Combine(assets, "Textures", "a.png"), IsOpenPrefab = true }) != null);
             Check("selected with unapplied import settings -> refused", AssetRemovalRules.Check(new RemovalFacts { IsExternal = true, ClassName = "PummelTexture", AssetsFolder = assets, FilePath = Path.Combine(assets, "Textures", "a.png"), IsSelectedAndDirty = true }) != null);
@@ -607,7 +612,7 @@ namespace PummelPartyMcp.Tests
             {
                 IsExternal = true, ClassName = "PummelProp", AssetsFolder = assets, FilePath = prop, HasNested = true, NestedPath = prop.ToUpperInvariant(),
             }) == null);
-            Check("the allow-list is exactly texture, prop, audio clip, material", AssetRemovalRules.AllowedClasses.OrderBy(x => x).SequenceEqual(new[] { "PummelAudioClip", "PummelMaterial", "PummelProp", "PummelTexture" }));
+            Check("the allow-list is exactly texture, prop, audio clip, material, prefab", AssetRemovalRules.AllowedClasses.OrderBy(x => x).SequenceEqual(new[] { "PummelAudioClip", "PummelMaterial", "PummelPrefab", "PummelProp", "PummelTexture" }));
         }
 
         // ------------------------------------------------------------------ reference scan
