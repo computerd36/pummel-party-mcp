@@ -231,6 +231,10 @@ Packaging (prepared only, nothing is published): `scripts\package-thunderstore.p
 
 Game DLLs, decompiled game code and other people's mod files must never be committed. `decompiled/`, `lib/`, `*.dll` and similar are in `.gitignore`; keep it that way. `CLAUDE.md` holds the working rules for AI agents that contribute to this repo.
 
+### Official mod documentation
+
+The game's official mod documentation wiki is not included in this repository, because no content licence is declared for it. For offline reference (useful to an AI agent working on this code), fetch your own copy: `python scripts/dump_pummel_wiki.py` writes the pages to `docs/wiki/`, and `python scripts/wiki2md.py` converts them to Markdown in `docs/md/`. Both folders are ignored by git. Be considerate: the dump script makes one request per page.
+
 ## Licence
 
 MIT, see [LICENSE](LICENSE). Pummel Party and its assets belong to Rebuilt Games and are not included in this repository.

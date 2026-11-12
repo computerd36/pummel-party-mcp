@@ -19,6 +19,9 @@ __pycache__/
 # Editor / local
 docs/paths.md
 PLAN.md
+# Local copy of the official mod documentation wiki (no content licence is declared for it, so it is not redistributed here; fetch your own with scripts/dump_pummel_wiki.py)
+docs/wiki/
+docs/md/
 scripts/backup.settings.psd1
 .vs/
 *.user
