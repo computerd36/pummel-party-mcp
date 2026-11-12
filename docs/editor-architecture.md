@@ -34,7 +34,7 @@ Detail docs:
 - **Scene file:** `MainScene.scene`, custom uncompressed binary (`PMH` v1.0): hierarchy, component table,
   length-prefixed property records. JSON files use Unity `JsonUtility`.
 
-## What the bridge can call directly
+## What the plugin can call directly
 
 `EditorSystem`: `OpenMod`, `CreateNewMod`, `SaveCurrentMod`, `RenameMod`, `SetCurrentMod(null)`,
 `SetEditorState(EnteringPlayMode)`, `AddGameObject`, `Duplicate`, `Delete`, `Copy`/`Paste`, selection via
@@ -62,11 +62,11 @@ Recipe for undoable edits: select the object → wait one frame → edit → wai
    updates (inferred from code, untested). Relevant to manual publishing as well.
 8. **No timed autosave**, no save on quit, focus loss or mod close.
 
-Consequences for the bridge:
+Consequences for the plugin:
 
 - The `PB_TEST_` guard must cover **opening** a mod, not only writing, because open can write.
 - `PB_TEST_` mods must be created fresh (or have `publishedFileId` forced to 256); never by copying a real mod folder.
-- The UI-only rules (which component / action is allowed where) must be re-implemented in the bridge.
+- The UI-only rules (which component / action is allowed where) must be re-implemented in the plugin.
 - Publish blocking is two layers of Harmony prefixes: game methods and the Steamworks UGC write calls
   (list in doc 05). Queries and downloads stay allowed.
 - `redo` (planned in Phase 2) appears not to exist in the editor.

@@ -1,9 +1,9 @@
 {
   "mcpServers": {
-    "pummelbridge": {
+    "pummel-party-mcp": {
       "type": "stdio",
       "command": "node",
-      "args": ["src/PummelBridge.Mcp/dist/index.js"]
+      "args": ["src/PummelPartyMcp.Server/dist/index.js"]
     }
   }
 }

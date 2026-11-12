@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Strictly read-only verification of PummelBridge backups. Writes nothing.
+  Strictly read-only verification of pummel-party-mcp backups. Writes nothing.
 #>
 [CmdletBinding()]
 param(

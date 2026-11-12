@@ -1,4 +1,4 @@
-# CLAUDE.md — PummelBridge
+# CLAUDE.md — pummel-party-mcp
 
 Read `PLAN.md` for the project plan. Work phase by phase; do not skip ahead.
 
@@ -7,7 +7,7 @@ Read `PLAN.md` for the project plan. Work phase by phase; do not skip ahead.
 1. **Never modify, move, rename, or delete the user's original mod files** or any folder listed under "Protected paths" in `docs/paths.md`. Reading is fine. Writing is never fine.
 2. **Never modify the backup folders** created by `scripts/backup-mods.ps1`.
 3. **Phase -1 (backup) must be complete and verified** before installing BepInEx, copying anything into the game folder, or launching the game with plugins.
-4. **Bridge write tools only act on mods whose name starts with `PB_TEST_`.** Do not weaken, bypass, or "temporarily disable" this guard.
+4. **Write tools only act on mods whose name starts with `PB_TEST_`.** Do not weaken, bypass, or "temporarily disable" this guard.
 5. **Never implement or call any Workshop publish/upload/update path.** Publishing is manual and done by the user.
 6. **Before any change to the game install folder**, state exactly which files will be added or changed and wait for the user's OK.
 7. At the start of each phase, run `scripts/verify-backup.ps1` and report the result.

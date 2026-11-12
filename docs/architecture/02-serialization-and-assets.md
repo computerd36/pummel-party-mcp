@@ -20,7 +20,7 @@ Source: static reading of decompiled `Assembly-CSharp` only. **[C]** confirmed f
 ## 2. Load path (editor, "open mod folder" -> live scene)
 
 ```
-UI (LoadModPopup / main menu / bridge)
+UI (LoadModPopup / main menu / plugin)
  EditorSystem.OpenMod(path)                           EditorSystem.cs:863
   PummelMod.GetType(path)                             PummelMod.cs:1216      reads Meta.json ModType -> PummelMod.ModTypes[]
   PummelMod.CreatePummelModObject(path, Editor, type) PummelMod.cs:203       Activator.CreateInstance(type, path, loadType)
@@ -71,12 +71,12 @@ Note `LoadObjectFromJson` returns `Failed` with a default object on parse failur
 
 ### 2.3 Runtime (in-game) load differs
 
-`WorkshopController` loads mods with `loadType = IngameRuntime/IngameTest/BackgroundInitialize` using `RefreshImportedFiles` in two passes (everything but `.pfab`, then `.pfab`) and `LoadModSpecificData` (`WorkshopController.cs:429-451, 585, 699`). It uses the same file readers and therefore the same "write missing `.pmeta`" behaviour, now against Steam's install folder. Not needed for the bridge (editor-focused).
+`WorkshopController` loads mods with `loadType = IngameRuntime/IngameTest/BackgroundInitialize` using `RefreshImportedFiles` in two passes (everything but `.pfab`, then `.pfab`) and `LoadModSpecificData` (`WorkshopController.cs:429-451, 585, 699`). It uses the same file readers and therefore the same "write missing `.pmeta`" behaviour, now against Steam's install folder. Not needed for the plugin (editor-focused).
 
 ## 3. Save path in detail
 
 ```
-Ctrl+S / menu / popup / bridge -> EditorSystem.SaveCurrentMod(delayed)      EditorSystem.cs:808
+Ctrl+S / menu / popup / plugin -> EditorSystem.SaveCurrentMod(delayed)      EditorSystem.cs:808
   CurrentMod.Save()  (or DelayedSave: coroutine waits for IsLoaded then Save)   PummelMod.cs:567 / 1181-1197
     SaveMetaData            Data\Meta.json         WriteAllText; LastModified = now        :689-697
     SaveWorkshopItemDetails Data\WorkshopItem.json WriteAllText                            :594-601
@@ -101,7 +101,7 @@ Asset-level saves that happen outside `Save()`: new prefab (`EditorSystem.Create
 | Method signature | What it does | Writes / deletes on disk? | Evidence |
 |---|---|---|---|
 | `EditorSystem.OpenMod(string path)` | build `PummelMod` for the folder (type from Meta.json) and run async load | No explicit writes; load may write missing/corrupt `.pmeta`, create `Assets\` | `EditorSystem.cs:863`; `PummelMod.cs:364` |
-| `EditorSystem.OpenModWithPopupPrompt(string)` | same but asks to save if dirty (modal popup: avoid from a bridge) | as above | `EditorSystem.cs:848` |
+| `EditorSystem.OpenModWithPopupPrompt(string)` | same but asks to save if dirty (modal popup: avoid from a plugin) | as above | `EditorSystem.cs:848` |
 | `EditorSystem.CreateNewMod(string path, PummelModType, string templatePath = null)` | empty mod (folders + defaults + delayed save) or copy template folder then load + `RenameMod(folderName)` | Writes: whole new tree; template copy (`DirectoryCopy`, no overwrite) incl. `.pmeta` (GUIDs identical to template) | `EditorSystem.cs:823-846`; `ZP.Utility/DirectoryUtility.cs` |
 | `EditorSystem.SaveCurrentMod(bool delayed = false)` | full save of current mod (section 3) | Overwrites all mod files + `Preview.jpg`; no deletes | `EditorSystem.cs:808` |
 | `PummelMod.Save()` | the save itself; no screenshot | overwrite in place, no atomicity | `PummelMod.cs:567` |
@@ -125,8 +125,8 @@ Asset-level saves that happen outside `Save()`: new prefab (`EditorSystem.Create
 | `WorkshopController.Instance.GetAssetWithGuid(SerializableGuid)` / `GetAssetWithObject(object)` | GUID <-> object resolution (global list, then current mod) | none | `WorkshopController.cs:777-811` |
 | `ModCacheSystem.DeleteAllModCache()` / `DeleteCacheFolderForMod(ulong)` / `SweepAndDeleteUnusedCacheFiles()` | cache management | **deletes** under `PummelModCache` only | `ModCacheSystem.cs:94-228` |
 | `EditorSystem.SavePreviewScreenshot()` | render scene camera to `Data\Preview.jpg` | overwrite | `EditorSystem.cs:1363` |
-| (UI-only, not for the bridge) `LoadModPopup.DeleteModResult`, `MainMenuWidget.DeleteModResult` | delete a mod folder | **`Directory.Delete(recursive)`** on `<WorkshopMods>\<name>` | `LoadModPopup.cs:210-235`; `MainMenuWidget.cs:285-305` |
-All of the above must run on the Unity main thread (the loader itself uses `GameManager.RunOnMainThread`). `LoadModAsync` spawns its own worker thread and marshals Unity calls back (`PummelMod.cs:364-377`); a bridge must wait for `PummelMod.OnFinishedLoading` / `IsLoaded` before touching the scene [C].
+| (UI-only, not for the plugin) `LoadModPopup.DeleteModResult`, `MainMenuWidget.DeleteModResult` | delete a mod folder | **`Directory.Delete(recursive)`** on `<WorkshopMods>\<name>` | `LoadModPopup.cs:210-235`; `MainMenuWidget.cs:285-305` |
+All of the above must run on the Unity main thread (the loader itself uses `GameManager.RunOnMainThread`). `LoadModAsync` spawns its own worker thread and marshals Unity calls back (`PummelMod.cs:364-377`); a plugin must wait for `PummelMod.OnFinishedLoading` / `IsLoaded` before touching the scene [C].
 
 ## 5. `PummelModCache` and `ModCacheSystem` [C]
 
@@ -149,8 +149,8 @@ All of the above must run on the Unity main thread (the loader itself uses `Game
 
 ## 7. Reflection / attribute system (code view)
 
-`ModReflectionSystem.Initialize` scans `Assembly-CSharp` once for `[ModSerialized]` types and builds `ModReflectedType` (name, runtime Unity type, ui metadata, `savePriority`, `supportsChildren`, `properties[]`) (`ModReflectionSystem.cs:21-28, 140-257`). `ModReflectedType.properties` = `GetReflectedProperties(type)`: public instance properties declared on the type (+ `ModBehaviour`'s `guid`), excluding overrides, `[ModIgnore]`, and types without a reflection mapping (these log "Cannot Save/Load") (`:74-112`). `[ModHideInInspector]` and `[ModHeader]` only set UI flags in `ReflectedProperty.Initialize`. Renamed **types** are bridged by `[ModPreviouslySerializedAs]`. Renamed or removed **properties** are silently skipped on load via size-prefixed property records. The type name stored in the file is `Type.ToString()` of the component class (not its Unity runtime type), e.g. `ModTransform`.
-For a bridge: `ModReflectionSystem.GetType(typeof(X)).properties` yields exactly the settable surface that persists; mutating via those property setters (not private fields) reproduces editor behaviour including side effects (`SettingPropertiesFromLoad` distinguishes load-time sets).
+`ModReflectionSystem.Initialize` scans `Assembly-CSharp` once for `[ModSerialized]` types and builds `ModReflectedType` (name, runtime Unity type, ui metadata, `savePriority`, `supportsChildren`, `properties[]`) (`ModReflectionSystem.cs:21-28, 140-257`). `ModReflectedType.properties` = `GetReflectedProperties(type)`: public instance properties declared on the type (+ `ModBehaviour`'s `guid`), excluding overrides, `[ModIgnore]`, and types without a reflection mapping (these log "Cannot Save/Load") (`:74-112`). `[ModHideInInspector]` and `[ModHeader]` only set UI flags in `ReflectedProperty.Initialize`. Renamed **types** are mapped by `[ModPreviouslySerializedAs]`. Renamed or removed **properties** are silently skipped on load via size-prefixed property records. The type name stored in the file is `Type.ToString()` of the component class (not its Unity runtime type), e.g. `ModTransform`.
+For a plugin: `ModReflectionSystem.GetType(typeof(X)).properties` yields exactly the settable surface that persists; mutating via those property setters (not private fields) reproduces editor behaviour including side effects (`SettingPropertiesFromLoad` distinguishes load-time sets).
 
 ## 8. Folder naming (code view)
 
@@ -158,15 +158,15 @@ Detailed in `mod-format.md` section 6. Key code: `NewModPopup.CreateNewMod` (`Pa
 
 ## 9. Open questions / unverified
 
-1. **Exact JSON shape** of `SerializableGuid` inside JsonUtility output (assumed `{"serializedGuid": "..."}`) and of `ModAssetReference<T>` (`m_asset` object field) and `.pmeta` byte[] (`m_shaderData`) - needs a real file or a runtime `JsonUtility.ToJson` probe through the bridge.
+1. **Exact JSON shape** of `SerializableGuid` inside JsonUtility output (assumed `{"serializedGuid": "..."}`) and of `ModAssetReference<T>` (`m_asset` object field) and `.pmeta` byte[] (`m_shaderData`) - needs a real file or a runtime `JsonUtility.ToJson` probe through the plugin.
 2. Whether `JsonUtility.FromJson` throws or silently defaults on partially invalid JSON in each file (Unity-native behaviour; only syntax errors reliably throw) - affects "corrupt" classification.
 3. Whether an exception in `LoadPostProceessing`/`LoadLightingSettings` main-thread delegates (truncated `PostProcessing.data`) propagates to the load result or is swallowed by `GameManager.RunOnMainThread` (not read).
 4. `ReflectedValue.SetValue/GetValue` (FastMember) exception handling when a property setter throws during load: assumed to propagate and fail the scene load.
 5. Item (`ItemMod`) and BoardSpace (`BoardSpaceMod`) settings/definition formats (`ItemDetails.json`, `SimpleMod*Settings`) were not expanded; only minigame and board were studied.
 6. `Color32`, `Gradient`, `AnimationCurve`, `MinMaxCurve` binary layouts are given by name only (`Extensions.cs:644-748, 857-900`); not needed for most edits.
 7. Whether in-game "Test/Play" from the editor loads the local mod with `EditorSystem.Instance == null` (thus writing `PummelModCache\256`) - [I] from `ModEditorEmptyScene`/`WorkshopMinigame_Scene` scene switching (`EditorSystem.OnEditorPlay`, `SceneManager_sceneLoaded`); the observed `PummelModCache\<workshopId>` folder suggests at least Workshop mods do.
-8. Unknown-component-type behaviour: code path says exception (whole scene fails); not confirmed at runtime. A bridge must only emit type names that exist in `ModReflectionSystem`.
-9. The built-in asset GUID catalogue (internal prop/material/audio/texture/shader GUIDs) is in Addressables bundles/`ModAssetList` asset data, not in decompiled code; the bridge must enumerate it at runtime via `WorkshopController.Instance.Assets.assets`.
+8. Unknown-component-type behaviour: code path says exception (whole scene fails); not confirmed at runtime. A plugin must only emit type names that exist in `ModReflectionSystem`.
+9. The built-in asset GUID catalogue (internal prop/material/audio/texture/shader GUIDs) is in Addressables bundles/`ModAssetList` asset data, not in decompiled code; the plugin must enumerate it at runtime via `WorkshopController.Instance.Assets.assets`.
 10. Concurrency: `LoadModAsync` runs stages on a worker thread while the editor UI keeps running; behaviour of calling `Save` during load is unprotected (`DelayedSaveRoutine` waits for `IsLoaded`, direct `Save()` does not) [C for absence of lock].
 11. `ModSettings.json` for Board mods references assets via `ModAssetReference<PummelPrefab>`; round-trip when the referenced prefab is missing was not traced.
-12. Whether the on-disk folder names for Workshop-downloaded/internal mods (`InbuiltMods`, Steam content folder) matter for the bridge: not studied (read-only there).
+12. Whether the on-disk folder names for Workshop-downloaded/internal mods (`InbuiltMods`, Steam content folder) matter for the plugin: not studied (read-only there).

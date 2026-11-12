@@ -1,6 +1,6 @@
 # 01 - Editor core and mod lifecycle
 
-Reverse-engineering recon for PummelBridge. Source: decompiled `Assembly-CSharp` (read-only), Pummel Party / Unity 2021.3 / Mono.
+Reverse-engineering recon for pummel-party-mcp. Source: decompiled `Assembly-CSharp` (read-only), Pummel Party / Unity 2021.3 / Mono.
 No game code is reproduced here; only class/member names, signatures and one-line paraphrases.
 
 Legend: **[C]** confirmed by reading code. **[I]** inferred (reasoned from code, not directly observed). **[U]** unverified / needs a runtime check.
@@ -86,7 +86,7 @@ The mod's scene is NOT held by `PummelMod`; it lives under editor-owned transfor
 Observations [C]:
 - `ItemMod.LoadModSpecificData` always replaces `m_modSettings` with a fresh `ItemModSettings`, even after reading `ModSettings.json` successfully. Item settings from that file do not survive a load; the real item data is `ItemDetails.json`.
 - `MinigameMod.FinishTemplateSetup` renames template scripts/prefabs "ModPlayer"/"ModController" to `<ModName>Player` / `<ModName>Controller`. Nothing in this assembly calls any `FinishTemplateSetup` [U: dead code, or called by reflection]. Template creation instead renames through `CreateNewMod`'s load-finished hook (section 3).
-- The Workshop publish menu item is enabled only for Board and Minigame mods (`MainMenuWidget.cs`, `enabled` local). Publishing is out of scope for the bridge.
+- The Workshop publish menu item is enabled only for Board and Minigame mods (`MainMenuWidget.cs`, `enabled` local). Publishing is out of scope for the plugin.
 
 ---
 
@@ -134,7 +134,7 @@ They are smoke/fuzz steps with RANDOM targets (random name from `AutomatedTestSy
 - Folder name == mod name, so rename moves the folder. **Implication for the `PB_TEST_` guard: validate both the source and the NEW name (otherwise a sandbox mod could be renamed out of the sandbox, or something renamed into it).** `RenameMod` does no name validation of its own.
 
 ### Delete mod (for completeness) [C]
-Exists only inside UI handlers (`MainMenuWidget.DeleteModResult` `:283`, `LoadModPopup.DeleteModResult` `:211`): `SetCurrentMod(null)` if it is the open mod, then recursive `Directory.Delete` of the mod folder. There is no callable `EditorSystem.DeleteMod`. The bridge should not implement it.
+Exists only inside UI handlers (`MainMenuWidget.DeleteModResult` `:283`, `LoadModPopup.DeleteModResult` `:211`): `SetCurrentMod(null)` if it is the open mod, then recursive `Directory.Delete` of the mod folder. There is no callable `EditorSystem.DeleteMod`. The plugin should not implement it.
 
 ---
 
@@ -142,7 +142,7 @@ Exists only inside UI handlers (`MainMenuWidget.DeleteModResult` `:283`, `LoadMo
 
 - Root: `EditorSystem.ModFolder = Path.Combine(Application.persistentDataPath, "WorkshopMods")` (static string, assigned in `Init`, `EditorSystem.cs:1140`); created if missing. On this machine `persistentDataPath` is `...\AppData\LocalLow\Rebuilt Games\Pummel Party\` per `docs/paths.md` [I: Unity's company/product convention; not derivable from the decompiled C#].
 - Scan: `EditorAvailableModManager.ReadListOfAvailableMods(string modFolder)`: `Directory.GetDirectories(modFolder)` (top level only); a folder is accepted only if `Data/Meta.json` exists and deserializes (`ModDataReaderWriter.LoadObjectFromJson<ModMetaData>`). Entry = `EditorAvailableMod(ModName = Meta.Name, ModFolderName = the full directory path returned by GetDirectories, ModType = Meta.ModType, ModLastModified = parsed LastModified)`. Despite its name, `ModFolderName` holds a full path after a scan, but a bare folder name for entries added via `AddAvailableMod` from the popup/`AT_NewMod`; both work because `Path.Combine(ModFolder, absolutePath)` returns the absolute path.
-- Refresh timing: only at `Init` and at the end of `RenameMod`. NOT refreshed when folders appear/disappear externally. `LoadModPopup` re-scans on open. A bridge `list_mods` should either call `ReadListOfAvailableMods(ModFolder)` (read-only) or do its own `Directory.GetDirectories` + Meta.json read.
+- Refresh timing: only at `Init` and at the end of `RenameMod`. NOT refreshed when folders appear/disappear externally. `LoadModPopup` re-scans on open. A plugin `list_mods` should either call `ReadListOfAvailableMods(ModFolder)` (read-only) or do its own `Directory.GetDirectories` + Meta.json read.
 - API: `GetAvailableMods()`, `GetRecentMods()` (8 most recent via `LastEditedModSorter`), `GetAvailableModCount()`, `DoesModWithNameAlreadyExist(name)`, `AddAvailableMod(EditorAvailableMod)`, `UpdateLoadedModLastModifiedTime(PummelMod)`.
 - Other locations: built-in templates `Application.streamingAssetsPath/WorkshopTemplates/<group>/<template>/` (read-only); custom lighting profiles `persistentDataPath/ModEditorCustomLightingProfiles/` (written only by an explicit button, `LightingWidgetLogic.cs:230`); ImGui layout `persistentDataPath/LastUsedLayout.ini` (written at editor `Init`, via `InitImGuiLayout` `:1222`, and in `OnDestroy`).
 
@@ -207,8 +207,8 @@ PummelMod.Save()  (virtual, returns bool)                         PummelMod.cs:5
 - Consumers: `ToolbarWidget.cs:246` ("| Unsaved Changes" text), `MainMenuWidget.cs:81` (Close Mod), `NewModPopup.cs:161`, `OpenModWithPopupPrompt` (`EditorSystem.cs:850`), `ExitModEditor` (`:1532`).
 - No `IsDirty` on `PummelMod` or `ModAsset`, and no change event [C].
 - **Not tracked** [I, from the call-site list]: edits to `ModSettings`, lighting/post-processing, workshop item fields, and asset-only edits (materials, visual scripts, textures) never call `PushUndoEventToStack`. The flag means "a scene-graph/prefab-graph undo event was pushed since the last save/load".
-- **Probably true right after any load** [I, needs a runtime check]: `Update` calls `DoUndoSerialize` every frame when the mouse is not held; with an empty stack (fresh load clears it) it pushes the initial snapshot, which sets the flag. So an untouched, freshly opened mod likely reads `IsModDirty == true` after the first frame. Consequences: the bridge must not treat `IsModDirty` as proof the user edited something, and `OpenModWithPopupPrompt` on a just-opened mod will probably show the unsaved-changes popup (`OpenMod` / `CreateNewMod` never do).
-- For a reliable signal the bridge should keep its own "mutated since save" flag around its write tools, and/or use `GetUndoManager().UndoStackLength()` (`EditorUndo.cs:170`).
+- **Probably true right after any load** [I, needs a runtime check]: `Update` calls `DoUndoSerialize` every frame when the mouse is not held; with an empty stack (fresh load clears it) it pushes the initial snapshot, which sets the flag. So an untouched, freshly opened mod likely reads `IsModDirty == true` after the first frame. Consequences: the plugin must not treat `IsModDirty` as proof the user edited something, and `OpenModWithPopupPrompt` on a just-opened mod will probably show the unsaved-changes popup (`OpenMod` / `CreateNewMod` never do).
+- For a reliable signal the plugin should keep its own "mutated since save" flag around its write tools, and/or use `GetUndoManager().UndoStackLength()` (`EditorUndo.cs:170`).
 
 ---
 
@@ -239,9 +239,9 @@ Searched the whole `Assembly-CSharp` tree for: `SaveCurrentMod`, `DelayedSave`, 
 | 12 | PlayerPrefs | `CurrentUIZoomPercent` setter, player-count combo | Unity PlayerPrefs, not mod data |
 | 13 | Exit-time reinstall thread | `RunExitModEditorLogic` -> `WorkshopModInstaller.ReinstallMod(id)` | only for published mods whose playtest ran (`AddModToReinstallOnExit` when `publishedFileId != 256`); PB_TEST_ mods are unpublished so unaffected [I] |
 
-Implications for "bridge writes only to PB_TEST_ mods":
-- #1 and #4 are the dangerous implicit ones. **Starting a playtest saves the open mod, and leaving a prefab saves that prefab.** If a protected mod is open, a bridge-triggered playtest WILL overwrite its files (at minimum Meta.json `LastModified`). Playtest and every write tool must verify the folder name of `CurrentMod.GetModPath()` starts with `PB_TEST_`.
-- Opening a protected mod is not strictly read-only (#7 can create `.pmeta`), and any later implicit #1/#4 would write to it. Policy suggestion (not from code): the bridge should refuse to open non-`PB_TEST_` mods, or treat them as read-only and never call `SetEditorState(EnteringPlayMode)` or change `CurrentPrefab` while one is open.
+Implications for "plugin writes only to PB_TEST_ mods":
+- #1 and #4 are the dangerous implicit ones. **Starting a playtest saves the open mod, and leaving a prefab saves that prefab.** If a protected mod is open, a plugin-triggered playtest WILL overwrite its files (at minimum Meta.json `LastModified`). Playtest and every write tool must verify the folder name of `CurrentMod.GetModPath()` starts with `PB_TEST_`.
+- Opening a protected mod is not strictly read-only (#7 can create `.pmeta`), and any later implicit #1/#4 would write to it. Policy suggestion (not from code): the plugin should refuse to open non-`PB_TEST_` mods, or treat them as read-only and never call `SetEditorState(EnteringPlayMode)` or change `CurrentPrefab` while one is open.
 - After `RenameMod` the folder leaf changes; always re-derive identity from `GetModPath()`, not from a cached name.
 
 ---
@@ -289,7 +289,7 @@ Implications for "bridge writes only to PB_TEST_ mods":
 
 - **No command system exists** [C]. `Command.cs` is an empty class. `ShowWindowCommand.cs` is the Win32 `ShowWindow` enum (`SW_HIDE`, `SW_MAXIMIZE`, `SW_MINIMIZE`, `SW_RESTORE`, `SW_FORCEMINIMIZE`) used only by `Win32Wrapper`. `InputActions.cs` is a static list of Rewired action ids for in-game input (`UISubmit`, `PauseGame`, ...), not used by the editor.
 - Shortcuts are hard-coded polling of `UnityEngine.Input` in `EditorSystem.Update` (left Ctrl only): Ctrl+S save (`:1676`), Ctrl+Z undo (`:1672`), Esc exit prompt (`:1662`; only when no popup open and `State == Editing`), F10 screenshot (`:1575`), Ctrl+= / Ctrl+- UI zoom, Q/W/E/R gizmo operations, Z pivot/center, X local/world (only when scene view/hierarchy/toolbar is focused and the inspector is not), Ctrl+D duplicate, Ctrl+C / Ctrl+V, Delete, arrow keys in the hierarchy. Menu items in `MainMenuWidget` mirror them with "CTRL+S" style hints.
-- Synthetic key injection is possible but fragile; calling the `EditorSystem` methods directly is the intended bridge path.
+- Synthetic key injection is possible but fragile; calling the `EditorSystem` methods directly is the intended plugin path.
 
 ---
 
