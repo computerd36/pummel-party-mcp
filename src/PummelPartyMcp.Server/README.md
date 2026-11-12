@@ -42,9 +42,11 @@ Action editing notes: a trigger is addressed either as `{guid, component?, trigg
 | Variable | Default | Meaning |
 |---|---|---|
 | `PUMMEL_PARTY_MCP_PORT` | `38917` | Plugin port |
-| `PUMMEL_PARTY_MCP_GAME_DIR` | `C:\Program Files (x86)\Steam\steamapps\common\Pummel Party` | Game dir; token is read from `<GameDir>\BepInEx\config\PummelPartyMcp.token` |
+| `PUMMEL_PARTY_MCP_GAME_DIR` | auto-detected (Windows) | Game folder; token is read from `<GameDir>\BepInEx\config\PummelPartyMcp.token` |
 | `PUMMEL_PARTY_MCP_TOKEN_FILE` | (derived) | Full path of the token file; overrides the above |
 | `PUMMEL_PARTY_MCP_TIMEOUT_MS` | (per tool) | Overrides every request timeout (1..600000 ms); mainly for tests |
+
+Token file lookup order: `PUMMEL_PARTY_MCP_TOKEN_FILE`, `PUMMEL_PARTY_MCP_GAME_DIR`, then on Windows Steam library discovery: Steam's `steamapps\libraryfolders.vdf` (in `%ProgramFiles(x86)%\Steam` or `%ProgramFiles%\Steam`) lists the libraries, and the one with `steamapps\appmanifest_880940.acf` (Pummel Party's app id) gives the game folder through its `installdir`. The parser is a small built-in one (no dependency). Detection is lazy (first tool call that needs the token), cached, repeated after a failure, and never prevents startup; when nothing is found the error names both variables. Linux and macOS: only the two variables (the tested setup is Windows).
 
 The token is cached and re-read after a 401 or connection failure, so game restarts need no special handling. It is never logged or returned (it is also scrubbed from any text a listener sends back).
 
@@ -57,6 +59,8 @@ npm ci
 npm run build
 npm test
 ```
+
+`npm pack --dry-run` lists what a package would contain (`dist/*.js`, `README.md`, `LICENSE`, `package.json`; `prepack` builds first). The package is marked `"private": true` and its repository fields are placeholders until the maintainer decides to publish.
 
 ## Register with Claude Code (example only)
 

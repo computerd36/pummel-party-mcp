@@ -979,7 +979,7 @@ Inspector-only clamps: some custom inspectors re-apply limits on every frame the
 the same limits when writing and lists the affected properties in `inspectorClamped`:
 `ModAudioSource.volume` 0-1, `.spatialBlend` 0-1, `.stereoPanning` -1..1; `ModBoardSpace.SpawnRotation` 0-360,
 `.SpawnDistance` 0-4; `ModFireWeapon.FireTime` >= 0.1; `ModItem.SecondsBetweenHeldAction` >= 0.1, `.Cooldown` >= 0.1;
-`ModLight.spotAngle` 0-180; `ModParticleSystem.arcSpread` 0-1; `ModSpawner.SpawnCount` 0-20;
+`ModLight.spotAngle` 1-179 (the inspector slider shows 0-180, but Unity's `Light.spotAngle` stores 1-179; 200 was observed to become 179); `ModParticleSystem.arcSpread` 0-1; `ModSpawner.SpawnCount` 0-20;
 `ModText.OutlineThickness` 0-1, `.ShadowOffsetX` / `.ShadowOffsetY` -1..1, `.ShadowSoftness` 0-1;
 `ModParticleSystem.radiusThickness` 0-1, `.arc` 0-360 (drag limits), `ModParticleSystem.arcSpread` 0-1 (listed above), `ModTrigger.StayTriggerInterval` >= 0.1; `ModWater.CellSize` 0.1-10, `.WaveHeight` 0-1, `.WaveSpeed` 0-10.
 Setters may clamp further; `applied` shows the value actually stored.
@@ -998,7 +998,7 @@ applied). Their `...GUID` siblings and `ModScriptReference.scriptValues` are ref
 ```
 ```json
 {"guid": "0b6d...", "component": {"type": "ModLight", "guid": "c41f..."},
- "applied": {"type": {"type": "InternalLight", "value": "Spot"}, "spotAngle": {"type": "Single", "value": 180.0},
+ "applied": {"type": {"type": "InternalLight", "value": "Spot"}, "spotAngle": {"type": "Single", "value": 179.0},
              "color": {"type": "Color", "value": {"r": 1.0, "g": 0.5, "b": 0.0, "a": 1.0}}},
  "inspectorClamped": ["spotAngle"], "changed": true, "undoable": true, "undoStackLength": 13}
 ```
@@ -1036,7 +1036,7 @@ produce a value the editor's UI cannot produce (audit of game build 1.14.1k, fro
   with `the editor's generic inspector draws no control for '<name>' (type ...)`; no generic component of 1.14.1k has one
   (all those properties belong to components with a custom inspector). No range or conditional attributes exist.
 - `get_object` marks what it knows for each property of a component: `"inspector": "<rule summary>"` (e.g.
-  `"shown while type is Spot; clamped 0..180"`) and `"shown": false` when the property is never drawn. `list_component_types`
+  `"shown while type is Spot; clamped 1..179"`) and `"shown": false` when the property is never drawn. `list_component_types`
   has `customInspector` per type. Nothing else is needed to discover the rules: read the component with `get_object` after
   `add_component`, or use the tables below.
 
@@ -1130,7 +1130,7 @@ All other properties of ModItem are always drawn.
 | Property | Rule |
 |---|---|
 | `range` | shown while type is not Directional |
-| `spotAngle` | shown while type is Spot; clamped 0..180 |
+| `spotAngle` | shown while type is Spot; clamped 1..179 |
 
 All other properties of ModLight are always drawn.
 

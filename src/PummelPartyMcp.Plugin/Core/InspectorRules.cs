@@ -462,7 +462,8 @@ namespace PummelPartyMcp.Core
             // ---- ModLight (ModLightInspector)
             Show("ModLight", Cond.Is("type", "Directional").Not(), "range");
             Show("ModLight", Cond.Is("type", "Spot"), "spotAngle");
-            Clamp("ModLight", "spotAngle", 0, 180);
+            // The inspector slider offers 0..180 (ModLightInspector), but Unity's Light.spotAngle setter stores 1..179; in-game 200 gave 179.
+            Clamp("ModLight", "spotAngle", 1, 179);
 
             // ---- ModMeshCollider
             Show("ModMeshCollider", Cond.Derived("NoLinkedRenderer", "no mesh renderer on the object provides the mesh", "a mesh renderer on the object provides the mesh"), "mesh");

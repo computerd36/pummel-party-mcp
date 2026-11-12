@@ -1,0 +1,82 @@
+name: CI
+
+# Scope: what can be built WITHOUT the game. The BepInEx plugin itself (src/PummelPartyMcp.Plugin) and the
+# Harmony/drift tests (src/PummelPartyMcp.Plugin.PatchTests) reference the game's Assembly-CSharp.dll, Unity,
+# BepInEx and Harmony from a local game install, which must never be in the repo, so they are NOT built or run
+# here. They run locally with the game installed (the drift test must be re-run after every game update).
+# No secrets, no publishing steps.
+
+# Triggers on the default branch (named main or master here, whichever the repository uses) and on pull requests.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: MCP server (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [20, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: src/PummelPartyMcp.Server/package-lock.json
+      - name: Install
+        run: npm ci
+        working-directory: src/PummelPartyMcp.Server
+      - name: Build and test
+        run: npm test
+        working-directory: src/PummelPartyMcp.Server
+
+  plugin-core:
+    name: Unity-free plugin core tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # The ubuntu run is not verified locally (developed on Windows); do not let it block the workflow.
+    continue-on-error: ${{ matrix.os == 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      # Compiles only the plugin's Core sources (no game, Unity, BepInEx or Harmony reference). GameDir points
+      # nowhere on purpose: the build must not depend on a game install.
+      - name: Run harness
+        run: dotnet run -c Release --project src/PummelPartyMcp.Plugin.Tests -p:GameDir=/does-not-exist
+
+  no-forbidden-files:
+    name: No forbidden files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tracked files
+        shell: bash
+        run: |
+          set -u
+          fail=0
+          bad=$(git ls-files | grep -E -i '\.(dll|pdb|exe|token)$' || true)
+          if [ -n "$bad" ]; then echo "Forbidden tracked files:"; echo "$bad"; fail=1; fi
+          dec=$(git ls-files | grep -E '(^|/)decompiled/' || true)
+          if [ -n "$dec" ]; then echo "Tracked decompiled/ content:"; echo "$dec" | head -20; fail=1; fi
+          while IFS= read -r f; do
+            if [ -f "$f" ] && [ "$(wc -c < "$f")" -gt 5242880 ]; then echo "Over 5 MB: $f"; fail=1; fi
+          done < <(git ls-files)
+          exit $fail

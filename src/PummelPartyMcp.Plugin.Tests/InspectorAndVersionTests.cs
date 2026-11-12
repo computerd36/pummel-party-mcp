@@ -245,7 +245,7 @@ namespace PummelPartyMcp.Tests
 
             // clamps use the real table through InspectorClamps (limits are clamped, not refused)
             PNumber angle = new PNumber { Value = 200 };
-            Check("clamp: ModLight.spotAngle 200 -> 180, reported", InspectorClamps.Apply("ModLight", "spotAngle", angle) && angle.Value == 180);
+            Check("clamp: ModLight.spotAngle 200 -> 179, reported", InspectorClamps.Apply("ModLight", "spotAngle", angle) && angle.Value == 179);
             PNumber arc = new PNumber { Value = 400 };
             PNumber thickness = new PNumber { Value = -1 };
             Check("clamp: particle arc 0..360 and radiusThickness 0..1",

@@ -1,9 +1,8 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { resolveTokenFile, type ResolveDeps } from "./steam.js";
 
 export const HOST = "127.0.0.1"; // fixed on purpose; not configurable
 export const DEFAULT_PORT = 38917;
-export const DEFAULT_GAME_DIR = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Pummel Party";
 
 /** Error whose message is safe to show to the agent (never contains the token). */
 export class PluginError extends Error {
@@ -25,21 +24,25 @@ export const WRITE_AMBIGUITY_NOTE =
 
 export interface ClientOptions {
   port: number;
-  tokenFile: string;
+  /** Fixed token file path (tests, or set through the environment). */
+  tokenFile?: string;
+  /** Used when `tokenFile` is unset: finds the token file lazily (auto-detection); may throw. */
+  resolveTokenFile?: () => string;
   timeoutMs?: number;
 }
 
-export function optionsFromEnv(env: NodeJS.ProcessEnv = process.env): ClientOptions {
+export function optionsFromEnv(env: NodeJS.ProcessEnv = process.env, deps: ResolveDeps = {}): ClientOptions {
   const portRaw = env.PUMMEL_PARTY_MCP_PORT;
   const port = portRaw && /^\d+$/.test(portRaw) ? Number(portRaw) : DEFAULT_PORT;
-  const tokenFile =
-    env.PUMMEL_PARTY_MCP_TOKEN_FILE ||
-    join(env.PUMMEL_PARTY_MCP_GAME_DIR || DEFAULT_GAME_DIR, "BepInEx", "config", "PummelPartyMcp.token");
+  // Order: TOKEN_FILE, GAME_DIR, then Steam discovery on Windows. Discovery runs lazily on the first call that needs the token.
+  const explicit = Boolean(env.PUMMEL_PARTY_MCP_TOKEN_FILE || env.PUMMEL_PARTY_MCP_GAME_DIR);
+  const tokenFile = explicit ? resolveTokenFile(env) : undefined;
+  const resolver = explicit ? undefined : () => resolveTokenFile(env, deps);
   // Optional override of every request timeout (ms); mainly for tests.
   const tRaw = env.PUMMEL_PARTY_MCP_TIMEOUT_MS;
   const t = tRaw && /^\d+$/.test(tRaw) ? Number(tRaw) : 0;
   const timeoutMs = t >= 1 && t <= 600000 ? t : undefined;
-  return { port, tokenFile, timeoutMs };
+  return { port, tokenFile, resolveTokenFile: resolver, timeoutMs };
 }
 
 const HINTS: Record<string, string> = {
@@ -124,16 +127,36 @@ export class PluginClient {
 
   constructor(private readonly opts: ClientOptions) {}
 
+  private detectedTokenFile: string | undefined;
+
+  /** Fixed path, else the cached auto-detected path (detected lazily; a failure is not cached). */
+  private tokenFilePath(): string {
+    if (this.opts.tokenFile) return this.opts.tokenFile;
+    if (!this.detectedTokenFile) {
+      if (!this.opts.resolveTokenFile) {
+        throw new PluginError("No token file configured (set PUMMEL_PARTY_MCP_GAME_DIR or PUMMEL_PARTY_MCP_TOKEN_FILE).");
+      }
+      try {
+        this.detectedTokenFile = this.opts.resolveTokenFile();
+      } catch (e) {
+        throw new PluginError(e instanceof Error ? e.message : String(e));
+      }
+    }
+    return this.detectedTokenFile;
+  }
+
   private loadToken(): string {
+    const file = this.tokenFilePath();
     let t = "";
     try {
-      t = readFileSync(this.opts.tokenFile, "utf8").trim();
+      t = readFileSync(file, "utf8").trim();
     } catch {
       /* fall through */
     }
     if (!t) {
+      this.detectedTokenFile = undefined; // detect again next time (the game may have been moved or installed since)
       throw new PluginError(
-        `Token file not found or empty at "${this.opts.tokenFile}". The game must have been started at least once with the pummel-party-mcp plugin installed (the plugin creates this file).`,
+        `Token file not found or empty at "${file}". The game must have been started at least once with the pummel-party-mcp plugin installed (the plugin creates this file).`,
       );
     }
     return t;
@@ -268,7 +291,7 @@ ${WRITE_AMBIGUITY_NOTE}`, e.code, true);
       res = await this.post(method, params, timeoutMs);
       if (res.status === 401) {
         throw new PluginError(
-          `Token mismatch: the plugin rejected the token read from "${this.opts.tokenFile}" (HTTP 401). Check PUMMEL_PARTY_MCP_TOKEN_FILE / PUMMEL_PARTY_MCP_GAME_DIR and that the file belongs to the running game.`,
+          `Token mismatch: the plugin rejected the token read from "${this.detectedTokenFile ?? this.opts.tokenFile ?? "the detected location"}" (HTTP 401). Check PUMMEL_PARTY_MCP_TOKEN_FILE / PUMMEL_PARTY_MCP_GAME_DIR and that the file belongs to the running game.`,
         );
       }
     }

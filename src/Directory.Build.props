@@ -1,0 +1,21 @@
+<Project>
+
+  <!--
+    Where the game is installed (GameDir). Only the plugin and the PatchTests need it; the Unity-free
+    PummelPartyMcp.Plugin.Tests harness and the MCP server never do.
+
+    Resolution order (first one wins):
+      1. dotnet build -p:GameDir="D:\Games\Pummel Party"            (per command)
+      2. an untracked file src\GameDir.props.user next to this one   (set once; *.user is gitignored):
+           <Project><PropertyGroup><GameDir>D:\Games\Pummel Party</GameDir></PropertyGroup></Project>
+         (PummelPartyMcp.Plugin.csproj.user next to the project also still works)
+      3. the standard Steam location below.
+    Projects that need the game fail early with a clear error when the folder does not exist (Directory.Build.targets).
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)GameDir.props.user" Condition="Exists('$(MSBuildThisFileDirectory)GameDir.props.user')" />
+
+  <PropertyGroup Condition="'$(GameDir)' == ''">
+    <GameDir>$(MSBuildProgramFiles32)\Steam\steamapps\common\Pummel Party</GameDir>
+  </PropertyGroup>
+
+</Project>

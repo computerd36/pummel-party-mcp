@@ -58,7 +58,12 @@ PowerShell, from the repo root. Replace the game folder with yours.
    dotnet build src\PummelPartyMcp.Plugin\PummelPartyMcp.Plugin.csproj -c Release -p:GameDir="$game"
    ```
 
-   Without `-p:GameDir` the csproj uses the author's install path. Alternatively create an untracked `PummelPartyMcp.Plugin.csproj.user` next to the project that sets `<GameDir>`.
+   `GameDir` is resolved in this order: `-p:GameDir=...` on the command line; an untracked file `src\GameDir.props.user` that you create once (the plugin build and the patch tests both read it; `*.user` is gitignored); the standard Steam location (`%ProgramFiles(x86)%\Steam\steamapps\common\Pummel Party`). If the folder does not contain `PummelParty_Data\Managed\Assembly-CSharp.dll` the build stops with an error that says so. A `PummelPartyMcp.Plugin.csproj.user` next to the plugin project still works too.
+
+   ```xml
+   <!-- src\GameDir.props.user -->
+   <Project><PropertyGroup><GameDir>D:\Games\Pummel Party</GameDir></PropertyGroup></Project>
+   ```
 
 3. Copy the plugin into the game folder. This is the only change to the game folder besides BepInEx itself.
 
@@ -100,22 +105,24 @@ PowerShell, from the repo root. Replace the game folder with yours.
    }
    ```
 
-   The equivalent command, usable from any folder:
+   The server finds the plugin's token file by itself (see below), so this file needs no path or `env` block on a normal Steam install. The equivalent command, usable from any folder:
 
    ```powershell
-   claude mcp add --env PUMMEL_PARTY_MCP_GAME_DIR="$game" pummel-party-mcp -- node "<path to repo>\src\PummelPartyMcp.Server\dist\index.js"
+   claude mcp add pummel-party-mcp -- node "<path to repo>\src\PummelPartyMcp.Server\dist\index.js"
    ```
+
+   Add `--env PUMMEL_PARTY_MCP_GAME_DIR="$game"` if auto-detection does not find your game.
 
 Environment variables of the MCP server:
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `PUMMEL_PARTY_MCP_PORT` | `38917` | Plugin port (must match `[Server] Port`) |
-| `PUMMEL_PARTY_MCP_GAME_DIR` | the author's install path | Game folder; the token is read from `<GameDir>\BepInEx\config\PummelPartyMcp.token` |
-| `PUMMEL_PARTY_MCP_TOKEN_FILE` | derived from the game dir | Full path of the token file; overrides the game dir |
+| `PUMMEL_PARTY_MCP_GAME_DIR` | auto-detected (Windows) | Game folder; the token is read from `<GameDir>\BepInEx\config\PummelPartyMcp.token` |
+| `PUMMEL_PARTY_MCP_TOKEN_FILE` | derived from the game folder | Full path of the token file; overrides the game folder |
 | `PUMMEL_PARTY_MCP_TIMEOUT_MS` | per tool | Overrides every request timeout (mainly for tests) |
 
-The default game dir in `src/PummelPartyMcp.Server/src/client.ts` is `C:\Program Files (x86)\Steam\steamapps\common\Pummel Party`, the author's path. Unless your game is in that exact place, set `PUMMEL_PARTY_MCP_GAME_DIR` or `PUMMEL_PARTY_MCP_TOKEN_FILE`, otherwise the server cannot find the token. If you use the project `.mcp.json`, add an `"env"` object with the variable to your local copy.
+Token file lookup, in this order: `PUMMEL_PARTY_MCP_TOKEN_FILE`, then `PUMMEL_PARTY_MCP_GAME_DIR`, then automatic detection on Windows: the server reads Steam's `steamapps\libraryfolders.vdf` (from `%ProgramFiles(x86)%\Steam` or `%ProgramFiles%\Steam`) and picks the library that holds `steamapps\appmanifest_880940.acf` (880940 is Pummel Party's Steam app id), using the `installdir` from that manifest. Detection runs on the first tool call that needs the token, is cached, runs again after a failure and never stops the server from starting. If nothing is found, the error names the two variables. On Linux and macOS only the two variables are supported (the tested setup is Windows). A Steam installation in an unusual place that is not listed in `libraryfolders.vdf` needs `PUMMEL_PARTY_MCP_GAME_DIR`.
 
 ## First use
 
@@ -192,18 +199,24 @@ Layout:
 | `src/PummelPartyMcp.Plugin.PatchTests` | net472 Harmony and drift tests; reads the game DLLs for reflection only |
 | `src/PummelPartyMcp.Server` | MCP server (TypeScript) and its tests |
 | `docs/` | `plugin-api.md` (API reference), `editor-architecture.md` and `architecture/` (how the editor works), `mod-format.md` |
-| `scripts/` | backup and verify scripts |
+| `scripts/` | backup and verify scripts; `package-thunderstore.ps1` |
+| `packaging/thunderstore/` | templates for the Thunderstore package (README, CHANGELOG, icon placeholder) |
+| `.github/workflows/ci.yml` | CI (see below) |
 | `skills/pummel-modder/` | agent skill |
 
 Tests (PowerShell, from the repo root):
 
 ```powershell
 dotnet run -c Release --project src\PummelPartyMcp.Plugin.Tests
-dotnet run -c Release --project src\PummelPartyMcp.Plugin.PatchTests -p:GameDir="$game"
+dotnet run -c Release --project src\PummelPartyMcp.Plugin.PatchTests   # add -p:GameDir="$game" unless set in src\GameDir.props.user
 cd src\PummelPartyMcp.Server; npm test
 ```
 
 The patch tests need a local game install with BepInEx (they reference its `0Harmony.dll` and related assemblies). The first two suites print their results to the console; the server tests build the project and run Node's test runner against a fake plugin.
+
+CI (GitHub Actions, `.github/workflows/ci.yml`) covers what can be built without the game: the MCP server tests (Ubuntu and Windows, Node 20 and 24), the Unity-free `PummelPartyMcp.Plugin.Tests` harness (.NET 8; it compiles only the plugin's `Core` sources and is run with `GameDir` pointing nowhere), and a guard that fails when a `*.dll`, `*.pdb`, `*.exe`, `*.token`, a `decompiled/` folder or a file over 5 MB is tracked. The plugin build and `PummelPartyMcp.Plugin.PatchTests` are **not** run in CI, because they need the game's assemblies; run them locally with the game installed, and re-run the drift test (`PatchTests`) after every game update. The workflow has no secrets and publishes nothing.
+
+Packaging (prepared only, nothing is published): `scripts\package-thunderstore.ps1` builds the plugin in Release and assembles `artifacts\thunderstore\` plus `artifacts\PummelPartyMcp-<version>.zip` (the plugin DLL only; the version comes from the plugin csproj; the script refuses to run with uncommitted changes under `src\PummelPartyMcp.Plugin` unless you pass `-AllowDirty`; `artifacts/` is gitignored). The server's `package.json` is ready for `npm pack` and `npm publish` (`prepack` builds, `files` is an allow-list) but keeps `"private": true` and placeholder repository fields until the maintainer decides to publish.
 
 Game DLLs, decompiled game code and other people's mod files must never be committed. `decompiled/`, `lib/`, `*.dll` and similar are in `.gitignore`; keep it that way. `CLAUDE.md` holds the working rules for AI agents that contribute to this repo, and `PLAN.md` the project plan and decision log.
 

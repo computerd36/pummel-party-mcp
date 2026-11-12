@@ -21,3 +21,4 @@ docs/paths.md
 .vs/
 *.user
 .claude/settings.local.json
+artifacts/

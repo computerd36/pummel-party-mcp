@@ -1,0 +1,9 @@
+<Project>
+
+  <!-- Projects that reference the game set <RequiresGameDir>true</RequiresGameDir>. -->
+  <Target Name="CheckGameDir" BeforeTargets="ResolveAssemblyReferences;CoreCompile" Condition="'$(RequiresGameDir)' == 'true'">
+    <Error Condition="!Exists('$(GameDir)\PummelParty_Data\Managed\Assembly-CSharp.dll')"
+           Text="Pummel Party was not found at GameDir='$(GameDir)'. Pass -p:GameDir=&quot;&lt;game folder&gt;&quot;, or set it once in an untracked src\GameDir.props.user (see src\Directory.Build.props). The game folder is the one that contains PummelParty_Data (and BepInEx, once installed)." />
+  </Target>
+
+</Project>

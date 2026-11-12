@@ -957,7 +957,7 @@ namespace PummelPartyMcp.Tests
                 && ObjectKinds.WhyUnavailable(cube, "Item", false, true, false, "p") == null);
 
             PNumber spot = new PNumber { Value = 200 };
-            Check("spotAngle clamped to 180", InspectorClamps.Apply("ModLight", "spotAngle", spot) && spot.Value == 180);
+            Check("spotAngle clamped to 179 (the value the editor stores)", InspectorClamps.Apply("ModLight", "spotAngle", spot) && spot.Value == 179);
             PNumber cd = new PNumber { Value = 0.01 };
             Check("cooldown min 0.1", InspectorClamps.Apply("ModItem", "Cooldown", cd) && Math.Abs(cd.Value - 0.1) < 1e-9);
             PInteger sc = new PInteger { Value = 50 };

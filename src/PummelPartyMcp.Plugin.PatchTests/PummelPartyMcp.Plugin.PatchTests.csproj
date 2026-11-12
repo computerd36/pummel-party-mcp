@@ -5,7 +5,7 @@
     net472 on purpose: the HarmonyX 2.9 / MonoMod build shipped with BepInEx 5.4.23 throws in AccessTools' static
     constructor under .NET 8, so this cannot live in the net8.0 harness. Runs on the Windows .NET Framework 4.x CLR.
     0Harmony and its MonoMod/Cecil dependencies are referenced from the local game install and copied to bin/
-    (gitignored), never into the repo. Override the install location with -p:GameDir="...".
+    (gitignored), never into the repo. GameDir is resolved in src/Directory.Build.props (-p:GameDir="...", or src/GameDir.props.user, or the standard Steam location).
     Run: dotnet run -c Release
   -->
 
@@ -16,7 +16,7 @@
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <IsPackable>false</IsPackable>
-    <GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Pummel Party</GameDir>
+    <RequiresGameDir>true</RequiresGameDir>
   </PropertyGroup>
 
   <ItemGroup>
