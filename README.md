@@ -229,7 +229,7 @@ CI (GitHub Actions, `.github/workflows/ci.yml`) covers what can be built without
 
 Packaging (prepared only, nothing is published): `scripts\package-thunderstore.ps1` builds the plugin in Release and assembles `artifacts\thunderstore\` plus `artifacts\PummelPartyMcp-<version>.zip` (the plugin DLL only; the version comes from the plugin csproj; the script refuses to run with uncommitted changes under `src\PummelPartyMcp.Plugin` unless you pass `-AllowDirty`; `artifacts/` is gitignored). The server's `package.json` is ready for `npm pack` and `npm publish` (`prepack` builds, `files` is an allow-list) but keeps `"private": true` and placeholder repository fields until the maintainer decides to publish.
 
-Game DLLs, decompiled game code and other people's mod files must never be committed. `decompiled/`, `lib/`, `*.dll` and similar are in `.gitignore`; keep it that way. `CLAUDE.md` holds the working rules for AI agents that contribute to this repo, and `PLAN.md` the project plan and decision log.
+Game DLLs, decompiled game code and other people's mod files must never be committed. `decompiled/`, `lib/`, `*.dll` and similar are in `.gitignore`; keep it that way. `CLAUDE.md` holds the working rules for AI agents that contribute to this repo.
 
 ## Licence
 

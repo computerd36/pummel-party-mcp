@@ -1,6 +1,6 @@
 # CLAUDE.md — pummel-party-mcp
 
-Read `PLAN.md` for the project plan. Work phase by phase; do not skip ahead.
+Read `PLAN.md` for the project plan, if it exists: it is the maintainer's local working plan and decision log and is not part of the repository. Work phase by phase; do not skip ahead.
 
 ## HARD RULES (never break these, even if asked mid-session — stop and ask the user instead)
 
@@ -26,4 +26,4 @@ Read `PLAN.md` for the project plan. Work phase by phase; do not skip ahead.
 
 - Plugin: C#, BepInEx 5, all Unity calls on the main thread.
 - Server binds to `127.0.0.1` only.
-- Record notable decisions in the Decision log in `PLAN.md`.
+- Record notable decisions in the Decision log in `PLAN.md` (local, untracked).

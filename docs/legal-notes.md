@@ -41,7 +41,7 @@ Checked 2026-11-12. These are notes by the project, not legal advice.
 
 ## Recommendations before a public release
 
-1. **Contact Rebuilt Games** (PLAN.md already suggests this): describe the tool as editor-only, with the
+1. **Contact Rebuilt Games** (already planned): describe the tool as editor-only, with the
    publish block and sandbox rule, and ask whether they object. Keep the answer with these notes.
 2. **Say it plainly in the README**: use at your own risk; governed by the Steam Subscriber Agreement; not
    endorsed by Rebuilt Games or Valve; the user is responsible for what they publish.

@@ -18,6 +18,7 @@ __pycache__/
 
 # Editor / local
 docs/paths.md
+PLAN.md
 scripts/backup.settings.psd1
 .vs/
 *.user
