@@ -36,11 +36,15 @@ What this does not protect against:
 - The token file is readable by local processes of the same Windows user (and possibly other users, depending on the folder's permissions). A malicious local process is out of scope.
 - A game update can change editor internals in ways the plugin does not detect.
 
-Back up your mod projects before you use this, even though real mods are not touched. The repo has two scripts; the default destination in `backup-mods.ps1` is the author's own choice, so pass your own `-DestinationRoot` (outside the repo, outside the game folder, ideally on another drive):
+Back up your mod projects before you use this, even though real mods are not touched. The repo has two scripts; neither script has a built-in destination. Either pass `-DestinationRoot` / `-BackupRoot` (outside the repo, outside the game folder, ideally on another drive) or copy `scripts/backup.settings.example.psd1` to `scripts/backup.settings.psd1` (untracked) and fill in `DestinationRoot`, `BackupRoots` and optionally `GameRoot`; parameters override the file:
 
 ```powershell
 .\scripts\backup-mods.ps1 -DestinationRoot "D:\PummelBackups"
 .\scripts\verify-backup.ps1 -BackupRoot "D:\PummelBackups"
+
+# or, with scripts\backup.settings.psd1 in place:
+.\scripts\backup-mods.ps1
+.\scripts\verify-backup.ps1
 ```
 
 The backup copies files only, writes a SHA-256 manifest and never modifies the source; the verify script is read-only.

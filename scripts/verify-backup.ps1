@@ -4,7 +4,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string[]]$BackupRoot = @('D:\PummelBackups'),
+    [string[]]$BackupRoot,
     [switch]$All,
     [string]$BackupPath,
     [switch]$CompareSource,
@@ -13,6 +13,20 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Default backup roots come from the untracked scripts\backup.settings.psd1
+# (see backup.settings.example.psd1). -BackupRoot / -BackupPath on the command line win.
+if (-not $BackupPath -and -not $PSBoundParameters.ContainsKey('BackupRoot')) {
+    $settingsPath = Join-Path $PSScriptRoot 'backup.settings.psd1'
+    if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
+        $settings = Import-PowerShellDataFile -LiteralPath $settingsPath
+        if ($settings.ContainsKey('BackupRoots')) { $BackupRoot = @($settings['BackupRoots'] | ForEach-Object { [string]$_ }) }
+    }
+    if (-not $BackupRoot -or $BackupRoot.Count -eq 0) {
+        Write-Host "ERROR: No backup root. Pass -BackupRoot / -BackupPath or create scripts\backup.settings.psd1 (copy scripts\backup.settings.example.psd1)." -ForegroundColor Red
+        exit 1
+    }
+}
 
 function Get-NormDir([string]$p) {
     return ([System.IO.Path]::GetFullPath($p)).TrimEnd('\', '/') + '\'

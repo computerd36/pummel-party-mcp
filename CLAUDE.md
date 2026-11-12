@@ -14,9 +14,8 @@ Read `PLAN.md` for the project plan. Work phase by phase; do not skip ahead.
 
 ## Paths
 
-- Game install: `C:\Program Files (x86)\Steam\steamapps\common\Pummel Party`
-- Mod project location(s): TBD in Phase -1 → record in `docs/paths.md`
-- Backups: TBD in Phase -1 → record in `docs/paths.md` (outside this repo and outside the game folder)
+- The game install, mod project locations, protected paths and backup locations are recorded in the local, untracked `docs/paths.md` (and `scripts/backup.settings.psd1` for the backup scripts). Backups must be outside this repo and outside the game folder.
+- If `docs/paths.md` does not exist, ask the user for the paths before doing anything that touches the game folder or mod folders.
 
 ## Repo hygiene
 

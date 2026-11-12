@@ -5,14 +5,32 @@
 [CmdletBinding()]
 param(
     [string]$SourceRoot = (Join-Path $env:USERPROFILE 'AppData\LocalLow\Rebuilt Games\Pummel Party'),
-    [string]$DestinationRoot = 'D:\PummelBackups',
-    [string]$GameRoot = 'C:\Program Files (x86)\Steam\steamapps\common\Pummel Party',
+    [string]$DestinationRoot,
+    [string]$GameRoot,
     [string[]]$Include = @('WorkshopMods', 'Rulesets', 'CustomModEditorLayouts', 'BoardSaves.pps',
                            'Unlocks.pps', 'OldUnlocksBackup.pps', 'LastUsedLayout.ini')
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Defaults come from the untracked scripts\backup.settings.psd1 (see backup.settings.example.psd1).
+# Command-line parameters win over the settings file.
+$settingsPath = Join-Path $PSScriptRoot 'backup.settings.psd1'
+$settings = @{}
+if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
+    $settings = Import-PowerShellDataFile -LiteralPath $settingsPath
+}
+if (-not $PSBoundParameters.ContainsKey('DestinationRoot') -and $settings.ContainsKey('DestinationRoot')) {
+    $DestinationRoot = [string]$settings['DestinationRoot']
+}
+if (-not $PSBoundParameters.ContainsKey('GameRoot') -and $settings.ContainsKey('GameRoot')) {
+    $GameRoot = [string]$settings['GameRoot']
+}
+if ([string]::IsNullOrWhiteSpace($DestinationRoot)) {
+    Write-Host "ERROR: No destination. Pass -DestinationRoot or create scripts\backup.settings.psd1 (copy scripts\backup.settings.example.psd1)." -ForegroundColor Red
+    exit 1
+}
 
 $RequiredItems = @('WorkshopMods')
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -61,7 +79,9 @@ $destFull = [System.IO.Path]::GetFullPath($DestinationRoot)
 
 if (Test-IsInside $destFull $SourceRoot) { Stop-Refuse "DestinationRoot '$destFull' is inside SourceRoot '$SourceRoot'." }
 if (Test-IsInside $destFull $repoRoot)   { Stop-Refuse "DestinationRoot '$destFull' is inside the repo '$repoRoot'." }
-if (Test-IsInside $destFull $GameRoot)   { Stop-Refuse "DestinationRoot '$destFull' is inside the game folder '$GameRoot'." }
+if ([string]::IsNullOrWhiteSpace($GameRoot)) {
+    Write-Warning "GameRoot unknown (no -GameRoot, no GameRoot in backup.settings.psd1): skipping the 'destination inside game folder' check."
+} elseif (Test-IsInside $destFull $GameRoot) { Stop-Refuse "DestinationRoot '$destFull' is inside the game folder '$GameRoot'." }
 
 if (-not (Test-Path -LiteralPath $SourceRoot -PathType Container)) {
     Write-Host "ERROR: SourceRoot not found: $SourceRoot" -ForegroundColor Red
