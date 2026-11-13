@@ -308,15 +308,7 @@ namespace PummelPartyMcp.Tools
             }
             string newPreset = (string)pa.Value;
             string current = host.Current(preset) as string;
-            if (section.Name == "screenEffects" && newPreset != SettingsRules.Custom && current == SettingsRules.Custom && host.CustomEffectCount() > 0)
-            {
-                w.Add($"the mod has {host.CustomEffectCount()} custom screen effect(s): they stay in memory, but saving while preset '{newPreset}' is selected writes the preset's effects over PostProcessing.data, " +
-                      "so the custom effects are lost when the mod is reopened. Select \"Custom\" again before save_mod to keep them.");
-            }
-            if (section.Name == "lighting" && newPreset != SettingsRules.Custom)
-            {
-                w.Add("the custom lighting values are kept in memory and saved to Lighting.json even while a preset is selected; select \"Custom\" to see and edit them.");
-            }
+            w.AddRange(SettingsRules.PresetWarnings(section.Name, newPreset, current, section.Name == "screenEffects" ? host.CustomEffectCount() : 0));
             return w;
         }
 
@@ -353,7 +345,7 @@ namespace PummelPartyMcp.Tools
             }
             if (ed.CurrentPrefab != null)
             {
-                throw new RpcException(ErrorCodes.InvalidState, $"a prefab ('{ed.CurrentPrefab.name}') is being edited; the screenshot would show the prefab view. Return to the scene first");
+                throw new RpcException(ErrorCodes.InvalidState, $"a prefab ('{ed.CurrentPrefab.name}') is being edited; the screenshot would show the prefab view. Call close_prefab first (or use Return to Hierarchy in the editor)");
             }
             if (Flag(ed, "m_willTakePlaymodeScreenshot") || Flag(ed, "m_isTakingScreenShot"))
             {

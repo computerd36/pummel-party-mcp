@@ -85,7 +85,7 @@ namespace PummelPartyMcp.Game
             if (mg == null)
             {
                 j["supported"] = false;
-                j["reason"] = "the minigame controller does not exist yet (the play scene is still loading); retry in a moment";
+                j["reason"] = "the minigame controller does not exist: either the play scene is still loading (retry in a moment) or the round/minigame is already over and the game has dropped it (get_playtest_events still has what happened)";
                 j["players"] = new JArray();
                 return;
             }

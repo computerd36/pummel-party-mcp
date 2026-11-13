@@ -206,6 +206,30 @@ namespace PummelPartyMcp.Core
 
         public const string Custom = "Custom";
 
+        /// <summary>The warnings set_mod_settings adds when a built-in preset is selected (pure; unit-tested).</summary>
+        public static List<string> PresetWarnings(string sectionName, string newPreset, string currentPreset, int customEffectCount)
+        {
+            List<string> w = new List<string>();
+            if (sectionName == "screenEffects" && newPreset != Custom)
+            {
+                if (currentPreset == Custom && customEffectCount > 0)
+                {
+                    w.Add($"the mod has {customEffectCount} custom screen effect(s): they stay in memory, but saving while preset '{newPreset}' is selected writes the preset's effects over PostProcessing.data, " +
+                          "so the custom effects are lost when the mod is reopened. Select \"Custom\" again before save_mod to keep them.");
+                }
+                else
+                {
+                    w.Add($"PostProcessing.data is written from the ACTIVE effects (the preset's, while preset '{newPreset}' is selected), so any custom screen-effect values are overwritten on save_mod and are gone when the mod is reopened. " +
+                          "Select \"Custom\" before save_mod to keep custom effects (lighting does not have this problem).");
+                }
+            }
+            if (sectionName == "lighting" && newPreset != Custom)
+            {
+                w.Add("the custom lighting values are kept in memory and saved to Lighting.json even while a preset is selected; select \"Custom\" to see and edit them.");
+            }
+            return w;
+        }
+
         private static readonly List<SettingsSection> s_all;
 
         static SettingsRules()
@@ -357,7 +381,7 @@ namespace PummelPartyMcp.Core
             ModSettingField desc = b.Add("description", "Description", SettingKind.String, "definition", "MinigameDefinition", "description", "A minigame mod.");
             desc.Note = "multiline text, no length limit in the editor (the plugin accepts up to 16384 characters)";
             Asset(b, "previewImage", "Preview Image", "definition", "MinigameDefinition", "screenshotTexture", "Texture2D", "internal, external", null,
-                "null = none (the validator warns: Missing minigame preview image). A guid from list_assets (type Texture2D) or the asset capture_preview_image created.");
+                "null = none (the validator warns: Missing minigame preview image). A guid from list_assets (type Texture for the mod's own textures, Texture2D for built-in ones) or the asset capture_preview_image created.");
             b.Section.HiddenType = "MinigameDefinition";
             b.Section.HiddenTarget = "definition";
             b.Section.HiddenNames = new[] { "minigameNameToken", "descriptionToken", "minPlayers", "maxPlayers", "inputHelp" };

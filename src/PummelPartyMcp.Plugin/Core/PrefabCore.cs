@@ -894,7 +894,7 @@ namespace PummelPartyMcp.Core
             {
                 return $"the prefab '{prefabName}' is already open; call close_prefab first (opening another prefab from the editor would save the open one without the instance refresh)";
             }
-            return $"a prefab ('{prefabName}') is being edited; call close_prefab first";
+            return $"a prefab ('{prefabName}') is being edited; call close_prefab first (or use Return to Hierarchy in the editor)";
         }
     }
 }

@@ -224,7 +224,9 @@ namespace PummelPartyMcp.Game
             }
             j["guid"] = asset != null ? asset.guid.ToString() : null;
             j["name"] = asset != null && !string.IsNullOrEmpty(asset.name) ? asset.name : uo.name;
-            j["assetType"] = uo.GetType().Name;
+            // an imported (external) asset reports its asset class short name ("Texture", "Prop"), as list_assets and
+            // capture_preview_image do; any other object its Unity type (Transform, Material, AudioClip, ...)
+            j["assetType"] = asset is ModAssetExternal ? AssetTypeName(asset) : uo.GetType().Name;
             if (asset != null)
             {
                 j["location"] = LocationName(asset);

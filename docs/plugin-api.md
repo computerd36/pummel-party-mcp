@@ -654,8 +654,8 @@ tool `list_component_types` above). They drive the editor through its own method
   component guid, class name (`ModLight`) or UI name (`Light`), case-insensitive. A name that matches several
   components of the object is refused (`INVALID_PARAMS`; the message lists their guids).
 - **Editing context**: the scene (objects below the scene root) or, while a prefab is open in the editor, that
-  prefab's root object and its children. Objects of the other context give `INVALID_STATE` ("return to the scene
-  hierarchy first" / "open that prefab in the editor"); the plugin never opens or closes prefabs. Children of
+  prefab's root object and its children. Objects of the other context give `INVALID_STATE` ("call close_prefab first (or
+  use Return to Hierarchy in the editor)" / "open that prefab in the editor"); `open_prefab` and `close_prefab` change the context. Children of
   objects that hide their children (prefab instances, board spaces, items, texts) are not addressable (`NOT_FOUND`).
 - **Undoable like a user's edit.** The editor's undo is a snapshot of the selected objects, taken every frame by
   `EditorSystem.Update` while the left mouse button is up; an edit is undoable only if a snapshot of the object was
@@ -1894,7 +1894,7 @@ Reply: `{asset: {guid, name, assetType, location, relativePath, fileExists, size
 "details.previewImage", undoable: false, note}`. The **file exists on disk immediately** (also if you never save and
 reopen: it stays as an unused asset); the **assignment is in memory until `save_mod`**. `Data/Preview.jpg` and the Workshop
 item are not touched. `TIMEOUT`: nothing was assigned (check `list_assets` for a `Screenshot<N>` texture). Not allowed
-inside `run_batch` (several frames). `set_mod_settings` accepts any Texture2D asset guid (`previewImage`) too.
+inside `run_batch` (several frames). `set_mod_settings` accepts any texture asset guid (`previewImage`; `list_assets` types the mod's own textures `Texture`, built-in ones `Texture2D`) too.
 
 ### Board custom spaces and other limits
 
@@ -1920,7 +1920,7 @@ Saved to: Data/MinigameDefinitionData.json (written by save_mod). The minigame's
 |---|---|---|---|
 | `name` | string | none | read-only: the name is the mod's name; renaming a mod is a separate editor action (Rename dialog: renames the folder and rewrites Meta.json and the Workshop item) that the plugin never performs |
 | `description` | string | A minigame mod. | multiline text, no length limit in the editor (the plugin accepts up to 16384 characters) |
-| `previewImage` | assetRef | none | asset type Texture2D, internal, external, null allowed; null = none (the validator warns: Missing minigame preview image). A guid from list_assets (type Texture2D) or the asset capture_preview_image created. |
+| `previewImage` | assetRef | none | asset type Texture2D, internal, external, null allowed; null = none (the validator warns: Missing minigame preview image). A guid from list_assets (type Texture for the mod's own textures, Texture2D for built-in ones) or the asset capture_preview_image created. |
 
 Not shown by the editor (refused): minigameNameToken, descriptionToken, minPlayers, maxPlayers, inputHelp.
 
@@ -2431,7 +2431,10 @@ and for the mod's own assets: textures `width`/`height`/`importSettings`/`import
 Instance objects in the scene that use it; spawners, items and actions that use it are in `references`); materials `shader`,
 `knownShader`, `properties` (in the shapes `set_material` accepts) and `propertyFields`; `removable` (+ `removableReason`);
 `references`: `{count, items: [{kind, owner, ownerGuid?, where}], scanComplete, settingsScanFailed, objectsScanned,
-scanned}` where `kind` is `component`, `action`, `playerTrigger`, `material`, `setting` or `workshop`. The scan (review
+scanned}` where `kind` is `component`, `action`, `playerTrigger`, `material`, `setting` or `workshop`. A Prefab Instance holds
+one reference that the reader shows twice (`PrefabReference` and `PrefabGUID`); it is listed and counted once per instance. The same
+holds for a Spawner's prefab slots (`Prefabs[i]` and `PrefabGUIDs[i]`: once per slot) and an Item's `ItemPrefab` / `ItemPrefabGUID` and
+`DroppedItemPrefab` / `DroppedItemPrefabGUID`. The scan (review
 H1, `ReferenceCollector.Locations`) reads every scene and prefab object with the plugin's own value converter (so it finds
 what `get_object` shows: component properties, action parameters and targets, nested Display Popup choice lists), the
 Minigame player-settings triggers (the six Event Triggers and the hidden `hitTrigger`, which are not scene objects),
@@ -2473,8 +2476,11 @@ is checked before). `filterMode` and `wrapMode` are set on the existing `Texture
 parameters, the preview image) would not find the asset any more and would be saved as "none". The tool therefore
 re-points materials' texture slots itself and **refuses a compression change with `ASSET_IN_USE`** (references listed)
 while anything else uses the texture. For props the registered `Prop` object keeps its identity (only its mesh is
-replaced), so references survive; objects already placed in the scene may keep showing the previous mesh until the mod is
-reopened (reply `warnings`). If the re-import fails, the previous values are restored. Reply: `applied`, `previous`,
+replaced), so references survive. Objects already placed in the scene keep showing the previous mesh until the mod is
+reopened (`ModProp.Prop` only updates the mesh filter when the Prop object changes; reply `warnings`). A failed re-import is detected by the Prop's materials array: a successful
+`PummelOBJImporter.Load` always assigns a new `prop.mats` array, while every failure path (error log, empty result,
+discarded by `ReimportAsset`) returns before that, so an unchanged array means the re-import did not take effect and the
+previous values are restored (the old check on the Mesh reference was wrong: PummelOBJImporter.Load looks up the nested PummelMesh in the asset list, but that nested asset is never registered, so every re-import builds a NEW Mesh; it is stored in the freshly deserialised PummelProp's MeshAsset, and ModAssetList.AddAsset never copies m_meshAsset onto the registered asset, so it was always "unchanged"). Reply: `applied`, `previous`,
 `unchanged`, `reimported`, `materialSlotsRepointed`, `undoable: false`.
 
 ### `create_material` and `set_material` (write, guard OpenMod)
@@ -2514,8 +2520,7 @@ L3). Every path the removal deletes passes the link check (`LINK_REFUSED` otherw
 `PummelMod.RemoveAsset` is then called, which destroys the Unity object, deletes `<file>` and `<file>.pmeta` and unlists
 the asset; a selected (non-dirty) asset is deselected first. Before that the references are scanned (see `get_asset`): any
 reference, or an incomplete scan, refuses the call with `ASSET_IN_USE` (`error.data` = the references) unless
-`force: true`; with `force` the reply lists `referencesNulled` — they become null at the next `save_mod` (in memory they
-point at a destroyed object until then). For a prefab the scan covers Prefab Instance objects in the scene, Spawner prefab
+`force: true`; with `force` the reply lists `referencesNulled`. What the game does (code): `PummelPrefab.OnDestroy` sets `PrefabReference = null` on every Prefab Instance found by `GetComponentsInChildren` under the scene hierarchy root at once (they show "Missing Prefab"); instances inside other prefabs are not on that walk, and inactive objects probably are not either (`includeInactive` is not passed). Other references may still point at the destroyed asset in memory until the mod is reopened, so read tools (`get_object`, `get_action_graph`) can show its name and `location: external` (seen for a Spawn Prefab action parameter) or already show `{guid, missing: true}` (seen for a Spawner component's `Prefabs`, whose `PrefabGUIDs` keeps the guid). Seen in the game for an action parameter (Spawn Prefab `m_prefabs[0]`, plus `m_assetGUID` entries of `MainScene.scene`): the removed guid stays in the saved scene file and the reference reads as `{guid, missing: true}` after a reopen (the game copes: "prefab is null. Not spawning mod prefab."); other kinds of references were not checked in the game. `ModAssetReference.OnBeforeSerialize` re-derives the guid from the held object, so why the guid stays is not established from the code; on load `GetAsset` sets the asset to null when the guid is not in the list. "Saved as none" is therefore not what was seen. Also seen: after a forced material removal a material list read `[null]` rather than an empty list, and an `undo` logged "Couldn't find object with guid: <removed>" once in the game log. That the undo restores nothing for that reference is inferred from the code (`Extensions.ReadObject` returns null for an unknown guid), not observed. The plugin changes none of this. For a prefab the scan covers Prefab Instance objects in the scene, Spawner prefab
 lists, item prefabs, Spawn Prefab / Give Minigame Item / Set Player Visual action parameters (also inside the player-settings
 triggers and nested popup choices), an Item mod's use/receive/held prefabs and settings; for a texture also materials'
 texture slots, the preview image and the Workshop item's thumbnail and preview files (`kind: "workshop"`: refused without
@@ -2529,12 +2534,24 @@ prefab); the prefab's undo stack stays in the editor's list (harmless). Reply: `
 `undoable: false`; `persisted`/`note` say what is on disk now. No record of who imported an asset is kept: the boundary
 is the editor's own split between the mod's custom assets and built-in assets, checked by path.
 
-### Unverified in the game
+### Verified and unverified in the game
 
-Everything above was checked against the decompiled source and unit tests on real temp directories, not in the game:
-the audio and OBJ loaders on non-ASCII mod folder paths, what `LoadObjFile` does with malformed text, whether Unity's audio
-decoder accepts every `.mp3`/`.ogg` variant, the shipped shader property ranges, the value of `defaultShaderGuid`, and the
-visual effect of a mesh re-import on placed objects. The in-game test script is `docs/phase4-ingame-tests.local.md` (local).
+Confirmed in the game (Phase 4 test run, plugin 0.8.0, game 1.14.1k): the lighting presets
+Day, Default, Evening, Forest, Hell, Maple, Night, Outer Space, Spring, Sunrise, Vaporwave, Watermelon, Winter (+ Custom) and the
+screen-effect presets Ancient TV, Default, Old TV, Vibrant Cool, Vibrant Warm (+ Custom); lighting and screen-effect changes show
+at once without the settings window open; `capture_preview_image` writes `Assets/Textures/Screenshot1.jpg` (1920x1080) and its
+`.pmeta` at once and assigns it; new materials get the shader "Standard Decal Receiver" and renaming a material raises no dialog;
+Cutout and Fade store both `_ALPHATEST_ON` and `_ALPHABLEND_ON` (what the game's own inspector does); WAV decoding and
+`lengthSeconds`; OBJ import (a cube: 24 vertices, 12 triangles); `save_mod` with a hard-linked `.png` present succeeds (it writes only the `.pmeta`); an empty
+`McpRecovery` folder stays in a sandbox mod after an import.
+An OBJ without face lines imported as an empty Prop (0 vertices, 0 triangles) in that run, so `import_asset` now refuses it.
+
+Still not confirmed in the game: the audio and OBJ loaders on non-ASCII mod folder paths, what `LoadObjFile` does with other
+malformed text, MP3 and OGG decoding and their duration limits, the shipped shader property ranges, the value of
+`defaultShaderGuid`, the compression refusal for a texture used only by a player-settings trigger, whether the open settings
+window re-clamps values the plugin wrote, and the visual effect of a mesh re-import on placed objects (from the code they keep the previous mesh until the mod is
+reopened; not looked at in the game). The in-game test script is
+`docs/phase4-ingame-tests.local.md` (local).
 
 ### Generated asset rules
 
@@ -2736,13 +2753,19 @@ unsaved-edits flag stays set until `save_mod` (the file is saved, the mod is not
 | `create_test_mod`, `open_test_mod` | refused (leaving the mod would save the prefab outside the protection) |
 | `start_playtest` | refused (the Play button would save the prefab and leave the context); `validate_mod` works but does not see scene objects |
 
-### Unverified in the game
+### Verified and unverified in the game
 
-The calls were checked against the decompiled source, the drift test against the real assembly (IL of `CreateNewPrefab`, the
-`CurrentPrefab` setter, `PummelPrefab.Save`, the Return to Hierarchy handler) and unit tests on real temp directories; not run in
-the game: instantiating a scene subtree with live components (awake side effects of the copy), the exact bytes the real
-serializer writes (the header is read from the game's static constructor), `ForceUpdate` on many instances, and the visual result
-of closing a prefab. The in-game script is `docs/phase4-ingame-tests.local.md` (local), section C.
+Confirmed in the game (Phase 4 test run): a prefab made from scene objects gets new object and component guids, its root is at
+0/0/1 and renamed to the prefab name, root `active` is false while the prefab is not open and true while it is open;
+`duplicate_object` on the prefab root puts the copy inside the prefab
+as a child of the root; `close_prefab` refreshed 2 instances without a problem and the scene undo stack is untouched by prefab
+edits; with a read-only `.pfab`, `close_prefab` and `save_mod` return `INTERNAL`, the bytes stay unchanged, the edits are kept
+and a retry works.
+
+Not confirmed in the game: the awake side effects of the scene-subtree copy with live components in every case, the exact
+bytes the real serializer writes (the header is read from the game's static constructor), `ForceUpdate`
+on many instances, and the visual result of closing a prefab. The in-game script is `docs/phase4-ingame-tests.local.md`
+(local), section C.
 
 ## Validation, playtest and batch
 
@@ -2853,7 +2876,7 @@ mods).
 **The tool, in order** (all before the commit point refuse with nothing changed):
 
 1. Refusals: a create/open load pending (`BUSY_LOADING`); an editor dialog open; a prefab being edited (the plugin never
-   saves a prefab implicitly: return to the scene by hand); a BoardSpace mod (it has no play scene: the editor would
+   saves a prefab implicitly: call `close_prefab` first); a BoardSpace mod (it has no play scene: the editor would
    hide itself and stay in `EnteringPlayMode`); `WorkshopController.CurrentBackgroundLoadMod != null` or the toolbar's
    1 s background-load timer running ("Subscribed mods are being installed in the background", as the disabled button's
    tooltip; calling `SetEditorState` then would leave the editor stuck in `EnteringPlayMode`);
@@ -2998,8 +3021,10 @@ of the current space), `state` (`BoardPlayerState` name) and `position`. `board`
 board controller does not exist yet the result is `board: {supported: false, reason}` with an empty `players`. Item mods
 and other types: `supported: false`, `reason`, empty `players`.
 
-While the play scene is still loading (state `PlayMode` but no minigame controller yet) the result is
-`supported: false` with `reason` "the minigame controller does not exist yet" and an empty `players`.
+While there is no minigame controller (state `PlayMode`) the result is `supported: false` with a `reason` and an empty
+`players`. Two situations look the same from the plugin, so the reason names both: the play scene is still loading (retry in a
+moment), or the round/minigame is already over and the game has dropped the controller (`get_playtest_events` still has what
+happened).
 
 #### `get_playtest_events` (read)
 
@@ -3393,7 +3418,7 @@ Asset/object references (property values, action targets, settings) use one shap
 |---|---|
 | `guid` | guid of the mod asset entry (for scene objects: the referenced component's `ModBehaviour` guid, for a `Transform` the `ModTransform` guid); null if unregistered |
 | `name` | asset name, or the Unity object name |
-| `assetType` | Unity type of the referenced object (`Transform`, `Material`, `AudioClip`, ...) or asset class short name |
+| `assetType` | for an imported (external) asset its asset class short name, as `list_assets` and `capture_preview_image` show it (`Texture`, `Prop`, `Material`, ...; `set_mod_settings` and `get_object` agree); for anything else the Unity type of the referenced object (`Transform`, `AudioClip`, ...) |
 | `location` | `internal` (built-in), `external` (mod file), `runtime` (scene object) |
 | `objectGuid`, `objectName` | for scene objects: `ModTransform` guid and name of the GameObject (use with `get_object`) |
 | `registered: false` | object not found in the asset registry (the scene file would store it as null) |

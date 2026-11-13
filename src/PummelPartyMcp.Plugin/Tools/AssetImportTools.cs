@@ -25,6 +25,7 @@ namespace PummelPartyMcp.Tools
             public string Path;
             public string Name;
             public AssetImportKind? Type;
+            public string TypeText; // as the caller wrote it
         }
 
         private sealed class SettingsArgs
@@ -102,7 +103,7 @@ namespace PummelPartyMcp.Tools
                     default: throw RpcException.InvalidParams("'type' must be Texture, Prop (Mesh) or AudioClip (Audio); it is optional and only checked against the file");
                 }
             }
-            return new ImportArgs { Path = path, Name = name, Type = kind };
+            return new ImportArgs { Path = path, Name = name, Type = kind, TypeText = type };
         }
 
         private static SettingsArgs ParseSettings(ToolContext ctx)
@@ -190,7 +191,7 @@ namespace PummelPartyMcp.Tools
             EditContext.RequireEditReady(ed);
             if (noPrefab && ed.CurrentPrefab != null)
             {
-                throw new RpcException(ErrorCodes.InvalidState, $"a prefab ('{ed.CurrentPrefab.name}') is being edited; return to the scene first");
+                throw new RpcException(ErrorCodes.InvalidState, $"a prefab ('{ed.CurrentPrefab.name}') is being edited; call close_prefab first (or use Return to Hierarchy in the editor)");
             }
             return new Ready { Ed = ed, Mod = mod, AssetsFull = AssetAccess.AssetsFolderOf(mod) };
         }
@@ -251,7 +252,8 @@ namespace PummelPartyMcp.Tools
             }
             else if (a is PummelProp pp && own)
             {
-                Mesh mesh = pp.MeshAsset?.Mesh;
+                // a re-import builds a NEW Mesh that only the Prop (Prop.mesh, a plain public field) holds; the nested MeshAsset keeps the old one
+                Mesh mesh = pp.PropInstance?.mesh ?? pp.MeshAsset?.Mesh;
                 if (mesh != null)
                 {
                     int tris = 0;
@@ -457,7 +459,7 @@ namespace PummelPartyMcp.Tools
             ImportSource src = AssetImportRules.CheckSource(args.Path, r.AssetsFull, limits);
             if (args.Type.HasValue && args.Type.Value != src.Kind)
             {
-                throw RpcException.InvalidParams($"'type' {args.Type.Value} does not match the file: a {src.Extension} file is a {AssetImportRules.TypeNameOf(src.Kind)}");
+                throw RpcException.InvalidParams(AssetImportRules.TypeMismatchMessage(args.TypeText, args.Type.Value, src.Extension, src.Kind));
             }
             bool derived = args.Name == null;
             string stem = args.Name ?? AssetImportRules.DeriveStem(src.StemRaw);
@@ -685,7 +687,11 @@ namespace PummelPartyMcp.Tools
             inv.Commit(CommitBudgets.ImportSettings); // L7: a re-import decodes the file again
             services.Observe();
             UnityEngine.Object oldObject = asset.unityObjectAddressable;
-            Mesh oldMesh = (asset as PummelProp)?.MeshAsset?.Mesh;
+            // A re-import of an OBJ reuses the registered Prop object; the new Mesh is stored in a throw-away PummelProp (AddAsset does not copy
+            // m_meshAsset), so comparing MeshAsset.Mesh proves nothing. What a
+            // successful PummelOBJImporter.Load always does is give the Prop a NEW materials array (prop.mats = new Material[...]);
+            // every failure path (error log, empty result) returns before that line and ReimportAsset discards the result.
+            Material[] oldMats = (asset as PummelProp)?.PropInstance?.mats;
             List<string> applied = new List<string>();
             string failure = null;
             try
@@ -710,9 +716,15 @@ namespace PummelPartyMcp.Tools
                             slot.Key.UnityMaterial.SetTexture(slot.Value, (Texture)now);
                         }
                     }
-                    else if (asset is PummelProp pp && ReferenceEquals(pp.MeshAsset?.Mesh, oldMesh))
+                    else if (asset is PummelProp pp)
                     {
-                        throw new InvalidOperationException("the re-import did not produce a new mesh (see get_log)");
+                        UnityEngine.Object nowObj = asset.unityObjectAddressable;
+                        Material[] nowMats = pp.PropInstance?.mats;
+                        bool reimported = AssetImportRules.ObjReimportTookEffect(nowObj, oldObject, nowMats, oldMats);
+                        if (!reimported)
+                        {
+                            throw new InvalidOperationException("the re-import did not take effect: the game logged an error and kept the previous mesh (see get_log)");
+                        }
                     }
                 }
                 else
@@ -783,7 +795,7 @@ namespace PummelPartyMcp.Tools
             }
             if (asset is PummelProp)
             {
-                result["warnings"] = new JArray("objects already placed in the scene may keep showing the previous mesh until the mod is reopened; the saved data is not affected");
+                result["warnings"] = new JArray("objects already placed in the scene keep showing the previous mesh until the mod is reopened; the saved data is not affected");
             }
             if (before != null)
             {
@@ -1128,7 +1140,7 @@ namespace PummelPartyMcp.Tools
                 throw new RpcException(ErrorCodes.AssetInUse,
                     $"'{a.name}' is still used ({refs.Items.Count} reference(s){(refs.Incomplete ? ", and the scan could not read everything" : string.Empty)}): " +
                     string.Join("; ", refs.Items.Take(12).Select(ReferenceScan.Describe).ToArray()) +
-                    ". Clear them first, or pass force:true to remove it anyway (the references then become null).",
+                    ". Clear them first, or pass force:true to remove it anyway (the references are then lost: they read as missing after the mod is reopened, at least for action parameters).",
                     AssetAccess.RefsJson(refs));
             }
 
@@ -1186,7 +1198,7 @@ namespace PummelPartyMcp.Tools
             if (refs.Items.Count > 0)
             {
                 result["referencesNulled"] = new JArray(refs.Items.Select(ReferenceScan.ToJson).ToArray());
-                result["referencesNote"] = "force was used: these references now point at a destroyed object in memory and are saved as none at the next save_mod (check them with get_object)";
+                result["referencesNote"] = "force was used. The game itself sets every Prefab Instance under the scene hierarchy to none at once when a prefab is removed (they show as Missing Prefab); instances inside other prefabs (and probably inactive scene objects) are not reached by that walk. Other references may still point at the destroyed asset in memory, so until the mod is reopened read tools (get_object, get_action_graph, ...) can still show the removed asset's name (seen for an action parameter) or already show it as missing (seen for a Spawner component's Prefabs). Seen in the game for an action parameter (Spawn Prefab): the removed guid stays in the saved scene file and the reference reads as {guid, missing: true} after the mod is reopened (the game copes at run time); other kinds of references were not checked in the game. An undo after the forced removal logged \"Couldn't find object with guid\" once (seen); that it restores nothing for that reference is inferred from the code, not observed. Save and reopen the mod to see the real state.";
             }
             inv.Complete(result);
         }

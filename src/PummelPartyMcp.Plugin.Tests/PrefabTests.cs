@@ -402,6 +402,26 @@ namespace PummelPartyMcp.Tests
             JObject spawner = JObject.Parse($"{{ \"Prefabs\": {{ \"value\": [ {{ \"guid\": \"{guid}\", \"name\": \"Crate\" }} ] }} }}");
             JObject item = JObject.Parse($"{{ \"ItemPrefab\": {{ \"value\": {{ \"guid\": \"{guid}\" }} }} }}");
             JObject action = JObject.Parse($"{{ \"Triggers\": {{ \"value\": [ {{ \"actions\": [ {{ \"className\": \"SpawnPrefabAction\", \"parameters\": {{ \"Prefabs\": [ {{ \"guid\": \"{guid}\" }} ] }} }}, {{ \"className\": \"SetPlayerVisualAction\", \"parameters\": {{ \"Prefab\": {{ \"guid\": \"{guid}\" }} }} }} ] }} ] }} }}");
+            JObject instanceBoth = JObject.Parse($"{{ \"PrefabReference\": {{ \"value\": {{ \"guid\": \"{guid}\", \"name\": \"Crate\" }} }}, \"PrefabGUID\": {{ \"value\": \"{guid}\" }} }}");
+            ReferenceCollector.Result both = ReferenceCollector.Collect(new[] { new ReferenceSource { Kind = "component", Owner = "Crate1 / Prefab Instance", OwnerGuid = "o1", Data = instanceBoth } }, guid);
+            Check("a Prefab Instance is one reference (PrefabReference and PrefabGUID are the same)", both.Items.Count == 1 && both.Items[0].Where.StartsWith("PrefabReference"));
+            ReferenceCollector.Result onlyGuid = ReferenceCollector.Collect(new[] { new ReferenceSource { Kind = "component", Owner = "x", Data = JObject.Parse($"{{ \"PrefabGUID\": {{ \"value\": \"{guid}\" }} }}") } }, guid);
+            Check("a Prefab Instance whose asset did not resolve is still found by its guid", onlyGuid.Items.Count == 1);
+            ReferenceCollector.Result twoInst = ReferenceCollector.Collect(new[]
+            {
+                new ReferenceSource { Kind = "component", Owner = "A", Data = instanceBoth }, new ReferenceSource { Kind = "component", Owner = "B", Data = instanceBoth },
+            }, guid);
+            Check("two instances count as two references", twoInst.Items.Count == 2);
+            string g2 = "99999999-2222-3333-4444-555555555555";
+            JObject spawnerBoth = JObject.Parse($"{{ \"Prefabs\": {{ \"value\": [ {{ \"guid\": \"{guid}\" }}, {{ \"guid\": \"{g2}\" }}, {{ \"guid\": \"{guid}\" }} ] }}, \"PrefabGUIDs\": {{ \"value\": [ \"{guid}\", \"{g2}\", \"{guid}\" ] }} }}");
+            Check("a spawner's prefab list shows each entry twice (Prefabs and PrefabGUIDs): counted once per entry",
+                ReferenceCollector.Collect(new[] { new ReferenceSource { Kind = "component", Owner = "S", Data = spawnerBoth } }, guid).Items.Count == 2
+                && ReferenceCollector.Collect(new[] { new ReferenceSource { Kind = "component", Owner = "S", Data = spawnerBoth } }, g2).Items.Count == 1);
+            JObject spawnerGuidOnly = JObject.Parse($"{{ \"Prefabs\": {{ \"value\": [ {{ \"guid\": \"{g2}\", \"missing\": true }} ] }}, \"PrefabGUIDs\": {{ \"value\": [ \"{guid}\" ] }} }}");
+            Check("a spawner entry that only the guid side holds is still found", ReferenceCollector.Collect(new[] { new ReferenceSource { Kind = "component", Owner = "S", Data = spawnerGuidOnly } }, guid).Items.Count == 1);
+            JObject itemBoth = JObject.Parse($"{{ \"ItemPrefab\": {{ \"value\": {{ \"guid\": \"{guid}\" }} }}, \"ItemPrefabGUID\": {{ \"value\": \"{guid}\" }}, \"DroppedItemPrefab\": {{ \"value\": {{ \"guid\": \"{guid}\" }} }}, \"DroppedItemPrefabGUID\": {{ \"value\": \"{guid}\" }} }}");
+            ReferenceCollector.Result itemRes = ReferenceCollector.Collect(new[] { new ReferenceSource { Kind = "component", Owner = "I", Data = itemBoth } }, guid);
+            Check("an item's prefab and dropped prefab count once each", itemRes.Items.Count == 2 && itemRes.Items.Any(i => i.Where.StartsWith("ItemPrefab.")) && itemRes.Items.Any(i => i.Where.StartsWith("DroppedItemPrefab.")));
             foreach ((string what, JObject j, int expected) in new[] { ("a prefab instance", instance, 1), ("a spawner", spawner, 1), ("an item", item, 1), ("Spawn Prefab and Set Player Visual actions", action, 2) })
             {
                 List<string> hits = new List<string>();
@@ -482,7 +502,7 @@ namespace PummelPartyMcp.Tests
                 && PrefabContextRules.Message("open_prefab", "P").Contains("close_prefab") && PrefabContextRules.Message("create_prefab", "P").Contains("close_prefab"));
             Check("import_asset, set_import_settings and remove_asset require no open prefab; set_material and create_material do not",
                 assetTools.Split(new[] { "RequireReady(noPrefab: true)" }, StringSplitOptions.None).Length == 4 && assetTools.Split(new[] { "RequireReady(noPrefab: false)" }, StringSplitOptions.None).Length == 3);
-            Check("the lifecycle tools and the playtest tools still refuse while a prefab is open", modTools.Contains("ed.CurrentPrefab != null") && playTools.Contains("ed.CurrentPrefab != null") && playTools.Contains("Return to the scene by hand first"));
+            Check("the lifecycle tools and the playtest tools still refuse while a prefab is open", modTools.Contains("ed.CurrentPrefab != null") && playTools.Contains("ed.CurrentPrefab != null") && playTools.Contains("Call close_prefab first"));
             Check("close_prefab refuses when no prefab is open", tools.Contains("no prefab is being edited") && PrefabContextRules.OnlyWhilePrefabOpen.Contains("close_prefab"));
             string objectTools = File.ReadAllText(Path.Combine(plugin, "Core", "EditRules.cs"));
             Check("create_object kind prefabInstance is disabled inside a prefab (NotInPrefab)", objectTools.Contains("Kind = \"prefabInstance\"") && objectTools.Contains("NotInPrefab = true") && objectTools.Contains("is disabled while a prefab is being edited"));

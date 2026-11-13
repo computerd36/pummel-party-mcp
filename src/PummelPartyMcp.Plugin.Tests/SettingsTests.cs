@@ -152,6 +152,12 @@ namespace PummelPartyMcp.Tests
                 .All(f => !(f.GameType ?? "").Contains("Workshop") && !(f.Member ?? "").ToLowerInvariant().Contains("publish") && !(f.Member ?? "").ToLowerInvariant().Contains("workshop")));
             Check("fields count: lighting " + Sec("Minigame", "lighting").Fields.Count + ", screenEffects " + Sec("Minigame", "screenEffects").Fields.Count,
                 Sec("Minigame", "lighting").Fields.Count == 33 && Sec("Minigame", "screenEffects").Fields.Count == 65);
+            Check("screenEffects: a built-in preset always warns (active effects are what is saved)",
+                SettingsRules.PresetWarnings("screenEffects", "Old TV", "Default", 0) is List<string> pw && pw.Count == 1 && pw[0].Contains("ACTIVE") && pw[0].Contains("Custom") && pw[0].Contains("overwritten"));
+            Check("screenEffects: leaving Custom with custom effects keeps the specific warning",
+                SettingsRules.PresetWarnings("screenEffects", "Old TV", "Custom", 2) is List<string> pw2 && pw2.Count == 1 && pw2[0].Contains("2 custom screen effect"));
+            Check("screenEffects: preset Custom does not warn; lighting keeps its own warning",
+                SettingsRules.PresetWarnings("screenEffects", "Custom", "Default", 3).Count == 0 && SettingsRules.PresetWarnings("lighting", "Day", "Custom", 0).Count == 1 && SettingsRules.PresetWarnings("lighting", "Custom", "Day", 0).Count == 0);
             Check("lighting and screenEffects are the same for both mod types", Sec("Board", "lighting").Fields.Count == Sec("Minigame", "lighting").Fields.Count
                 && Sec("Board", "screenEffects").Fields.Count == Sec("Minigame", "screenEffects").Fields.Count);
             Check("custom spaces are read-only with a reason", !Sec("Board", "customSpaces").Fields[0].Writable && Sec("Board", "customSpaces").Fields[0].ReadOnlyReason.Contains("index"));

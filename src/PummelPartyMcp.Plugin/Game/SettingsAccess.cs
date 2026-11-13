@@ -414,6 +414,9 @@ namespace PummelPartyMcp.Game
             return true;
         }
 
+        /// <summary>list_assets types the mod's own textures as Texture and built-in ones as Texture2D; the field's type name is the Unity type.</summary>
+        private static string ListTypeHint(string assetType) => assetType == "Texture2D" ? "Texture for the mod's own, Texture2D for built-in" : assetType;
+
         public string CheckAsset(ModSettingField f, string guid)
         {
             Type expected = f.AssetTypes != null && f.AssetTypes.Length > 0 && f.AssetTypes[0] == "AudioClip" ? typeof(AudioClip)
@@ -425,7 +428,7 @@ namespace PummelPartyMcp.Game
             ModAsset asset = m_ed.GetAssetWithGuid(new SerializableGuid(Guid.Parse(guid)));
             if (asset == null)
             {
-                return $"no asset with guid {guid}; use a guid from list_assets (type {f.AssetTypes[0]}{(f.AssetLocations.Contains("internal") ? ", includeBuiltIn for built-in ones" : "")}); a scene object's guid is not an asset";
+                return $"no asset with guid {guid}; use a guid from list_assets (type {ListTypeHint(f.AssetTypes[0])}{(f.AssetLocations.Contains("internal") ? ", includeBuiltIn for built-in ones" : "")}); a scene object's guid is not an asset";
             }
             if (!asset.enabled)
             {

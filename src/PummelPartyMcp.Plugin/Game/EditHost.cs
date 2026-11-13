@@ -89,7 +89,7 @@ namespace PummelPartyMcp.Game
                 if (prefab != null && ctx == ed.m_hierarchyRoot)
                 {
                     throw new RpcException(ErrorCodes.InvalidState,
-                        $"'{mt.name}' is a scene object, but the prefab '{prefab.name}' is being edited; return to the scene hierarchy first");
+                        $"'{mt.name}' is a scene object, but the prefab '{prefab.name}' is being edited; call close_prefab first (or use Return to Hierarchy in the editor)");
                 }
                 string prefabName = ctx != null ? ctx.GetComponent<ModPrefab>()?.targetPrefab?.name ?? ctx.name : null;
                 throw new RpcException(ErrorCodes.InvalidState, prefabName != null

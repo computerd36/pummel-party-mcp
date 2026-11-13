@@ -289,6 +289,9 @@ namespace PummelPartyMcp.Core
             M("ModAssetExternal", "Save", use + " (import settings, materials)");
             M("ModAssetExternal", "Rename", "create_material (name)", "System.String");
             P("PummelProp", "MeshAsset");
+            P("PummelProp", "PropInstance", "set_import_settings (detects a failed OBJ re-import)");
+            F("Prop", "mesh", "UnityEngine.Mesh", "get_asset (the prop's current mesh; the nested MeshAsset is stale after a re-import)");
+            F("Prop", "mats", "UnityEngine.Material[]", "set_import_settings (a good OBJ re-import always sets a new array)");
             P("PummelMesh", "RecalculateNormals", "set_import_settings");
             M("PummelTexture", "GetCompression", "get_asset, set_import_settings");
             M("PummelTexture", "GetFilterMode", "get_asset, set_import_settings");

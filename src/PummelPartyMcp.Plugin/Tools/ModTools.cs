@@ -454,7 +454,7 @@ namespace PummelPartyMcp.Tools
             {
                 // Leaving the prefab context (SetCurrentMod -> CurrentPrefab = null) would save that prefab.
                 throw new RpcException(ErrorCodes.InvalidState,
-                    $"a prefab ('{ed.CurrentPrefab.name}') is being edited in '{EditorAccess.ModFolderName(current)}'; return to the scene first");
+                    $"a prefab ('{ed.CurrentPrefab.name}') is being edited in '{EditorAccess.ModFolderName(current)}'; call close_prefab first (or use Return to Hierarchy in the editor)");
             }
             bool? dirty = s_services != null ? s_services.HasUnsavedEdits(ed) : EditorAccess.IsDirty(ed);
             if (dirty != false && !discardUnsaved)

@@ -852,6 +852,16 @@ namespace PummelPartyMcp.Core
             {
                 r.Incomplete = true;
             }
+            // ComponentReader shows some references twice: the resolved asset (PrefabReference, Prefabs[i], ItemPrefab, DroppedItemPrefab) and
+            // its backing guid (PrefabGUID, PrefabGUIDs[i], ItemPrefabGUID, DroppedItemPrefabGUID). That is ONE reference: drop the guid-side hit
+            // only when its partner at the same index hit; keep it when only the guid side resolves.
+            if (s.Kind == "component")
+            {
+                foreach (string[] pair in GuidPairs)
+                {
+                    found.RemoveAll(f => IsPath(f, pair[1]) && found.Contains(pair[0] + f.Substring(pair[1].Length)));
+                }
+            }
             foreach (string path in found)
             {
                 string kind = s.Kind == "component" && path.Contains("actions[") ? "action" : s.Kind;
@@ -862,6 +872,17 @@ namespace PummelPartyMcp.Core
                 }
             }
         }
+
+        private static readonly string[][] GuidPairs =
+        {
+            new[] { "PrefabReference", "PrefabGUID" },
+            new[] { "Prefabs", "PrefabGUIDs" },
+            new[] { "ItemPrefab", "ItemPrefabGUID" },
+            new[] { "DroppedItemPrefab", "DroppedItemPrefabGUID" },
+        };
+
+        private static bool IsPath(string found, string root) =>
+            found == root || found.StartsWith(root + ".", StringComparison.Ordinal) || found.StartsWith(root + "[", StringComparison.Ordinal);
 
         public static Result Collect(IEnumerable<ReferenceSource> sources, string guid)
         {

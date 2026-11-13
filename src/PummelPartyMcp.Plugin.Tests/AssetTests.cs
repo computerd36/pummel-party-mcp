@@ -293,7 +293,27 @@ namespace PummelPartyMcp.Tests
             Check("a PNG with a truncated header is refused", CodeOf(() => Check1(Write(src, "short.png", Png(4, 4).Take(20).ToArray()), assets)) == ErrorCodes.InvalidParams);
             Check("an OBJ with NUL bytes in the first block is refused", CodeOf(() => Check1(Write(src, "nul.obj", Obj().Concat(new byte[] { 0 }).ToArray()), assets)) == ErrorCodes.InvalidParams);
             Check("an OBJ without vertex lines is refused", CodeOf(() => Check1(Write(src, "novert.obj", Encoding.ASCII.GetBytes("# nothing\nvn 0 0 1\nf 1 2 3\n")), assets)) == ErrorCodes.InvalidParams);
-            Check("'vt' and 'vn' lines are not vertex lines", Check1(Write(src, "vt.obj", Encoding.ASCII.GetBytes("vt 0 0\nvn 0 0 1\nv 1 2 3\n")), assets).VertexLines == 1);
+            {
+                object prop = new object();
+                object[] matsOld = new object[1];
+                Check("OBJ re-import: same Prop, same Mesh, new materials array = took effect (the reused-object case)", AssetImportRules.ObjReimportTookEffect(prop, prop, new object[1], matsOld));
+                Check("OBJ re-import: a new Prop object = took effect", AssetImportRules.ObjReimportTookEffect(new object(), prop, matsOld, matsOld));
+                Check("OBJ re-import: nothing replaced = failed (error logged, previous state kept)", !AssetImportRules.ObjReimportTookEffect(prop, prop, matsOld, matsOld));
+                Check("OBJ re-import: no Prop object = failed", !AssetImportRules.ObjReimportTookEffect(null, prop, null, matsOld));
+            }
+            Check("an OBJ without face lines is refused (the game would import an empty mesh)", CodeOf(() => Check1(Write(src, "noface.obj", Encoding.ASCII.GetBytes("v 0 0 0\nv 1 0 0\nv 0 1 0\n")), assets)) == ErrorCodes.InvalidParams);
+            Check("the no-face refusal names the face lines", MessageOf(() => Check1(Path.Combine(src, "noface.obj"), assets)).Contains("no face ('f ')"));
+            Check("an OBJ with tab-separated face lines passes", Check1(Write(src, "tabface.obj", Encoding.ASCII.GetBytes("v 0 0 0\nv 1 0 0\nv 0 1 0\nf\t1 2 3\n")), assets).VertexLines == 3);
+            Check("an indented f line is a face line (not refused as faceless)", Check1(Write(src, "indf.obj", Encoding.ASCII.GetBytes("v 0 0 0\nv 1 0 0\nv 0 1 0\n  f 1 2 3\n")), assets).VertexLines == 3);
+            Check("indented v lines (spaces and tabs) count as vertex lines", AssetImportRules.CountObjLines(Write(src, "indv.obj", Encoding.ASCII.GetBytes("  v 0 0 0\n\tv 1 0 0\nv 0 1 0\nf 1 2 3\n"))).Vertices == 3);
+            Check("a UTF-8 BOM before the first line does not hide its keyword", AssetImportRules.CountObjLines(Write(src, "bom.obj", new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.ASCII.GetBytes("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")).ToArray())) is AssetImportRules.ObjCounts oc && oc.Vertices == 3 && oc.Faces == 1);
+            Check("an indented-and-BOM OBJ passes the source check", Check1(Write(src, "bomf.obj", new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.ASCII.GetBytes("v 0 0 0\nv 1 0 0\nv 0 1 0\n\tf 1 2 3\n")).ToArray()), assets).VertexLines == 3);
+            Check("only whitespace and a BOM are skipped: other prefixes still do not count", AssetImportRules.CountObjLines(Write(src, "x.obj", Encoding.ASCII.GetBytes("x v 0 0 0\n#f 1 2 3\n"))).Vertices == 0);
+            Check("CountObjLines counts face lines", AssetImportRules.CountObjLines(Path.Combine(src, "tabface.obj")).Faces == 1 && AssetImportRules.CountObjLines(Path.Combine(src, "noface.obj")).Faces == 0);
+            Check("type mismatch message echoes the caller's word and names both types",
+                AssetImportRules.TypeMismatchMessage("Prop", AssetImportKind.Mesh, ".png", AssetImportKind.Texture) is string tm && tm.Contains("'type' Prop ") && tm.Contains("a .png file is a Texture") && !tm.Contains("Mesh"));
+            Check("type mismatch message without the original word falls back to the public name", AssetImportRules.TypeMismatchMessage(null, AssetImportKind.Audio, ".obj", AssetImportKind.Mesh).Contains("'type' AudioClip "));
+            Check("'vt' and 'vn' lines are not vertex lines", Check1(Write(src, "vt.obj", Encoding.ASCII.GetBytes("vt 0 0\nvn 0 0 1\nv 1 2 3\nf 1 1 1\n")), assets).VertexLines == 1);
             Check("zero-byte files are refused for every type", AssetImportRules.AllowedExtensions.All(e => CodeOf(() => Check1(Write(src, "empty" + e, new byte[0]), assets)) == ErrorCodes.InvalidParams));
             Check("zero-byte refusal says so", MessageOf(() => Check1(Path.Combine(src, "empty.png"), assets)).Contains("empty"));
 

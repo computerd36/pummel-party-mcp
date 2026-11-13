@@ -149,6 +149,19 @@ namespace PummelPartyMcp.Core
             }
         }
 
+        /// <summary>
+        /// Did a Prop re-import take effect? PummelOBJImporter.Load reuses the registered Prop object (the new Mesh lands in a throw-away PummelProp, so the old Mesh reference check always failed); a
+        /// successful Load always ends by assigning a NEW materials array (prop.mats = new Material[...]) while every failure path returns before it.
+        /// Pass the objects as the game holds them (the materials arrays as plain objects); a false result is a real failure, a good re-import
+        /// never gives false (a new Prop object or a new array is enough).
+        /// </summary>
+        public static bool ObjReimportTookEffect(object propNow, object propBefore, object matsNow, object matsBefore) =>
+            propNow != null && (!ReferenceEquals(propNow, propBefore) || (matsNow != null && !ReferenceEquals(matsNow, matsBefore)));
+
+        /// <summary>The refusal for an import_asset 'type' that does not fit the file: echoes what the caller wrote and names the file's type.</summary>
+        public static string TypeMismatchMessage(string typeAsWritten, AssetImportKind requested, string extension, AssetImportKind actual) =>
+            $"'type' {typeAsWritten ?? TypeNameOf(requested)} does not match the file: a {extension} file is a {TypeNameOf(actual)} (asked for {TypeNameOf(requested)})";
+
         // ------------------------------------------------------------------ names
 
         public static bool IsReservedDeviceName(string nameOrFile)
@@ -539,6 +552,10 @@ namespace PummelPartyMcp.Core
                 {
                     throw Refuse($"the OBJ file has more than {MaxObjFaceLines} face lines (limit of this plugin; the editor has none)");
                 }
+                if (c.Faces == 0)
+                {
+                    throw Refuse("the OBJ file has no face ('f ') lines (the game would import it as an empty mesh with 0 triangles); it was not imported");
+                }
                 s.VertexLines = c.Vertices;
                 s.FaceLines = c.Faces;
                 s.Checks.Add($"copy: text OBJ with {c.Vertices} vertex lines (<= {MaxObjVertexLines}) and {c.Faces} face lines (<= {MaxObjFaceLines})");
@@ -659,7 +676,8 @@ namespace PummelPartyMcp.Core
                     {
                         break; // CheckCopy counts vertex and face lines of the copy
                     }
-                    s.VertexLines = CountVertexLines(path);
+                    ObjCounts oc = CountObjLines(path);
+                    s.VertexLines = oc.Vertices;
                     if (s.VertexLines == 0)
                     {
                         throw Refuse("the OBJ file has no vertex ('v ') lines; " + not);
@@ -668,7 +686,11 @@ namespace PummelPartyMcp.Core
                     {
                         throw Refuse($"the OBJ file has more than {MaxObjVertexLines} vertex lines (limit of this plugin; the editor has none)");
                     }
-                    s.Checks.Add(tag + $"text OBJ with {s.VertexLines} vertex lines (<= {MaxObjVertexLines})");
+                    if (oc.Faces == 0)
+                    {
+                        throw Refuse("the OBJ file has no face ('f ') lines (the game would import it as an empty mesh with 0 triangles); " + not);
+                    }
+                    s.Checks.Add(tag + $"text OBJ with {s.VertexLines} vertex lines (<= {MaxObjVertexLines}) and at least one face line");
                     break;
             }
             if (s.Kind == AssetImportKind.Audio && !onCopy)
@@ -847,11 +869,14 @@ namespace PummelPartyMcp.Core
             public int Faces;
         }
 
-        /// <summary>Counts "v " and "f " lines (or with a tab) in the whole file, stopping early once either is past its cap.</summary>
+        /// <summary>Counts "v " and "f " lines (or with a tab; indentation and a leading UTF-8 BOM are skipped) in the whole file, stopping early once either is past its cap.</summary>
+        private static readonly byte[] Utf8Bom = { 0xEF, 0xBB, 0xBF };
+
         public static ObjCounts CountObjLines(string path)
         {
             ObjCounts c = new ObjCounts();
             int state = 0; // 0 line start, 1 saw 'v', 3 saw 'f', 2 elsewhere in a line
+            int bomPos = 0;
             byte[] buf = new byte[64 * 1024];
             using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
             {
@@ -861,6 +886,15 @@ namespace PummelPartyMcp.Core
                     for (int i = 0; i < n; i++)
                     {
                         byte ch = buf[i];
+                        if (bomPos < 3)
+                        {
+                            if (ch == Utf8Bom[bomPos])
+                            {
+                                bomPos++; // a leading UTF-8 BOM is not part of the first keyword
+                                continue;
+                            }
+                            bomPos = 3;
+                        }
                         if (ch == (byte)'\n' || ch == (byte)'\r')
                         {
                             state = 0;
@@ -868,6 +902,10 @@ namespace PummelPartyMcp.Core
                         }
                         if (state == 0)
                         {
+                            if (ch == (byte)' ' || ch == (byte)'\t')
+                            {
+                                continue; // indentation before the keyword
+                            }
                             state = ch == (byte)'v' ? 1 : ch == (byte)'f' ? 3 : 2;
                         }
                         else if (state == 1 || state == 3)

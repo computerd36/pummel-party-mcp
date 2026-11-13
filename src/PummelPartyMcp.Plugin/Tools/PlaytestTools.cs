@@ -106,7 +106,7 @@ namespace PummelPartyMcp.Tools
             if (ed.CurrentPrefab != null)
             {
                 result["note"] = $"a prefab ('{ed.CurrentPrefab.name}') is being edited, so the scene is hidden and the validator does not see scene objects; " +
-                                 "the Play button leaves the prefab first. Return to the scene for a meaningful result.";
+                                 "the Play button leaves the prefab first. Call close_prefab for a meaningful result.";
             }
             else if (run.ValidatorListCreatedNow)
             {
@@ -135,7 +135,7 @@ namespace PummelPartyMcp.Tools
                 // The Play button saves the open prefab and returns to the scene (CurrentPrefab = null) before validating;
                 // the plugin never saves a prefab implicitly.
                 throw new RpcException(ErrorCodes.InvalidState,
-                    $"a prefab ('{ed.CurrentPrefab.name}') is being edited; the Play button would save it and return to the scene. Return to the scene by hand first");
+                    $"a prefab ('{ed.CurrentPrefab.name}') is being edited; the Play button would save it and return to the scene. Call close_prefab first (or use Return to Hierarchy in the editor)");
             }
             if (mod.ModType == PummelModType.BoardSpace)
             {
