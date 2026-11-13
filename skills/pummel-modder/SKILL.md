@@ -42,7 +42,7 @@ You drive the Mod Editor of a running Pummel Party through MCP tools. A plugin i
 
 Use `run_batch` for many steps (1-100 steps `{tool, params?, id?}`, runs in one turn, up to 120 s). Steps may be the edit tools, `undo`, `save_mod` and the `get_` / `list_` read tools. Lifecycle, playtest, `screenshot`, `get_status`, `validate_mod` are not allowed inside.
 
-- A string value in `params` that starts with `$` references an earlier step's result: `$<id>.member` or `[n]`. Example: `"$floor.guid"`, `"$dup.objects[0].guid"`. `"$$5"` is the literal `"$5"`. Forward references are refused up front.
+- A string value in `params` that starts with `$` references an earlier step's result: `$<id>.member` or `[n]`. Example: `"$floor.guid"`, `"$dup.guid"` (or `"$dup.objects[0].guid"`). `"$$5"` is the literal `"$5"`. Forward references are refused up front.
 - There is no rollback (object creation is not undoable). `stopOnError` defaults to true; `results` lists exactly what was applied. Step failures are in `results`, not a call error. Revert with `delete_object` or one `undo` per step.
 - Each write step is its own undo step. Nothing is saved unless a `save_mod` step ran.
 
@@ -95,7 +95,8 @@ Board mods cannot be made valid through the plugin (connections are not editable
 - Logic components hold a trigger list: `list_trigger_types`, `add_trigger`, `set_trigger`, `remove_trigger` (addresses `Triggers[0]`, ...; later entries shift down on removal). Other components have fixed slots. `set_property` cannot set triggers or action lists.
 - Call `list_action_types` with the trigger address first: it shows what the slot accepts (`usableHere`, `reason`), parameter names, types, enums, defaults and limits. Then `add_action`, and read `get_action_graph` back. Default target flags apply on append only.
 - Change Health: the action's default operation is `Set`. Always pass `m_operation` explicitly (`Subtract`, `Add`, ...); `m_value: -25` without it sets health to -25, which kills.
-- Health rule: with Use Health off (the default; only switchable by hand in the Minigame Settings) Change Health is a kill switch: any result of 0 or less kills at once, whatever the amount. Hit points need Use Health on and Health set, by the human.
+- Health rule: with Use Health off (the default; only switchable by hand in the Minigame Settings) health is a 0/1 flag (0 until the first player reset at round start, then 1, and 1 again after every respawn). A Change Health value of 0 does nothing, whatever the operation (Set 0 kills nobody); for a non-zero value a result of 0 or less kills at once (Add -25, Subtract 25, Set -1; from health 1, Divide 2 kills but Multiply 2 clamps to 1). Only a player target is affected (Source (Activator) in a Trigger or Logic Hit). Kill/Destroy (type Kill) kills a player target without this arithmetic, with the same refusals as any death; a non-player target is deactivated, so target the player: Source (Activator) in a Trigger or Logic Hit, Receiver in player-settings triggers. Hit points need Use Health on and Health set, by the human.
+- Target actions with no target do nothing: with no Source/Receiver flag and no Advanced targets, Play Sound is silent and Change Health has no effect, yet the playtest feed still logs `action_executed` (it means the action ran, not that it had an effect or was audible). `add_action` / `set_action` return a warning for this. Play Sound: an AudioSource target plays the action's clip if one is set, any other target component plays a positional one-shot.
 - Player-settings trigger edits are not undoable and are written by `save_mod`.
 
 ## Mod settings
@@ -111,6 +112,12 @@ Board mods cannot be made valid through the plugin (connections are not editable
 2. `start_playtest` with `aiOnly: true` and e.g. `players: 4`. It saves the mod, presses Play and returns in play mode (limit 60 s). No input is injected: without `aiOnly` a human has to play player 1.
 3. While running: `get_playtest_state` (players alive, health, score, position, deaths; minigame state, round, time; `useHealth` and a `note`), `get_playtest_events` (ring of 500, page with `sinceId`), `get_status.playtest`, `get_log`, `screenshot` for visual checks.
 4. `stop_playtest` before editing again. The event feed is kept until the next playtest starts, so stopping first and reading afterwards works.
+
+Notes from tests (see `usage_guide`):
+- Player Spawn `SharedSpawn` (on by default) lets several players pick the same spawn; with the Point shape they start on the same point and, with punching on, hit each other at round start (seen in a test). Line and Circle shapes place players by index and are an alternative to turning it off. The validator errors when there is no shared initial spawn and fewer than 8 non-shared initial spawns.
+- LastManStanding placement: a dying player gets 10 x (dead so far + 1) points each round, and players still alive at the round end each get 10 x (dead + 1), so survivors share the top value.
+- The built-in meshes LowPolyCube, Primitive Cube 01 and LowPolyPlane did not show a tiled texture (flat colour; a cut-out texture can make the object invisible); imported OBJ meshes with UVs in 0..1 work. LowPolyPlane is about 10 x 10 units at scale 1 (observed).
+- Harmless log lines not caused by the mod: "Loading Minigame: <name>" at start, "Closing a minigame mod." and "Cannot send rpc when not connected" at stop, and on the results screen "Graphics.CopyTexture can only copy memory with the same size" and "Releasing render texture that is set as Camera.targetTexture!".
 
 During a playtest `get_object`, `get_action_graph`, `get_open_mod`, `validate_mod` and every edit tool (including `save_mod`, `run_batch`) return `INVALID_STATE`.
 

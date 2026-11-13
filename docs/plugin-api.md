@@ -786,11 +786,12 @@ the field is not serialized, so `Instantiate` does not copy it). The plugin chec
 should a guid ever collide, undoes the duplicate and returns `INTERNAL`.
 
 ```json
-{"sourceGuid": "0b6d...", "objects": [{"guid": "77aa...", "name": "Floor", "active": true, "components": ["ModProp"],
+{"sourceGuid": "0b6d...", "guid": "77aa...", "objects": [{"guid": "77aa...", "name": "Floor", "active": true, "components": ["ModProp"],
   "childCount": 0, "children": [], "parentGuid": null, "siblingIndex": 5, "transform": {"...": "..."}}],
  "changed": true, "undoable": true, "undoStackLength": 6}
 ```
 
+`guid`: the guid of the first (root) clone, `objects[0].guid`, as `create_object` returns its `guid` at the top level.
 `objects`: the clone(s) in the `create_object` result shape (node with subtree, `parentGuid`, `siblingIndex`,
 `transform`). Errors: guard codes, `NOT_FOUND`, `INVALID_STATE`, `TIMEOUT`, `INTERNAL`.
 
@@ -1598,7 +1599,8 @@ starting, running or ending (without an address it works and the result has `"pl
 - Target actions: `defaultTargetFlags` (constructor default, also what an insert keeps), `hiddenTargetFlags` (the
   action's own hidden toggles), `targetType` (accepted type of `targets`); with an address also `availableTargetFlags`,
   `targetFlagsLocked` (two toggles hidden) and `appendTargetFlags` (the flags `add_action` gives the action when
-  appending there). Other actions: `supportsTargets: false`, `defaultTargetFlags: null`.
+  appending there). Other actions: `supportsTargets: false`, `defaultTargetFlags: null`. `note` (only on Play Sound, Change
+  Health and Kill): what the action does at run time, including that a target action with no target does nothing.
 - `usableHere`: gate 1 for the open mod and, with an address, gate 2 for that call site (without an address gate 2 is
   not evaluated; see `boardSpaceOnly`). `reason` when false. `add_action` refuses exactly these.
 
@@ -1649,7 +1651,25 @@ index 0 corresponds to inserting and then dragging the action to the top).
 ```
 
 `mode`: `append` or `insert`; `defaultTargetsApplied`: the call-site default was applied; `action`: the new action as
-`get_action_graph` shows it; `actionCount`: length of the list afterwards.
+`get_action_graph` shows it; `actionCount`: length of the list afterwards. `warnings` (only when present, here and in
+`set_action` and for the same steps inside `run_batch`): a target action that will execute on nothing, see
+[No target](#no-target-target-actions-that-do-nothing). The call is never refused for it.
+
+#### No target: target actions that do nothing
+
+`TargetAction.Execute` calls `ExecuteOnTarget` only for the Source flag, the Receiver flag and each resolved Advanced target.
+With no flag and no Advanced targets nothing happens, yet the playtest feed still reports `action_executed` (it means the
+action ran, not that it had an effect). Examples: Play Sound is silent (with a target it is audible: an `AudioSource` target
+plays the action's clip if one is set, else its own; any other target component plays a positional one-shot; in a test it was audible
+with Receiver (This Object) and with an Advanced target), Change Health does nothing. In a Trigger or Logic Hit event the player is
+Source (Activator) and Receiver is the object itself; in player-settings triggers the player is Receiver. `add_action` and `set_action` add `warnings: ["..."]` when the
+resulting action is a `TargetAction` with no Source/Receiver flag and no Advanced target that resolves (an Advanced flag with an empty
+list counts as no target). Not warned: Spawn Prefab with Spawn At Position on (its own `Execute` spawns at the
+position without a target; with it off, the default, it warns) and Show Message with `Everyone` in its message target (shown without a
+target). The warning names the call site's Source and Receiver labels. It is advisory: a failure while computing it is skipped and
+never fails the edit. The other `TargetAction` subclasses need a target: four override `Execute` (Spawn Prefab, Set Connection Active,
+Give Item, Move Space), but the last three only set their random source and call the base `Execute`, and only Spawn Prefab's own
+`Execute` does work (the spawn at a position) without a target. `list_action_types` rows carry a `note` for Play Sound, Change Health and Kill.
 
 ### `remove_action` (write)
 
@@ -2487,7 +2507,12 @@ previous values are restored (the old check on the Mesh reference was wrong: Pum
 
 `create_material {name?, shader?, properties?}`: calls the editor's own `EditorSystem.CreateNewMaterial()`, which writes
 `Assets\Materials\<Material_N>.pmat` and its `.pmeta` immediately (default shader: the editor's
-`defaultShaderGuid`; `shader` = the name or guid of a built-in Shader asset). Before the call the plugin asks the editor
+`defaultShaderGuid`; `shader` = the name or guid of a built-in Shader asset: a name is matched case-insensitively against
+the built-in **asset** names first, then against the Unity shader names; an unknown name is refused with `INVALID_PARAMS`
+listing the valid asset names). The reply's `shader` is the Unity shader's own name and `shaderAsset` the asset's name; when they
+differ `shaderNote` says so. Observed in a test: asking for `shader: "Standard Shader"`
+returned `shader: "Standard Decal Receiver"`. Asset names are matched first and the reply reports the Unity shader's own name, which
+explains it (the asset's own name was not read in code; the editor's default shader also reports "Standard Decal Receiver"). Before the call the plugin asks the editor
 which name it will use (`GetUniqueAssetName`, a check against *asset names* only) and refuses with `ALREADY_EXISTS` when
 that file or its `.pmeta` already exists on disk without a loaded material (the editor would overwrite it); a custom `name`
 is applied afterwards with the editor's own rename (both target names are checked free first). The rename counts as done
@@ -2827,7 +2852,10 @@ Errors (block Play without "Run With Errors", and publishing):
    not seen; the validator also sees active spawns anywhere in the loaded scenes).
 3. For every player count 1..8: an initial-spawn Player Spawn whose `PlayerCountMask` includes it.
 4. For every player 1..8: an initial-spawn Player Spawn whose `AllowedPlayers` includes that player.
-5. At least one initial spawn with `SharedSpawn` true, or at least 8 non-shared initial spawns.
+5. At least one initial spawn with `SharedSpawn` true, or at least 8 non-shared initial spawns (an error when there is no shared
+   initial spawn and fewer than 8 non-shared ones). With `SharedSpawn` the same spawn can be picked by several players; with the Point
+   shape they start on the same point (seen in a test: with punching on they hit each other at round start). The Line and Circle shapes
+   place players by index (Line with Step distribution) and are an alternative to turning `SharedSpawn` off.
 6. If player settings `respawnEnabled` (default true): at least one spawn with `SpawnUsageType` `Respawn`, and for every
    player 1..8 a respawn spawn that allows that player.
 
@@ -2958,7 +2986,7 @@ starting, retry), `ExitingPlayMode` (ending; read `get_playtest_events`), editor
 
 ```json
 {"running": true, "mod": "MCP_Arena", "modType": "Minigame", "playtest": 1, "paused": false,
- "useHealth": false, "note": "useHealth is off in the Minigame Settings (player settings): ... ANY Change Health whose result is 0 or less ... kills the player at once ...",
+ "useHealth": false, "note": "useHealth is off in the Minigame Settings (player settings): ... a value of 0 does nothing; a non-zero value whose result is 0 or less kills ... use the Kill action ...",
  "respawn": {"enabled": true, "time": 3, "invulnerableTime": 1},
  "minigame": {"type": "simple", "state": "Playing", "round": 1, "rounds": 2, "endCondition": "Timer", "placement": "MostPoints",
               "playerType": "TopDown", "roundLength": 60, "timeRemaining": 41.3, "timeElapsed": 18.6, "finished": false},
@@ -3106,12 +3134,19 @@ The runtime is `SimpleModController` / `SimpleModPlayer` (editor-made minigames)
   (`Set`, `Add`, `Subtract`, `Multiply`, `Divide`; **the action's default operation is `Set`**, so `m_value: -25` without
   `m_operation` sets health to -25 = dead), clamps it to `0..health`, stores it, and if the stored health is 0 or less the
   player is killed. `m_value` 0 is a no-op (a hit animation only). A weapon hit applies the weapon's damage as `Subtract`.
-- **Health off (`useHealth` false, the default): `Change Health` is a kill switch.** The health value is not
-  initialised (it stays 0 until the first respawn / round reset sets it to the "max", which is 1 when health is off) and
-  the stored value is clamped to 0..1. `ChangeHealth` therefore kills whenever the result is 0 or less: from the initial 0
-  every `Add -25`, `Subtract 25`, `Set 0`, `Multiply`, `Divide` ... leaves 0 and kills at once, whatever the amount; a result
-  above 0 sets the value to 1 (nothing visible) and the next decrease kills. This is why a Change Health -25 in a mod with
-  default settings killed bots instantly. Turning on **Use Health** in the Minigame Settings (by hand; the plugin edits no settings except
+- **Health off (`useHealth` false, the default): `Change Health` is a kill switch, with one exception.** The stored health is 0 until the first
+  `ResetPlayer` (the controller runs it for every player at round start), which sets it to the "max", 1 when health is off; it is
+  set to 1 again at every respawn and round reset. The stored value is clamped to 0..1. `ChangeHealth` returns early when `m_value` is 0 (a hit animation only), whatever the
+  operation, so `Set 0`, `Add 0`, `Multiply 0` kill nobody. For any non-zero value the result is computed from the stored
+  health: `Add -25`, `Subtract 25` and `Set -1` leave 0 or less and kill at once, whatever the amount (so does anything from stored 0
+  that gives 0, such as `Multiply` by any non-zero number); from health 1, `Multiply 2` gives 2, clamps to 1 and does not kill, `Divide 1`
+  gives 1, `Divide 2` gives 0 and kills. A result above 0 sets the value to 1 (nothing visible) and the next decrease kills. `Divide` by 0 is the same as value 0 (early return; `PerformOperation` would also return the old value). This is why a
+  Change Health -25 in a mod with default settings killed bots instantly. Only a player target is affected. **Kill/Destroy** (type
+  `Kill`, `KillAction`) kills a player target by calling `KillPlayer` directly, without this arithmetic and with the same refusals as
+  any death (respawn invulnerability, respawn animation, between rounds, and only when the player is owned by this peer); a
+  non-player target is deactivated instead, so target the player: Source (Activator) in a Trigger or Logic Hit
+  (`SimpleModPlayer.HandleTrigger` sets Source = the player, Receiver = the event receiver), Receiver in player-settings triggers.
+  Seen in a test: Kill on a kill-zone trigger killed AI players in a local playtest. Turning on **Use Health** in the Minigame Settings (by hand; the plugin edits no settings except
   the player-settings triggers) and setting **Health** gives real hit points. The `note` of `get_playtest_state` repeats this while health is off.
 - **Death is refused in three situations** (health is still changed): during the respawn invulnerability window after a
   respawn (`respawnInvulnerableTime`, default 1 s), during the portal respawn animation, and between rounds. The
@@ -3276,7 +3311,7 @@ exactly what was applied; revert by hand with `delete_object` or one `undo` per 
 5. start_playtest {"players": 4, "aiOnly": true} -> playing: true, saved: true
 6. get_status (playtest.running, playtest.minigame.round, playtest.eventCount) / get_log {"sinceId": <nextId before step 5>} / screenshot
 7. observe what happens to the players (a trigger that "should" hurt players has to be verified, not assumed):
-   get_playtest_state -> useHealth false + note (health is off: every Change Health that leaves 0 or less kills at once),
+   get_playtest_state -> useHealth false + note (health is off: a non-zero Change Health that leaves 0 or less kills at once; value 0 does nothing),
      players[i].alive / score / position / deaths, minigame.state "Playing", timeRemaining
    get_playtest_events {"max": 100} -> entries such as
      {"id": 3, "playSeconds": 6.4, "type": "action_executed", "action": "ChangeHealth", "receiver": "Hazard", "source": "player 2", ...}

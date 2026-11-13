@@ -848,7 +848,7 @@ namespace PummelPartyMcp.Tools
             {
                 throw RpcException.InvalidParams(spec == null
                     ? "the editor's default shader could not be resolved (EditorSystem.defaultShaderGuid); nothing was created"
-                    : $"'{spec}' is not a built-in Shader asset (list_asset_rules shows the shader assets; use a name or guid)");
+                    : $"'{spec}' is not a built-in Shader asset. Valid names (the asset name, or the shader's own name that the reply shows): " + string.Join(", ", shaders.Select(a => "'" + a.name + "'").ToArray()) + "; or a guid (list_asset_rules shows them)");
             }
             return shader;
         }
@@ -992,6 +992,7 @@ namespace PummelPartyMcp.Tools
             {
                 ["asset"] = AssetAccess.Row(pm, r.AssetsFull),
                 ["shader"] = shader.name,
+                ["shaderAsset"] = shaderAsset?.name,
                 ["knownShader"] = rule != null,
                 ["properties"] = new MaterialAccess(r.Ed, pm.UnityMaterial, shader).Describe(),
                 ["clamped"] = plan == null ? new JArray() : ClampsJson(plan),
@@ -1000,6 +1001,11 @@ namespace PummelPartyMcp.Tools
                 ["note"] = "the editor wrote Assets/Materials/<name>.pmat and .pmeta NOW (like its Create > Material menu), and this call saved the properties into the .pmeta (like the inspector's Apply); they stay on disk even if you do not call save_mod. " +
                            "Assign it with set_property on a renderer's 'materials' (or a prop's 'customMaterials') using the guid; remove it with remove_asset.",
             };
+            if (shaderAsset != null && !string.Equals(shaderAsset.name, shader.name, StringComparison.Ordinal))
+            {
+                // The name you pass is matched against the built-in asset's name first; "shader" is the Unity shader's own name.
+                result["shaderNote"] = $"the built-in shader asset '{shaderAsset.name}' uses the Unity shader '{shader.name}'; 'shader' shows the Unity shader's name";
+            }
             if (notes.Count > 0)
             {
                 result["warnings"] = new JArray(notes.ToArray());

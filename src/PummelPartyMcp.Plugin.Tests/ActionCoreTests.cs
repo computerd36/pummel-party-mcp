@@ -21,6 +21,7 @@ namespace PummelPartyMcp.Tests
             TargetFlagTests();
             ParamNameTests();
             ParamRuleTests();
+            NoTargetWarningTests();
             ComplexTests();
             FakeSchemaTests();
         }
@@ -249,6 +250,35 @@ namespace PummelPartyMcp.Tests
             Check("unknown -> null", ParamNames.Resolve("nope", f) == null);
             Check("ambiguous refused", Bad(() => ParamNames.Resolve("x", new List<string> { "m_X", "m_x2", "M_x" })));
             Check("alias helper", ParamNames.Alias("m_seconds") == "seconds" && ParamNames.Alias("damage") == null);
+        }
+
+        // ================================================================== no-target warning
+
+        private static void NoTargetWarningTests()
+        {
+            Console.WriteLine("-- unit: target actions with no target");
+            string w = TargetActionNotes.NoTargetWarning("PlaySoundAction", 0, 0, null, null, "Activator", "Hazard");
+            Check("flags 0, no targets: warns, names the action and the call site labels", w != null && w.Contains("PlaySound") && w.Contains("action_executed") && w.Contains("Activator") && w.Contains("Hazard"));
+            Check("no generic This Object example", w != null && !w.Contains("This Object"));
+            Check("Source flag: no warning", TargetActionNotes.NoTargetWarning("ChangeHealthAction", TargetBits.Source, 0, null, null, "S", "R") == null);
+            Check("Receiver flag: no warning", TargetActionNotes.NoTargetWarning("PlaySoundAction", TargetBits.Receiver, 0, null, null, "S", "R") == null);
+            Check("Advanced flag with a resolved target: no warning", TargetActionNotes.NoTargetWarning("PlaySoundAction", TargetBits.Advanced, 1, null, null, "S", "R") == null);
+            Check("Advanced flag with zero resolved targets: warns", TargetActionNotes.NoTargetWarning("PlaySoundAction", TargetBits.Advanced, 0, null, null, "S", "R") != null);
+            Check("targets present but Advanced flag off: warns", TargetActionNotes.NoTargetWarning("PlaySoundAction", 0, 2, null, null, "S", "R") != null);
+            Check("Spawn Prefab with position off warns", TargetActionNotes.NoTargetWarning("SpawnPrefabAction", 0, 0, false, null, "S", "R") != null);
+            Check("Spawn Prefab with position on does not warn", TargetActionNotes.NoTargetWarning("SpawnPrefabAction", 0, 0, true, null, "S", "R") == null);
+            Check("Spawn Prefab with unknown position field does not warn", TargetActionNotes.NoTargetWarning("SpawnPrefabAction", 0, 0, null, null, "S", "R") == null);
+            Check("Show Message Target-only with flags 0 warns", TargetActionNotes.NoTargetWarning("ShowMessageAction", 0, 0, null, 2, "S", "R") != null);
+            Check("Show Message Everyone does not warn", TargetActionNotes.NoTargetWarning("ShowMessageAction", 0, 0, null, 1, "S", "R") == null);
+            Check("Show Message Everyone+Target does not warn", TargetActionNotes.NoTargetWarning("ShowMessageAction", 0, 0, null, 3, "S", "R") == null);
+            Check("Show Message Target-only with Receiver does not warn", TargetActionNotes.NoTargetWarning("ShowMessageAction", TargetBits.Receiver, 0, null, 2, "S", "R") == null);
+            string pn = TargetActionNotes.RowNote("PlaySoundAction") ?? "";
+            Check("Play Sound row note: AudioSource clip rule and positional one-shot", pn.Contains("AudioSource") && pn.Contains("if one is set") && pn.Contains("positional one-shot"));
+            string ch = TargetActionNotes.RowNote("ChangeHealthAction") ?? "";
+            Check("Change Health row note: player target, Source (Activator), value 0", ch.Contains("only a player target") && ch.Contains("Source (Activator)") && ch.Contains("value of 0 does nothing"));
+            string k = TargetActionNotes.RowNote("KillAction") ?? "";
+            Check("Kill row note: UI name, deactivates non-player, names the player target", k.Contains("Kill/Destroy (type Kill)") && k.Contains("deactivated") && k.Contains("Receiver in player-settings") && !k.Contains("reliable"));
+            Check("Wait has no row note", TargetActionNotes.RowNote("WaitAction") == null);
         }
 
         // ================================================================== rules

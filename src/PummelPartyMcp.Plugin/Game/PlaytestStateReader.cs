@@ -33,9 +33,11 @@ namespace PummelPartyMcp.Game
         public static string StateName(int state) => s_stateNames.TryGetValue(state, out string n) ? n : state.ToString(CultureInfo.InvariantCulture);
 
         public const string HealthOffNote =
-            "useHealth is off in the Minigame Settings (player settings): players have no health points. Change Health still works as a kill switch: " +
-            "the stored health starts at 0 (max is 1), so ANY Change Health whose result is 0 or less (Add -25, Subtract 25, Set 0, Multiply...) kills the player at once, " +
-            "whatever the amount; a result above 0 only sets health to 1 and the next decrease kills. Turn on Use Health (and set Health) by hand for hit points.";
+            "useHealth is off in the Minigame Settings (player settings): players have no health points, health is a 0/1 flag (0 until the first player reset at round start, then 1, and 1 again after every respawn). " +
+            "A Change Health value of 0 does nothing (a hit animation only), whatever the operation, so Set 0, Add 0 and Multiply 0 kill nobody. " +
+            "For a non-zero value the result is clamped to 0..1: a result of 0 or less kills at once (Add -25, Subtract 25, Set -1; from health 1, Divide 2 gives 0 and kills, Multiply 2 clamps to 1 and does not), a result above 0 leaves health at 1. " +
+            "Only a player target is affected: in a Trigger or Logic Hit the player is Source (Activator). Kill/Destroy (type Kill) kills a player target without this arithmetic, with the same refusals as any death; a non-player target is deactivated. " +
+            "Turn on Use Health (and set Health) by hand for hit points.";
 
         /// <summary>The round as the round UI shows it (1-based, clamped to rounds); 0 when unreadable.</summary>
         public static int DisplayRound(MinigameController mg)

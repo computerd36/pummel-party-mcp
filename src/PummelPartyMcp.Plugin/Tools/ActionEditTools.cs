@@ -419,6 +419,7 @@ namespace PummelPartyMcp.Tools
                     res["defaultTargetsApplied"] = defaultsApplied;
                     res["action"] = ActionJson(c.Mod, action, index);
                     res["clamped"] = new JArray(plan.Clamped);
+                    AddNoTargetWarning(res, action, c.First.Site);
                     res["actionCount"] = ActionsOf(r).Length;
                     return res;
                 };
@@ -509,9 +510,47 @@ namespace PummelPartyMcp.Tools
                     res["index"] = index;
                     res["action"] = ActionJson(c.Mod, action, index);
                     res["clamped"] = new JArray(plan.Clamped);
+                    AddNoTargetWarning(res, action, c.First.Site);
                     return res;
                 };
             });
+        }
+
+        /// <summary>
+        /// Adds "warnings" when a TargetAction will execute on nothing (TargetAction.Execute runs ExecuteOnTarget only for the
+        /// Source, Receiver and Advanced targets). Advisory only: never refuses the call and never fails an applied edit.
+        /// </summary>
+        private static void AddNoTargetWarning(JObject res, ModAction action, CallSite site)
+        {
+            try
+            {
+                if (!(action is ModSystem.Logic.TargetAction ta))
+                {
+                    return;
+                }
+                bool? spawnAtPosition = null;
+                if (action is ModSystem.Logic.SpawnPrefabAction)
+                {
+                    System.Reflection.FieldInfo f = GameReflection.FindField(action.GetType(), "m_spawnAtPosition");
+                    spawnAtPosition = f == null ? (bool?)null : (bool)f.GetValue(action);
+                }
+                int? messageTarget = null;
+                if (action is ModSystem.Logic.ShowMessageAction)
+                {
+                    System.Reflection.FieldInfo f = GameReflection.FindField(action.GetType(), "m_messageTarget");
+                    messageTarget = f == null ? (int?)null : Convert.ToInt32(f.GetValue(action));
+                }
+                int count = ta.TargetReferences?.Count(t => t != null && t.Asset != null) ?? 0;
+                string w = TargetActionNotes.NoTargetWarning(action.GetType().Name, (int)ta.TargetFlags, count, spawnAtPosition, messageTarget, site?.SourceName, site?.ReceiverName);
+                if (w != null)
+                {
+                    res["warnings"] = new JArray(w);
+                }
+            }
+            catch (Exception)
+            {
+                // the warning is advice; skip it rather than turn an applied edit into an error
+            }
         }
 
         // ================================================================== triggers (ModLogic list)

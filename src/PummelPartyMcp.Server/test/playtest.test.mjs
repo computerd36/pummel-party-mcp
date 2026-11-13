@@ -296,6 +296,19 @@ test("get_playtest_state and get_playtest_events: read-only, strict schemas, par
     assert.match(guide, /get_playtest_events/);
     assert.match(guide, /stop_playtest first and read afterwards/);
     assert.match(guide, /useHealth off/);
+    assert.match(guide, /a Change Health value of 0 does nothing/);
+    assert.match(guide, /Kill\/Destroy \(type Kill\) kills a player target/);
+    assert.doesNotMatch(guide, /any Change Health leaving 0 or less kills at once/);
+    assert.match(guide, /action_executed means the action ran, not that it had an effect or was audible/);
+    assert.match(guide, /fewer than 8 non-shared initial spawns/);
+    assert.match(guide, /10 x \(players dead so far \+ 1\)/);
+    assert.match(guide, /Cannot send rpc when not connected/);
+    const actions = (await s.client.callTool({ name: "usage_guide", arguments: { topic: "actions" } })).content[0].text;
+    assert.match(actions, /runs on nothing \(PlaySound is silent/);
+    assert.match(actions, /positional one-shot/);
+    const assets = (await s.client.callTool({ name: "usage_guide", arguments: { topic: "assets" } })).content[0].text;
+    assert.match(assets, /LowPolyPlane is about 10 x 10 units/);
+    assert.match(assets, /shaderAsset/);
     assert.match(guide, /publishedFileId "256"[^.]*never published/);
     assert.match(guide, /not a Workshop item or a minigame id/);
   } finally {

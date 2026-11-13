@@ -271,7 +271,8 @@ namespace PummelPartyMcp.Tools
                                 objects.Add(EditCommon.ObjectNode(ed, mod, cmt));
                             }
                         }
-                        JObject r = new JObject { ["sourceGuid"] = guid, ["objects"] = objects };
+                        // top-level guid = the first (root) duplicate, like create_object's reply
+                        JObject r = new JObject { ["sourceGuid"] = guid, ["guid"] = objects.Count > 0 ? objects[0]["guid"] : null, ["objects"] = objects };
                         return EditCommon.WithEditFields(r, ed, report, true);
                     },
                 };

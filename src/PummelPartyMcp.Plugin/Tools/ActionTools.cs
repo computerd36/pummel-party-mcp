@@ -215,6 +215,11 @@ namespace PummelPartyMcp.Tools
                     row["supportsTargets"] = false;
                     row["defaultTargetFlags"] = null;
                 }
+                string rowNote = TargetActionNotes.RowNote(t.ClassType.Name);
+                if (rowNote != null)
+                {
+                    row["note"] = rowNote;
+                }
                 string why = ActionModel.WhyNotUsable(t, mod, site);
                 row["usableHere"] = why == null;
                 if (why != null)

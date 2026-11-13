@@ -655,6 +655,59 @@ namespace PummelPartyMcp.Core
         }
     }
 
+    // ===================================================================== target actions with no target
+
+    /// <summary>
+    /// TargetAction.Execute only calls ExecuteOnTarget for the Source, Receiver and Advanced (explicit list) targets; with no
+    /// target the action does nothing, and the playtest feed still reports action_executed. Pure rules for the warning that
+    /// add_action / set_action return and for the list_action_types notes.
+    /// </summary>
+    public static class TargetActionNotes
+    {
+        /// <summary>
+        /// A warning when a TargetAction-derived action will execute on nothing, else null. spawnAtPosition: SpawnPrefabAction's
+        /// m_spawnAtPosition (null = unknown); messageTarget: ShowMessageAction's m_messageTarget bits (Everyone 1, Target 2; null = unknown).
+        /// Spawn Prefab with Spawn At Position on and Show Message to Everyone work without a target. sourceName/receiverName: the call site's labels.
+        /// </summary>
+        public static string NoTargetWarning(string className, int flags, int resolvedTargetCount, bool? spawnAtPosition, int? messageTarget, string sourceName, string receiverName)
+        {
+            if (className == "SpawnPrefabAction" && spawnAtPosition != false)
+            {
+                return null;
+            }
+            if (className == "ShowMessageAction" && (messageTarget == null || (messageTarget.Value & 1) != 0))
+            {
+                return null;
+            }
+            bool source = (flags & TargetBits.Source) != 0;
+            bool receiver = (flags & TargetBits.Receiver) != 0;
+            bool advanced = (flags & TargetBits.Advanced) != 0 && resolvedTargetCount > 0;
+            if (source || receiver || advanced)
+            {
+                return null;
+            }
+            string shown = className.EndsWith("Action", StringComparison.Ordinal) ? className.Substring(0, className.Length - 6) : className;
+            return shown + " has no target (no Source or Receiver flag and no Advanced targets), so it will execute on nothing: the playtest feed still reports action_executed, but there is no effect. " +
+                "Set targetFlags to Source (" + (sourceName ?? "Source") + "), Receiver (" + (receiverName ?? "Receiver") + ") or Advanced with targets.";
+        }
+
+        /// <summary>Per action class: what the list_action_types row says about the action's runtime behaviour (null = no note).</summary>
+        public static string RowNote(string className)
+        {
+            switch (className)
+            {
+                case "PlaySoundAction":
+                    return "Needs a target. An AudioSource target plays the action's clip if one is set (else its own); any other target component plays a positional one-shot.";
+                case "ChangeHealthAction":
+                    return "Needs a target; only a player target is affected (in a Trigger or Logic Hit the player is Source (Activator)). With Use Health off a value of 0 does nothing (any operation); a non-zero value whose result is 0 or less kills, a result above 0 sets health to 1. Kill/Destroy (type Kill) kills without this arithmetic.";
+                case "KillAction":
+                    return "Kill/Destroy (type Kill): kills a player target without health arithmetic, with the same refusals as any death (respawn invulnerability, respawn animation, between rounds); a non-player target is deactivated, so target the player: Source (Activator) in a Trigger or Logic Hit, Receiver in player-settings triggers. Needs a target. Seen in a test: it killed AI players from a kill-zone trigger.";
+                default:
+                    return null;
+            }
+        }
+    }
+
     // ===================================================================== parameter names
 
     public static class ParamNames
