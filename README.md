@@ -219,7 +219,7 @@ Layout:
 | `src/PummelPartyMcp.Server` | MCP server (TypeScript) and its tests |
 | `docs/` | `plugin-api.md` (API reference), `editor-architecture.md` and `architecture/` (how the editor works), `mod-format.md` |
 | `scripts/` | backup and verify scripts; `package-thunderstore.ps1` |
-| `packaging/thunderstore/` | templates for the Thunderstore package (README, CHANGELOG, icon placeholder) |
+| `packaging/thunderstore/` | templates for the Thunderstore package (README, CHANGELOG, icon) |
 | `.github/workflows/ci.yml` | CI (see below) |
 | `skills/pummel-modder/` | agent skill |
 

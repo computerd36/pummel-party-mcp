@@ -30,3 +30,6 @@ artifacts/
 
 # Local working notes
 *.local.md
+
+# icon source file (local)
+*.psd
