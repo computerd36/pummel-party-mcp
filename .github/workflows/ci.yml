@@ -44,14 +44,10 @@ jobs:
         working-directory: src/PummelPartyMcp.Server
 
   plugin-core:
-    name: Unity-free plugin core tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    # The ubuntu run is not verified locally (developed on Windows); do not let it block the workflow.
-    continue-on-error: ${{ matrix.os == 'ubuntu-latest' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest]
+    name: Unity-free plugin core tests (windows-latest)
+    # Windows only: the plugin runs inside the Windows game, and its path rules (drive letters, junctions,
+    # hard links) are Windows rules that the tests exercise with real folders.
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
