@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using PummelPartyMcp.Core;
 using PummelPartyMcp.Game;
@@ -211,12 +212,30 @@ namespace PummelPartyMcp.Tools
                 r["validated"] = args.ValidateFirst;
                 r["validation"] = validation;
                 r["secondsToPlayMode"] = Math.Round(outcome.Elapsed.TotalSeconds, 1);
+                if (outcome.SaveReport != null)
+                {
+                    r["prefabsVerified"] = outcome.SaveReport.Verified;
+                    JArray prefabWarnings = new JArray(outcome.SaveReport.Outcomes.SelectMany(o => o.Warnings.Select(w => (JToken)(o.Name + ": " + w))).ToArray());
+                    if (prefabWarnings.Count > 0)
+                    {
+                        r["prefabWarnings"] = prefabWarnings;
+                    }
+                }
                 r["note"] = "Entering play mode saved the mod's files (PummelMod.Save: Meta.json, WorkshopItem.json, MainScene.scene, ModSettings.json, " +
-                            "Lighting/PostProcessing, the minigame definition or map details, asset .pmeta files; no Preview.jpg; the dirty flag and " +
+                            "Lighting/PostProcessing, the minigame definition or map details, asset .pmeta files and every .pfab/.pmat; the prefab files were " +
+                            "dry-run before and verified after the save like save_mod (prefabsVerified); no Preview.jpg; the dirty flag and " +
                             "get_status.hasUnsavedEdits are unchanged). " +
                             (aiOnly ? "AI Only: every player is an AI, the rounds run by themselves. " : "Player 1 is controlled from the keyboard/gamepad by a human; the plugin sends no input. ") +
                             "Edit tools refuse until stop_playtest; observe with get_status, get_log and screenshot.";
                 return r;
+            });
+            // C2 + C1: the Play call saves the mod (PummelMod.Save rewrites every .pfab with FileMode.Create): the same link pre-check,
+            // dry run and safety copy as save_mod before it, verification and restore after it (in the same dispatched step).
+            flow.SaveProtection = new PrefabSaveProtection(() =>
+            {
+                AssetAccess.RequireModSavable(mod, includePreview: false, "start_playtest (entering play mode saves the mod)");
+                string assetsFull = AssetAccess.AssetsFolderOf(mod);
+                return PrefabAccess.SavedPrefabs(mod).Select(p => PrefabAccess.Prepare(p, assetsFull)).ToList();
             });
             if (!flow.Start())
             {

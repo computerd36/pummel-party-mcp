@@ -5,6 +5,7 @@ using System.Linq;
 using Newtonsoft.Json.Linq;
 using PummelPartyMcp.Core;
 using UnityEngine;
+using ModSystem.Logic;
 using UnityEngine.Rendering;
 
 namespace PummelPartyMcp.Game
@@ -73,6 +74,7 @@ namespace PummelPartyMcp.Game
                 if (rel != null)
                 {
                     row["relativePath"] = rel;
+                    AddLinkFlag(row, AssetImportRules.ModRootOf(assetsFull), ext);
                 }
                 try
                 {
@@ -91,6 +93,103 @@ namespace PummelPartyMcp.Game
             return row;
         }
 
+        /// <summary>list_assets/get_asset: marks an asset whose file (or a prop's mesh file) runs through a link inside the mod (reading stays allowed).</summary>
+        public static void AddLinkFlag(JObject row, string modRoot, ModAssetExternal ext)
+        {
+            if (string.IsNullOrEmpty(modRoot) || ext == null || string.IsNullOrEmpty(ext.filePath))
+            {
+                return;
+            }
+            string why = SandboxPath.FindLink(modRoot, ext.filePath);
+            if (why == null && ext is PummelProp pp && pp.MeshAsset != null && !string.IsNullOrEmpty(pp.MeshAsset.filePath))
+            {
+                why = SandboxPath.FindLink(modRoot, pp.MeshAsset.filePath);
+            }
+            if (why != null)
+            {
+                row["linked"] = true;
+                row["linkedReason"] = why + "; the plugin refuses to write or delete through it (reading works)";
+            }
+        }
+
+        /// <summary>Every path PummelMod.RemoveAsset deletes for the asset: its file and .pmeta, and for a prop the nested mesh's file and .pmeta.</summary>
+        public static List<string> RemovalPaths(ModAssetExternal a)
+        {
+            List<string> paths = new List<string> { a.filePath, a.filePath + AssetImportRules.MetaExtension };
+            if (a is PummelProp pp && pp.MeshAsset != null)
+            {
+                string nested = pp.MeshAsset.filePath;
+                if (string.IsNullOrEmpty(nested))
+                {
+                    throw new RpcException(ErrorCodes.InvalidState, $"the prop '{a.name}' has a nested mesh without a file path; the editor's removal would delete '.pmeta' relative to the game folder, so it is not called");
+                }
+                paths.Add(nested);
+                paths.Add(nested + AssetImportRules.MetaExtension);
+            }
+            return paths;
+        }
+
+        /// <summary>C1: refuses unless every path the game's RemoveAsset deletes for <paramref name="a"/> may be deleted (no link on the way, single hard link).</summary>
+        public static void RequireRemovable(string assetsFull, ModAssetExternal a, string purpose)
+        {
+            if (string.IsNullOrEmpty(a.filePath))
+            {
+                throw new RpcException(ErrorCodes.InvalidState, $"'{a.name}' has no file path; nothing was deleted");
+            }
+            SandboxPath.RequireAllInsideMod(AssetImportRules.ModRootOf(assetsFull), RemovalPaths(a), purpose);
+        }
+
+        /// <summary>C1: refuses unless the asset's .pmeta (and, for materials/prefabs/visual scripts, the file itself) may be rewritten.</summary>
+        public static void RequireSavable(string assetsFull, ModAssetExternal a, string purpose)
+        {
+            List<string> paths = ModSaveTargetsFor(new[] { a });
+            SandboxPath.RequireAllInsideMod(AssetImportRules.ModRootOf(assetsFull), paths, purpose);
+        }
+
+        private static List<string> ModSaveTargetsFor(IEnumerable<ModAssetExternal> assets)
+        {
+            List<string> paths = new List<string>();
+            foreach (ModAssetExternal a in assets)
+            {
+                if (string.IsNullOrEmpty(a.filePath))
+                {
+                    throw new RpcException(ErrorCodes.InvalidState, $"the asset '{a.name}' has no file path; nothing was written");
+                }
+                paths.Add(a.filePath + AssetImportRules.MetaExtension);
+                if (RewritesFile(a))
+                {
+                    paths.Add(a.filePath);
+                }
+            }
+            return paths;
+        }
+
+        private static bool RewritesFile(ModAssetExternal a) => a is PummelMaterial || a is PummelPrefab || a is PummelVisualScript;
+
+        /// <summary>
+        /// C1: every file PummelMod.Save writes for <paramref name="mod"/> (and SaveCurrentMod's Preview.jpg when <paramref name="includePreview"/>):
+        /// refuses the whole save, naming each target that runs through a link or is hard-linked, before anything is written.
+        /// </summary>
+        public static void RequireModSavable(PummelMod mod, bool includePreview, string purpose)
+        {
+            string assetsFull = AssetsFolderOf(mod); // root name + root/Assets not a link
+            string root = AssetImportRules.ModRootOf(assetsFull);
+            List<SavedAssetFile> files = new List<SavedAssetFile>();
+            if (mod.Assets?.assets != null)
+            {
+                foreach (ModAsset a in mod.Assets.assets)
+                {
+                    // the same filter as PummelMod.Save
+                    if (a != null && a.GetType().IsSubclassOf(typeof(ModAssetExternal)) && !((ModAssetExternal)a).HideAndDontSave)
+                    {
+                        ModAssetExternal ext = (ModAssetExternal)a;
+                        files.Add(new SavedAssetFile { Name = ext.name, FilePath = ext.filePath, RewritesFile = RewritesFile(ext) });
+                    }
+                }
+            }
+            SandboxPath.RequireAllWritable(root, ModSaveTargets.Build(root, files, includePreview), purpose);
+        }
+
         public static bool IsOwnCustom(PummelMod mod, ModAsset a, string assetsFull) =>
             a is ModAssetExternal ext && ValueConverter.LocationName(a) == "external" && InModList(mod, a)
             && !string.IsNullOrEmpty(ext.filePath) && AssetImportRules.IsStrictlyUnder(assetsFull, ext.filePath);
@@ -103,6 +202,9 @@ namespace PummelPartyMcp.Game
             public bool Incomplete;
             public bool PreviewImage;
             public int ObjectsScanned;
+
+            /// <summary>The mod settings (or the preview image lookup) could not be read: the asset may be the preview image, so even force does not remove it (L3).</summary>
+            public bool SettingsScanFailed;
         }
 
         private const int MaxObjects = 5000;
@@ -156,7 +258,121 @@ namespace PummelPartyMcp.Game
 
             ScanMaterials(mod, target, result);
             ScanSettings(ed, mod, guid, result);
+            ScanPlayerTriggers(mod, conv, guid, result);
+            ScanItemDetails(mod, target, guid, result);
+            ScanWorkshopItem(mod, guid, result);
             return result;
+        }
+
+        /// <summary>
+        /// H1: the action lists held by the Minigame player settings (the six "Event Triggers" and the hidden hitTrigger): every public
+        /// ModLogicTrigger field of SimpleModPlayerSettings, read with the same converter as get_action_graph (actions, targets, parameters,
+        /// nested popup choices). Not scene objects, so the object walk does not see them.
+        /// </summary>
+        private static void ScanPlayerTriggers(PummelMod mod, ValueConverter conv, string guid, RefResult result)
+        {
+            if (!(mod is MinigameMod mm))
+            {
+                return;
+            }
+            try
+            {
+                SimpleModPlayerSettings settings = mm.MinigameSettings?.SimpleModPlayerSettings;
+                if (settings == null)
+                {
+                    result.Incomplete = true;
+                    return;
+                }
+                foreach (System.Reflection.FieldInfo f in typeof(SimpleModPlayerSettings).GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public))
+                {
+                    if (!typeof(ModLogicTrigger).IsAssignableFrom(f.FieldType))
+                    {
+                        continue;
+                    }
+                    if (!(f.GetValue(settings) is ModLogicTrigger trig))
+                    {
+                        continue;
+                    }
+                    Add(result, new ReferenceSource { Kind = "playerTrigger", Owner = "playerSettings." + f.Name, Data = conv.Trigger(trig, 0) }, guid);
+                }
+            }
+            catch (Exception)
+            {
+                result.Incomplete = true;
+            }
+        }
+
+        /// <summary>Item mods: the item's prefabs (use, receive, held) and its icon texture (ItemMod.GetItemDetails).</summary>
+        private static void ScanItemDetails(PummelMod mod, ModAsset target, string guid, RefResult result)
+        {
+            if (!(mod is ItemMod im))
+            {
+                return;
+            }
+            try
+            {
+                ItemDetails d = im.GetItemDetails();
+                if (d == null)
+                {
+                    result.Incomplete = true;
+                    return;
+                }
+                foreach (KeyValuePair<string, SerializableGuid> p in new[]
+                {
+                    new KeyValuePair<string, SerializableGuid>("prefab", d.prefabGuid),
+                    new KeyValuePair<string, SerializableGuid>("recievePrefab", d.recievePrefabGuid),
+                    new KeyValuePair<string, SerializableGuid>("heldPrefab", d.heldPrefabGuid),
+                })
+                {
+                    Add(result, new ReferenceSource { Kind = "setting", Owner = "itemDetails." + p.Key, Data = GuidToken(p.Value), FixedWhere = "the item mod's details (" + p.Key + ")" }, guid);
+                }
+                UnityEngine.Object t = target.unityObject;
+                if (d.iconTexture != null && t != null && ReferenceEquals(d.iconTexture, t))
+                {
+                    Add(result, new ReferenceSource { Kind = "setting", Owner = "itemDetails.iconTexture", Data = new JValue(guid), FixedWhere = "the item mod's icon" }, guid);
+                }
+            }
+            catch (Exception)
+            {
+                result.Incomplete = true;
+                result.SettingsScanFailed = true;
+            }
+        }
+
+        /// <summary>
+        /// L2: the Workshop item's thumbnail (previewImageGuid) and preview files. Read only: the plugin never writes the Workshop item, so
+        /// such an asset is reported (and refused without force); the human changes the thumbnail in the editor's Workshop dialog.
+        /// </summary>
+        private static void ScanWorkshopItem(PummelMod mod, string guid, RefResult result)
+        {
+            try
+            {
+                ModWorkshopItem w = mod.workshopItem;
+                if (w == null)
+                {
+                    return;
+                }
+                Add(result, new ReferenceSource
+                {
+                    Kind = "workshop", Owner = "workshopItem.previewImage", Data = GuidToken(w.previewImageGuid),
+                    FixedWhere = "the Workshop item's thumbnail (WorkshopItem.json; changed only by the human in the editor's Workshop dialog)",
+                }, guid);
+                if (w.previewFiles != null)
+                {
+                    for (int i = 0; i < w.previewFiles.Count; i++)
+                    {
+                        WorkshopPreviewFile pf = w.previewFiles[i];
+                        if (pf != null)
+                        {
+                            Add(result, new ReferenceSource { Kind = "workshop", Owner = $"workshopItem.previewFiles[{i}]", Data = GuidToken(pf.guid), FixedWhere = "a Workshop preview file (WorkshopItem.json)" }, guid);
+                        }
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                result.Incomplete = true;
+            }
         }
 
         private static void ScanObject(PummelMod mod, ValueConverter conv, ModTransform mt, string guid, RefResult result)
@@ -168,23 +384,7 @@ namespace PummelPartyMcp.Game
                 {
                     ModReflectedType reflected = ModReflectionSystem.GetType(mb.GetType());
                     JObject entry = ComponentReader.Read(mb, reflected, conv);
-                    List<string> found = new List<string>();
-                    bool incomplete = false;
-                    ReferenceScan.FindGuid(entry["properties"], guid, string.Empty, found, ref incomplete);
-                    if (incomplete)
-                    {
-                        result.Incomplete = true;
-                    }
-                    foreach (string path in found)
-                    {
-                        result.Items.Add(new AssetReference
-                        {
-                            Kind = path.Contains("actions[") ? "action" : "component",
-                            Owner = go.name + " / " + reflected.name,
-                            OwnerGuid = EditorAccess.GuidOf(mt),
-                            Where = path,
-                        });
-                    }
+                    Add(result, new ReferenceSource { Kind = "component", Owner = go.name + " / " + reflected.name, OwnerGuid = EditorAccess.GuidOf(mt), Data = entry["properties"] }, guid);
                 }
                 catch (Exception)
                 {
@@ -192,6 +392,18 @@ namespace PummelPartyMcp.Game
                 }
             }
         }
+
+        /// <summary>Feeds one place through the Core collector and merges the hits.</summary>
+        private static void Add(RefResult result, ReferenceSource s, string guid)
+        {
+            ReferenceCollector.Result r = new ReferenceCollector.Result();
+            ReferenceCollector.Add(r, s, guid);
+            result.Items.AddRange(r.Items);
+            result.Incomplete |= r.Incomplete;
+            result.PreviewImage |= r.PreviewImage;
+        }
+
+        private static JToken GuidToken(SerializableGuid g) => new JValue(g.ToString());
 
         private static void ScanMaterials(PummelMod mod, ModAsset target, RefResult result)
         {
@@ -217,7 +429,7 @@ namespace PummelPartyMcp.Game
                     {
                         if (m.GetTexture(prop) == targetObject)
                         {
-                            result.Items.Add(new AssetReference { Kind = "material", Owner = pm.name, OwnerGuid = pm.guid.ToString(), Where = prop });
+                            Add(result, new ReferenceSource { Kind = "material", Owner = pm.name, OwnerGuid = pm.guid.ToString(), Data = new JValue(target.guid.ToString()), FixedWhere = prop }, target.guid.ToString());
                         }
                     }
                 }
@@ -245,6 +457,19 @@ namespace PummelPartyMcp.Game
 
         private static void ScanSettings(EditorSystem ed, PummelMod mod, string guid, RefResult result)
         {
+            try
+            {
+                ScanSettingsFields(ed, mod, guid, result);
+            }
+            catch (Exception)
+            {
+                result.Incomplete = true;
+                result.SettingsScanFailed = true;
+            }
+        }
+
+        private static void ScanSettingsFields(EditorSystem ed, PummelMod mod, string guid, RefResult result)
+        {
             string modType = SettingsHost.ModTypeName(mod);
             if (modType != null)
             {
@@ -260,27 +485,19 @@ namespace PummelPartyMcp.Game
                         try
                         {
                             object cur = host.Current(f);
-                            bool hit = false;
-                            if (cur is AssetValue av)
+                            JToken data = cur is AssetValue av ? new JValue(av.Guid)
+                                : cur is List<AssetValue> list ? new JArray(list.Where(x => x != null).Select(x => (JToken)new JValue(x.Guid)).ToArray())
+                                : null;
+                            Add(result, new ReferenceSource
                             {
-                                hit = string.Equals(av.Guid, guid, StringComparison.OrdinalIgnoreCase);
-                            }
-                            else if (cur is List<AssetValue> list)
-                            {
-                                hit = list.Any(x => x != null && string.Equals(x.Guid, guid, StringComparison.OrdinalIgnoreCase));
-                            }
-                            if (hit)
-                            {
-                                result.Items.Add(new AssetReference { Kind = "setting", Owner = sec.Name + "." + f.Name, Where = $"get_mod_settings {sec.Name}.{f.Name}" });
-                                if (f.Member == "screenshotTexture" || f.Member == "previewImage")
-                                {
-                                    result.PreviewImage = true;
-                                }
-                            }
+                                Kind = "setting", Owner = sec.Name + "." + f.Name, Data = data, FixedWhere = $"get_mod_settings {sec.Name}.{f.Name}",
+                                IsPreviewImage = f.Member == "screenshotTexture" || f.Member == "previewImage",
+                            }, guid);
                         }
                         catch (Exception)
                         {
                             result.Incomplete = true;
+                            result.SettingsScanFailed = true; // L3: it may be the preview image: never removed, even with force
                         }
                     }
                 }
@@ -299,6 +516,7 @@ namespace PummelPartyMcp.Game
             catch (Exception)
             {
                 result.Incomplete = true;
+                result.SettingsScanFailed = true;
             }
         }
 
@@ -310,7 +528,8 @@ namespace PummelPartyMcp.Game
                 ["items"] = new JArray(r.Items.Select(ReferenceScan.ToJson).ToArray()),
                 ["scanComplete"] = !r.Incomplete,
                 ["objectsScanned"] = r.ObjectsScanned,
-                ["scanned"] = "components and action parameters/targets of every scene and prefab object, materials' texture slots, mod settings",
+                ["scanned"] = "components and action parameters/targets (incl. nested popup choices) of every scene and prefab object, the player-settings triggers, materials' texture slots, mod settings (music, ambience, preview image, custom spaces, item prefabs and icon), the Workshop item's thumbnail and preview files",
+                ["settingsScanFailed"] = r.SettingsScanFailed,
             };
         }
     }

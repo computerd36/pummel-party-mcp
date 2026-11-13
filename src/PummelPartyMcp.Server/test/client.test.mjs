@@ -164,6 +164,7 @@ test("new error codes map to hints", async () => {
     ALREADY_EXISTS: /already exists/,
     ASSET_IN_USE: /references/,
     IMPORT_FAILED: /removed its copy/,
+    LINK_REFUSED: /never written through/,
     TIMEOUT: /safe to retry.*check get_status and list_mods, do not retry blindly/s,
   };
   try {

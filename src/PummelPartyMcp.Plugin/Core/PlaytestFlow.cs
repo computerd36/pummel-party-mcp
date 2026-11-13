@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 
 namespace PummelPartyMcp.Core
 {
@@ -32,6 +34,50 @@ namespace PummelPartyMcp.Core
     }
 
     /// <summary>
+    /// The protection around the synchronous PummelMod.Save inside SetEditorState(EnteringPlayMode) (review C2): the same as save_mod's.
+    /// <see cref="Prepare"/> runs before the commit (link pre-check of every save target, dry run + safety copy of every prefab; throws
+    /// to refuse with nothing changed); <see cref="Verify"/> runs right after the Play call returned (never throws).
+    /// </summary>
+    public interface IPlaytestSaveProtection
+    {
+        void Prepare();
+
+        PlaytestSaveReport Verify();
+    }
+
+    /// <summary>Result of the prefab verification after the playtest's save.</summary>
+    public sealed class PlaytestSaveReport
+    {
+        public List<PrefabFileOutcome> Outcomes = new List<PrefabFileOutcome>();
+
+        public bool Ok => Outcomes.All(o => o.Ok);
+
+        public int Verified => Outcomes.Count;
+
+        public List<PrefabFileOutcome> Failed => Outcomes.Where(o => !o.Ok).ToList();
+
+        public List<string> RestoredNames => Outcomes.Where(o => o.Restored || o.Removed).Select(o => o.Name).ToList();
+
+        public Newtonsoft.Json.Linq.JArray ToJson() => new Newtonsoft.Json.Linq.JArray(Outcomes.Select(o => (Newtonsoft.Json.Linq.JToken)o.ToJson()).ToArray());
+    }
+
+    /// <summary>The Core implementation: <paramref name="prepare"/> builds the jobs (game side: link check + PrefabWriteGuard.Prepare per prefab).</summary>
+    public sealed class PrefabSaveProtection : IPlaytestSaveProtection
+    {
+        private readonly Func<List<PrefabFileJob>> m_prepare;
+        private List<PrefabFileJob> m_jobs;
+
+        public PrefabSaveProtection(Func<List<PrefabFileJob>> prepare)
+        {
+            m_prepare = prepare ?? throw new ArgumentNullException(nameof(prepare));
+        }
+
+        public void Prepare() => m_jobs = m_prepare() ?? new List<PrefabFileJob>();
+
+        public PlaytestSaveReport Verify() => new PlaytestSaveReport { Outcomes = (m_jobs ?? new List<PrefabFileJob>()).Select(PrefabWriteGuard.Finish).ToList() };
+    }
+
+    /// <summary>
     /// Multi-frame start/stop of a playtest with commit-point semantics. Start: commit (needs <see cref="StartBudget"/>
     /// left), <see cref="IPlaytestHost.EnterPlayMode"/>, wait until PlayMode. Stop: Editing = already stopped (no change);
     /// ExitingPlayMode = wait for Editing (no change); EnteringPlayMode = wait (pre-commit, bounded) until PlayMode, as the
@@ -61,7 +107,15 @@ namespace PummelPartyMcp.Core
             public bool StopPressed;
             public PlayState FinalState;
             public TimeSpan Elapsed;
+
+            /// <summary>start: the prefab verification after the save (null without protection).</summary>
+            public PlaytestSaveReport SaveReport;
         }
+
+        /// <summary>start: optional save protection (C2); the game side always sets it.</summary>
+        public IPlaytestSaveProtection SaveProtection;
+
+        private PlaytestSaveReport m_saveReport;
 
         private readonly IPlaytestHost m_host;
         private readonly IWorkCompletion m_completion;
@@ -141,8 +195,26 @@ namespace PummelPartyMcp.Core
 
         private bool BeginStart()
         {
+            SaveProtection?.Prepare(); // same dispatched step as the Play call: throws = refused, nothing changed
             Commit(StartBudget, "start the playtest");
-            m_host.EnterPlayMode();
+            Exception enterError = null;
+            try
+            {
+                m_host.EnterPlayMode(); // the editor saves the mod synchronously inside
+            }
+            catch (Exception e)
+            {
+                enterError = e;
+            }
+            m_saveReport = SaveProtection?.Verify();
+            if (m_saveReport != null && !m_saveReport.Ok)
+            {
+                return Fail(SaveFailure(enterError));
+            }
+            if (enterError != null)
+            {
+                throw enterError;
+            }
             PlayState s = m_host.State;
             if (s == PlayState.Editing)
             {
@@ -160,6 +232,37 @@ namespace PummelPartyMcp.Core
             }
             Enter(Phase.AwaitPlay);
             return Step();
+        }
+
+        /// <summary>The playtest's save left prefab files that failed the check: say what was restored and whether the playtest runs.</summary>
+        private RpcException SaveFailure(Exception enterError)
+        {
+            PlayState s;
+            try
+            {
+                s = m_host.State;
+            }
+            catch (Exception)
+            {
+                s = PlayState.Closed;
+            }
+            bool started = s == PlayState.EnteringPlayMode || s == PlayState.PlayMode;
+            List<string> restored = m_saveReport.RestoredNames;
+            string startedText = started
+                ? $"the playtest WAS started (state {s}) and may run with the prefab files the save wrote; stop it with stop_playtest before editing"
+                : $"the playtest was NOT started (editor state {s})";
+            string msg = "start_playtest: the editor saved the mod, but these prefab files failed the check after the save: " + PrefabWriteGuard.Describe(m_saveReport.Failed) + ". " +
+                         (restored.Count > 0 ? "Restored to their content before the save: " + string.Join(", ", restored.ToArray()) + ". " : "Nothing could be restored. ") +
+                         startedText + ". The in-memory edits are intact; fix the cause and save_mod again" +
+                         (enterError != null ? $" (the Play call also threw {enterError.GetType().Name}: {enterError.Message})" : string.Empty);
+            Newtonsoft.Json.Linq.JObject data = new Newtonsoft.Json.Linq.JObject
+            {
+                ["playtestStarted"] = started,
+                ["state"] = s.ToString(),
+                ["prefabs"] = m_saveReport.ToJson(),
+                ["restoredPrefabs"] = new Newtonsoft.Json.Linq.JArray(restored.ToArray()),
+            };
+            return new RpcException(ErrorCodes.Internal, msg, data);
         }
 
         private bool BeginStop()
@@ -341,6 +444,7 @@ namespace PummelPartyMcp.Core
                     StopPressed = stopPressed,
                     FinalState = final,
                     Elapsed = Elapsed(),
+                    SaveReport = m_saveReport,
                 });
             }
             catch (Exception e)

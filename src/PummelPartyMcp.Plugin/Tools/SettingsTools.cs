@@ -17,8 +17,8 @@ namespace PummelPartyMcp.Tools
     internal static class SettingsTools
     {
         public static readonly TimeSpan SetTimeout = TimeSpan.FromSeconds(15);
-        public static readonly TimeSpan CaptureTimeout = TimeSpan.FromSeconds(25);
-        private static readonly TimeSpan CaptureWait = TimeSpan.FromSeconds(12);
+        public static readonly TimeSpan CaptureTimeout = CommitBudgets.CaptureTimeout;
+        private static readonly TimeSpan CaptureWait = CommitBudgets.CaptureWait;
 
         private sealed class SetArgs
         {
@@ -364,6 +364,17 @@ namespace PummelPartyMcp.Tools
             {
                 throw RpcException.Internal("the mod folder is not known");
             }
+            // C1: the editor writes Assets\Textures\Screenshot<N>.jpg (first free N) and the importer its .pmeta
+            string assetsFull = AssetAccess.AssetsFolderOf(mod);
+            string texturesFolder = Path.Combine(assetsFull, "Textures");
+            if (!string.Equals(Path.GetFullPath(mod.FullTexturesFolder).TrimEnd('\\', '/'), texturesFolder, StringComparison.OrdinalIgnoreCase))
+            {
+                throw RpcException.Internal("the game's Textures folder is not <mod>\\Assets\\Textures; no screenshot was taken");
+            }
+            string modRootChecked = AssetImportRules.ModRootOf(assetsFull);
+            SandboxPath.RequireFolderInsideMod(modRootChecked, texturesFolder, "capture_preview_image (Assets\\Textures)");
+            string nextShot = NextScreenshotPath(texturesFolder);
+            SandboxPath.RequireAllInsideMod(modRootChecked, new[] { nextShot, nextShot + AssetImportRules.MetaExtension }, "capture_preview_image");
             HashSet<string> before = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (ModAsset a in mod.Assets.assets)
             {
@@ -373,7 +384,7 @@ namespace PummelPartyMcp.Tools
                 }
             }
 
-            inv.Commit(TimeSpan.FromSeconds(4));
+            inv.Commit(CommitBudgets.Capture); // L7: the poll below may wait CaptureWait after the commit
             Stopwatch sw = Stopwatch.StartNew();
             int frames = 0;
             ed.TakeScreenGrab(); // the toolbar camera button / F10: renders the scene view at the end of the next frame
@@ -385,14 +396,16 @@ namespace PummelPartyMcp.Tools
                     EditorSystem now = EditorAccess.EditorOrNull();
                     if (now == null || !ReferenceEquals(now.CurrentMod, mod))
                     {
-                        inv.Fail(new RpcException(ErrorCodes.InvalidState, "the open mod changed while the screenshot was being taken; check list_assets for a Screenshot asset"));
+                        // L6: the editor writes the screenshot into whatever mod is open at the end of the frame; never assign across mods
+                        inv.Fail(new RpcException(ErrorCodes.InvalidState,
+                            "the open mod changed while the screenshot was being taken; nothing was assigned. The editor may have written a Screenshot<N>.jpg (and .pmeta) into the mod that is open now: check its list_assets"));
                         return true;
                     }
                     ModAssetExternal created = FindCreated(mod, before);
                     bool busy = Flag(now, "m_willTakePlaymodeScreenshot") || Flag(now, "m_isTakingScreenShot");
                     if (created != null && !busy && frames >= 2)
                     {
-                        inv.Complete(Finish(now, mod, services, created, rootFull));
+                        inv.Complete(Finish(now, mod, services, created, rootFull, texturesFolder));
                         return true;
                     }
                     if (sw.Elapsed >= CaptureWait)
@@ -413,6 +426,20 @@ namespace PummelPartyMcp.Tools
             });
         }
 
+        /// <summary>The file EditorSystem.TakePlayModeScreenshot will write: Screenshot&lt;N&gt;.jpg with the first N (from 1) that does not exist.</summary>
+        private static string NextScreenshotPath(string texturesFolder)
+        {
+            for (int n = 1; n < 100000; n++)
+            {
+                string p = Path.Combine(texturesFolder, $"Screenshot{n}.jpg");
+                if (!File.Exists(p))
+                {
+                    return p;
+                }
+            }
+            throw new RpcException(ErrorCodes.InvalidState, "too many Screenshot<N>.jpg files in Assets\\Textures; no screenshot was taken");
+        }
+
         private static ModAssetExternal FindCreated(PummelMod mod, HashSet<string> before)
         {
             ModAssetExternal found = null;
@@ -427,7 +454,7 @@ namespace PummelPartyMcp.Tools
             return found;
         }
 
-        private static JObject Finish(EditorSystem ed, PummelMod mod, EditServices services, ModAssetExternal created, string rootFull)
+        private static JObject Finish(EditorSystem ed, PummelMod mod, EditServices services, ModAssetExternal created, string rootFull, string texturesFolder)
         {
             string file = created.filePath;
             string full = null;
@@ -442,6 +469,14 @@ namespace PummelPartyMcp.Tools
             if (full == null || !full.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase))
             {
                 throw RpcException.Internal("the editor's screenshot asset is not inside the mod folder; it was not assigned");
+            }
+            // L6: assign only a screenshot that belongs to the mod open when the call started: same mod object still open, listed in
+            // that mod, its file directly in that mod's Assets\Textures folder
+            if (!ReferenceEquals(ed.CurrentMod, mod) || !AssetAccess.InModList(mod, created)
+                || !string.Equals(Path.GetDirectoryName(full), texturesFolder, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new RpcException(ErrorCodes.InvalidState,
+                    $"the screenshot asset '{created.name}' does not belong to the mod that was open when the call started (the open mod changed, or the file is not in its Assets\\Textures folder); nothing was assigned");
             }
             Texture2D texture = created.unityObjectAddressable as Texture2D;
             if (texture == null)

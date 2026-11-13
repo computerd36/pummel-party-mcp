@@ -19,6 +19,8 @@ namespace PummelPartyMcp
         private readonly ConfigEntry<bool> m_serverEnabled;
         private readonly ConfigEntry<int> m_maxImportFileMB;
         private readonly ConfigEntry<int> m_maxModAssetsMB;
+        private readonly ConfigEntry<int> m_maxAudioSeconds;
+        private readonly ConfigEntry<int> m_maxCompressedAudioMB;
         private DateTime m_lastWriteUtc;
 
         public PluginConfig(ConfigFile config)
@@ -54,13 +56,23 @@ namespace PummelPartyMcp
                 new ConfigDescription("import_asset: largest total size of the sandbox mod's Assets folder after an import, in MB. " +
                     "Re-read from this file on every import call, no restart needed.",
                     new AcceptableValueRange<int>(1, 8192)));
+            m_maxAudioSeconds = config.Bind("Assets", "MaxAudioSeconds", AssetLimits.DefaultMaxAudioSeconds,
+                new ConfigDescription("import_asset: longest audio clip accepted, in seconds, read from the WAV/OGG/MP3 header of the copy (the game decodes the whole clip on the main thread " +
+                    "and waits for it). Re-read on every import call, no restart needed.",
+                    new AcceptableValueRange<int>(1, 7200)));
+            m_maxCompressedAudioMB = config.Bind("Assets", "MaxCompressedAudioMB", AssetLimits.DefaultMaxCompressedAudioMB,
+                new ConfigDescription("import_asset: largest OGG/MP3 file accepted when its duration cannot be read from its header (e.g. a VBR MP3 without a Xing/VBRI header), in MB. " +
+                    "Re-read on every import call, no restart needed.",
+                    new AcceptableValueRange<int>(1, 1024)));
             m_lastWriteUtc = LastWrite();
         }
 
         /// <summary>Asset size limits ([Assets] section); call <see cref="RefreshIfChanged"/> first (the registry does, per call).</summary>
         public AssetLimits AssetLimits => new AssetLimits(
             m_maxImportFileMB.Value >= 1 && m_maxImportFileMB.Value <= 1024 ? m_maxImportFileMB.Value : AssetLimits.DefaultMaxImportFileMB,
-            m_maxModAssetsMB.Value >= 1 && m_maxModAssetsMB.Value <= 8192 ? m_maxModAssetsMB.Value : AssetLimits.DefaultMaxModAssetsMB);
+            m_maxModAssetsMB.Value >= 1 && m_maxModAssetsMB.Value <= 8192 ? m_maxModAssetsMB.Value : AssetLimits.DefaultMaxModAssetsMB,
+            m_maxAudioSeconds.Value >= 1 && m_maxAudioSeconds.Value <= 7200 ? m_maxAudioSeconds.Value : AssetLimits.DefaultMaxAudioSeconds,
+            m_maxCompressedAudioMB.Value >= 1 && m_maxCompressedAudioMB.Value <= 1024 ? m_maxCompressedAudioMB.Value : AssetLimits.DefaultMaxCompressedAudioMB);
 
         public bool PluginEnabled => m_pluginEnabled.Value;
 

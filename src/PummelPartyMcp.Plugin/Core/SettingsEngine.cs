@@ -598,6 +598,7 @@ namespace PummelPartyMcp.Core
                 case SettingKind.Color: s = "{r, g, b, a?} floats 0-1 (a defaults to 1)"; break;
                 case SettingKind.Asset: s = "null, a guid string or {guid}"; break;
                 case SettingKind.AssetList: s = "array of {guid, name, ...} | null"; break;
+                case SettingKind.Trigger: s = "read-only action trigger (get_action_graph scope playerSettings)"; break;
                 default: s = "preset name"; break;
             }
             return f.IsParam ? "{value: " + s + ", override?: bool} or just the value (= override on)" : s;

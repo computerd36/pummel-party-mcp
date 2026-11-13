@@ -17,8 +17,8 @@ namespace PummelPartyMcp.Tools
     /// </summary>
     internal static class AssetImportTools
     {
-        public static readonly TimeSpan ImportTimeout = TimeSpan.FromSeconds(60);
-        public static readonly TimeSpan EditTimeout = TimeSpan.FromSeconds(30);
+        public static readonly TimeSpan ImportTimeout = CommitBudgets.ImportTimeout;
+        public static readonly TimeSpan EditTimeout = CommitBudgets.AssetEditTimeout;
 
         private sealed class ImportArgs
         {
@@ -178,6 +178,9 @@ namespace PummelPartyMcp.Tools
             public EditorSystem Ed;
             public PummelMod Mod;
             public string AssetsFull;
+
+            /// <summary>The validated mod root (parent of AssetsFull): the root of every SandboxPath check.</summary>
+            public string Root => AssetImportRules.ModRootOf(AssetsFull);
         }
 
         private static Ready RequireReady(bool noPrefab)
@@ -356,7 +359,9 @@ namespace PummelPartyMcp.Tools
         {
             ["maxImportFileMB"] = l.MaxImportFileMB,
             ["maxModAssetsMB"] = l.MaxModAssetsMB,
-            ["configSection"] = "[Assets] MaxImportFileMB, MaxModAssetsMB in BepInEx\\config\\com.pummelpartymcp.plugin.cfg (re-read on every call)",
+            ["maxAudioSeconds"] = l.MaxAudioSeconds,
+            ["maxCompressedAudioMB"] = l.MaxCompressedAudioMB,
+            ["configSection"] = "[Assets] MaxImportFileMB, MaxModAssetsMB, MaxAudioSeconds, MaxCompressedAudioMB in BepInEx\\config\\com.pummelpartymcp.plugin.cfg (re-read on every call)",
         };
 
         private static RemovalFacts Facts(EditorSystem ed, ModAsset a, string assetsFull)
@@ -397,6 +402,7 @@ namespace PummelPartyMcp.Tools
                     ["nameCharacters"] = "A-Z a-z 0-9 space _ . ( ) -",
                     ["maxTextureSidePixels"] = AssetImportRules.MaxTextureSide,
                     ["maxObjVertexLines"] = AssetImportRules.MaxObjVertexLines,
+                    ["maxObjFaceLines"] = AssetImportRules.MaxObjFaceLines,
                     ["maxNumberedDuplicates"] = AssetImportRules.MaxDuplicateSuffix,
                 },
                 ["sources"] = "absolute local paths only (X:\\...); UNC/network/device paths are refused in this version; the source is only read (never moved, changed, locked or deleted)",
@@ -462,14 +468,30 @@ namespace PummelPartyMcp.Tools
             }
             ImportDestination plan = AssetImportRules.ChooseFree(r.AssetsFull, src.Kind, stem, src.Extension); // refuses when all names are taken
 
-            inv.Commit(TimeSpan.FromSeconds(15)); // from here on the caller always gets this call's own result
+            inv.Commit(CommitBudgets.Import); // L7: copy + checks on the copy + decode; from here on the caller always gets this call's own result
             services.Observe();
 
-            AssetImportRules.Created created = AssetImportRules.CopyIntoMod(src, r.AssetsFull, stem); // rolls back its own file on failure
+            // M1: copied as <name>.mcp-import, every content check and cap run on that copy, then renamed; rolls back its own file on failure
+            AssetImportRules.Created created = AssetImportRules.CopyIntoMod(src, r.AssetsFull, stem, null, limits);
             ModAssetExternal asset = null;
             try
             {
-                List<ModAssetExternal> list = r.Mod.ImportFile(new FileInfo(created.Destination.FullPath));
+                // C1: the copy and the .pmeta the importer writes, checked right before the game call
+                SandboxPath.RequireInsideMod(r.Root, created.Destination.FullPath, "import_asset (registering the copy)");
+                SandboxPath.RequireInsideMod(r.Root, created.Destination.MetaPath, "import_asset (.pmeta the game writes)");
+                created.BeforeMetaStep();
+                // M1: the importer writes the .pmeta and then decodes synchronously; a journal lets the next start quarantine the copy
+                // if the game dies during the decode (otherwise every reopen of the mod would decode it again)
+                ImportJournal.Write(r.Root, created.Destination, created.Sha256, created.MetaExistedBefore);
+                List<ModAssetExternal> list;
+                try
+                {
+                    list = r.Mod.ImportFile(new FileInfo(created.Destination.FullPath));
+                }
+                finally
+                {
+                    ImportJournal.Clear(r.Root);
+                }
                 if (list == null || list.Count == 0)
                 {
                     throw new InvalidOperationException(list == null
@@ -508,6 +530,7 @@ namespace PummelPartyMcp.Tools
                 ["nameDerived"] = derived,
                 ["renamedBecauseExists"] = created.Destination.Suffix > 0,
                 ["checks"] = new JArray(src.Checks.ToArray()),
+                ["checkedOnCopy"] = true, // M1: the "copy:" checks ran on the file inside the mod before it was registered
                 ["limits"] = LimitsJson(limits),
                 ["modAssetsBytesAfter"] = AssetImportRules.FolderSize(r.AssetsFull),
                 ["undoable"] = false,
@@ -532,6 +555,7 @@ namespace PummelPartyMcp.Tools
                     !string.IsNullOrEmpty(x.filePath) && string.Equals(SafeFull(x.filePath), SafeFull(created.Destination.FullPath), StringComparison.OrdinalIgnoreCase));
                 if (reg != null)
                 {
+                    AssetAccess.RequireRemovable(r.AssetsFull, reg, "import_asset cleanup");
                     r.Mod.RemoveAsset(reg);
                     done.Add("unregistered the asset");
                 }
@@ -654,7 +678,11 @@ namespace PummelPartyMcp.Tools
                 }
             }
 
-            inv.Commit(TimeSpan.FromSeconds(3));
+            // C1: Save rewrites the .pmeta; ReimportAsset reads the file and, if it is missing, deletes the file and .pmeta
+            AssetAccess.RequireSavable(r.AssetsFull, asset, "set_import_settings");
+            AssetAccess.RequireRemovable(r.AssetsFull, asset, "set_import_settings");
+
+            inv.Commit(CommitBudgets.ImportSettings); // L7: a re-import decodes the file again
             services.Observe();
             UnityEngine.Object oldObject = asset.unityObjectAddressable;
             Mesh oldMesh = (asset as PummelProp)?.MeshAsset?.Mesh;
@@ -824,10 +852,7 @@ namespace PummelPartyMcp.Tools
             {
                 throw new RpcException(ErrorCodes.InvalidState, "'Assets\\Materials' exists as a file; nothing was created");
             }
-            if (Directory.Exists(expected) && (new DirectoryInfo(expected).Attributes & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new RpcException(ErrorCodes.InvalidState, "'Assets\\Materials' is a link (junction/symlink); refusing to write through it");
-            }
+            SandboxPath.RequireFolderInsideMod(r.Root, expected, "create_material (Assets\\Materials)");
             return expected;
         }
 
@@ -870,7 +895,17 @@ namespace PummelPartyMcp.Tools
                 throw new RpcException(ErrorCodes.AlreadyExists, $"a material named '{args.Name}' already exists; pick another name (nothing was created)");
             }
 
-            inv.Commit(TimeSpan.FromSeconds(5));
+            // C1: every file the editor writes or moves for this call
+            List<string> targets = new List<string> { uniqueFile, uniqueFile + AssetImportRules.MetaExtension };
+            if (args.Name != null)
+            {
+                string named = Path.Combine(folder, args.Name + ".pmat");
+                targets.Add(named);
+                targets.Add(named + AssetImportRules.MetaExtension);
+            }
+            SandboxPath.RequireAllInsideMod(r.Root, targets, "create_material");
+
+            inv.Commit(CommitBudgets.Material);
             services.Observe();
             AssetImportRules.Created created = new AssetImportRules.Created
             {
@@ -879,12 +914,13 @@ namespace PummelPartyMcp.Tools
                     AssetsFolder = r.AssetsFull, SubFolder = "Materials", Stem = uniqueName, Extension = ".pmat",
                     FullPath = uniqueFile, MetaPath = uniqueFile + AssetImportRules.MetaExtension,
                 },
-                FileCreated = true,
+                FileCreated = !File.Exists(uniqueFile), // checked free above; recorded again right before the editor writes it
             };
             PummelMaterial pm = null;
             List<string> notes = new List<string>();
             try
             {
+                created.BeforeMetaStep();
                 pm = r.Ed.CreateNewMaterial(); // writes Assets\Materials\<unique>.pmat and .pmeta immediately
                 if (!ReferenceEquals(pm.UnityMaterial.shader, shader))
                 {
@@ -892,10 +928,14 @@ namespace PummelPartyMcp.Tools
                 }
                 if (args.Name != null && args.Name != pm.name)
                 {
-                    pm.Rename(args.Name); // moves the two files inside the same folder (both names were checked free above)
-                    if (EditorPopupManager.CurrentPopup != null)
+                    string named = Path.Combine(Path.GetDirectoryName(pm.filePath), args.Name + ".pmat");
+                    // L8 + C1: link check of the four paths, new name free, old bytes recorded; success only if both files moved
+                    RenameSnapshot rs = RenameGuard.Before(r.Root, pm.filePath, named, EditorPopupManager.CurrentPopup != null);
+                    pm.Rename(args.Name); // moves the two files inside the same folder
+                    RenameResult rr = RenameGuard.After(rs, pm.filePath, EditorPopupManager.CurrentPopup != null);
+                    if (!rr.Ok)
                     {
-                        notes.Add("the editor raised a dialog while renaming; close it by hand (see get_log)");
+                        throw new InvalidOperationException($"renaming the new material to '{args.Name}' failed: {rr.Problem}");
                     }
                 }
                 if (plan != null)
@@ -906,6 +946,7 @@ namespace PummelPartyMcp.Tools
                 {
                     MaterialAccess.Apply(r.Ed, pm, new MaterialPlan { Rule = rule });
                 }
+                AssetAccess.RequireSavable(r.AssetsFull, pm, "create_material (saving the properties)");
                 pm.Save();
             }
             catch (Exception e)
@@ -916,6 +957,7 @@ namespace PummelPartyMcp.Tools
                     ModAssetExternal reg = r.Mod.Assets.assets.OfType<PummelMaterial>().FirstOrDefault(x => pm != null && ReferenceEquals(x, pm));
                     if (reg != null && AssetImportRules.IsStrictlyUnder(r.AssetsFull, reg.filePath))
                     {
+                        AssetAccess.RequireRemovable(r.AssetsFull, reg, "create_material cleanup");
                         r.Mod.RemoveAsset(reg);
                         done.Add("removed the new material");
                     }
@@ -1002,8 +1044,9 @@ namespace PummelPartyMcp.Tools
                 }
             }
             string previousShader = mat.shader.name;
+            AssetAccess.RequireSavable(r.AssetsFull, pm, "set_material"); // C1: .pmat and .pmeta are rewritten in place
 
-            inv.Commit(TimeSpan.FromSeconds(3));
+            inv.Commit(CommitBudgets.Material);
             services.Observe();
             if (shaderChanges)
             {
@@ -1073,6 +1116,12 @@ namespace PummelPartyMcp.Tools
                     $"'{a.name}' is the mod's preview image; it is never removed (even with force). Set the preview image to another texture or null first (set_mod_settings section details, field previewImage), then retry.",
                     AssetAccess.RefsJson(refs));
             }
+            if (refs.SettingsScanFailed)
+            {
+                throw new RpcException(ErrorCodes.AssetInUse,
+                    $"'{a.name}' is not removed (even with force): the mod settings could not be read, so it cannot be ruled out that it is the preview image or another settings reference. See get_log; reopen the mod and retry.",
+                    AssetAccess.RefsJson(refs));
+            }
             bool blocked = refs.Items.Count > 0 || refs.Incomplete;
             if (blocked && !args.Force)
             {
@@ -1091,8 +1140,9 @@ namespace PummelPartyMcp.Tools
             {
                 throw RpcException.InvalidParams("the .pmeta path is not inside the mod's Assets folder; nothing was removed");
             }
+            AssetAccess.RequireRemovable(r.AssetsFull, ext, "remove_asset"); // C1: every path RemoveAsset deletes (prop: + nested mesh)
 
-            inv.Commit(TimeSpan.FromSeconds(3));
+            inv.Commit(CommitBudgets.Remove);
             services.Observe();
             EditorSelectionManager sel = r.Ed.GetSelectionManager();
             if (sel.IsSelected(ext))

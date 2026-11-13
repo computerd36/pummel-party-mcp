@@ -101,7 +101,19 @@ namespace PummelPartyMcp.Tests
             return b.ToArray();
         }
 
-        private static byte[] Wav() => Encoding.ASCII.GetBytes("RIFF").Concat(new byte[] { 36, 0, 0, 0 }).Concat(Encoding.ASCII.GetBytes("WAVEfmt ")).Concat(new byte[32]).ToArray();
+        /// <summary>A minimal valid PCM WAV (fmt: 8 kHz mono 8-bit, byte rate 8000; data: 800 bytes = 0.1 s).</summary>
+        private static byte[] Wav()
+        {
+            using (MemoryStream ms = new MemoryStream())
+            using (BinaryWriter w = new BinaryWriter(ms))
+            {
+                w.Write(Encoding.ASCII.GetBytes("RIFF")); w.Write(36 + 800); w.Write(Encoding.ASCII.GetBytes("WAVE"));
+                w.Write(Encoding.ASCII.GetBytes("fmt ")); w.Write(16); w.Write((short)1); w.Write((short)1); w.Write(8000); w.Write(8000); w.Write((short)1); w.Write((short)8);
+                w.Write(Encoding.ASCII.GetBytes("data")); w.Write(800); w.Write(new byte[800]);
+                w.Flush();
+                return ms.ToArray();
+            }
+        }
 
         private static byte[] Ogg() => Encoding.ASCII.GetBytes("OggS").Concat(new byte[64]).ToArray();
 
@@ -477,6 +489,7 @@ namespace PummelPartyMcp.Tests
 
             // rollback removes exactly what the call created and leaves neighbours alone
             AssetImportRules.Created c5 = AssetImportRules.CopyIntoMod(s, assets, "keepme");
+            c5.BeforeMetaStep(); // the import step is reached and the .pmeta does not exist yet
             File.WriteAllBytes(c5.Destination.MetaPath, Encoding.ASCII.GetBytes("{}")); // the importer's sidecar
             string neighbour = Write(Path.Combine(assets, "Textures"), "keepme-neighbour.png", Png(4, 4));
             string neighbourMeta = Write(Path.Combine(assets, "Textures"), "keepme-neighbour.png.pmeta", new byte[2]);
@@ -487,6 +500,18 @@ namespace PummelPartyMcp.Tests
             Check("rollback leaves every neighbour (pre-existing files, similar names, other folders) alone", File.Exists(neighbour) && File.Exists(neighbourMeta) && File.Exists(similar) && File.Exists(otherFolder)
                 && File.Exists(c.Destination.FullPath) && File.Exists(c2.Destination.FullPath) && File.Exists(cn));
             Check("rolling back twice is harmless", AssetImportRules.Rollback(c5).Deleted.Count == 0);
+
+            // L11: the .pmeta is deleted only when this call can prove it created it
+            AssetImportRules.Created c6 = AssetImportRules.CopyIntoMod(s, assets, "proof1");
+            File.WriteAllBytes(c6.Destination.MetaPath, Encoding.ASCII.GetBytes("{\"other\":1}")); // appeared before the import step (someone else's)
+            AssetImportRules.CleanupReport rep6 = AssetImportRules.Rollback(c6);
+            Check("L11: rollback before the import step keeps a .pmeta it did not create (and says so)", !File.Exists(c6.Destination.FullPath) && File.Exists(c6.Destination.MetaPath)
+                && rep6.Problems.Any(p => p.Contains("cannot prove")));
+            AssetImportRules.Created c7 = AssetImportRules.CopyIntoMod(s, assets, "proof2");
+            File.WriteAllBytes(c7.Destination.MetaPath, Encoding.ASCII.GetBytes("{\"other\":2}"));
+            c7.BeforeMetaStep(); // the .pmeta already existed right before the import step
+            AssetImportRules.Rollback(c7);
+            Check("L11: rollback keeps a .pmeta that existed right before the import step", File.Exists(c7.Destination.MetaPath) && !File.Exists(c7.Destination.FullPath));
             Check("rollback of a call that created nothing deletes nothing (e.g. the racer's file)",
                 AssetImportRules.Rollback(new AssetImportRules.Created { Destination = c3.Destination, FileCreated = false }).Deleted.Count == 0 && File.Exists(c3.Destination.FullPath));
 
@@ -913,7 +938,8 @@ namespace PummelPartyMcp.Tests
             Check("ImportFile is called exactly once (on the file inside the mod)", tt.Split(new[] { ".ImportFile(" }, StringSplitOptions.None).Length == 2);
             Check("RemoveAsset is only called after the path checks (3 call sites: remove, import cleanup, material cleanup)", tt.Split(new[] { ".RemoveAsset(" }, StringSplitOptions.None).Length == 4);
             string core = File.ReadAllText(Path.Combine(plugin, "Core", "AssetImportCore.cs"));
-            Check("the core copies with CreateNew and never with an overwriting mode", core.Contains("FileMode.CreateNew") && !core.Contains("FileMode.Create,") && !core.Contains("FileMode.Truncate") && !core.Contains("File.Copy") && !core.Contains("File.Move") && !core.Contains("File.Replace"));
+            Check("the core copies with CreateNew and never with an overwriting mode", core.Contains("FileMode.CreateNew") && !core.Contains("FileMode.Create,") && !core.Contains("FileMode.Truncate") && !core.Contains("File.Copy") && !core.Contains("File.Replace")
+                && core.Split(new[] { "File.Move(" }, StringSplitOptions.None).Length == 2 && core.Contains("File.Move(staging, dest.FullPath); // fails if")); // M1: the one rename of the checked staging copy (non-overwriting)
             Check("the core opens the source read-only with sharing", core.Contains("FileAccess.Read, FileShare.ReadWrite | FileShare.Delete"));
             Check("the core deletes only in Rollback", core.Split(new[] { "File.Delete(" }, StringSplitOptions.None).Length == 2 && !core.Contains("Directory.Delete"));
 

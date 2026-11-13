@@ -32,7 +32,7 @@ const WRITES = [
   "create_prefab", "open_prefab", "close_prefab",
 ];
 const IDEMPOTENT = ["save_mod", "set_mod_settings", "set_import_settings", "set_material", "set_transform", "set_object", "set_property", "set_properties", "set_action", "set_trigger", "stop_playtest"];
-const DESTRUCTIVE = ["delete_object", "remove_component", "remove_action", "remove_trigger", "undo", "run_batch", "remove_asset"];
+const DESTRUCTIVE = ["delete_object", "remove_component", "remove_action", "remove_trigger", "undo", "run_batch", "remove_asset", "set_import_settings", "set_material", "close_prefab"];
 
 test("end to end over stdio MCP", async () => {
   const dir = makeTempDir();

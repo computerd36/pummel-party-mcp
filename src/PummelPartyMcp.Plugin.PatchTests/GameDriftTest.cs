@@ -59,6 +59,7 @@ namespace PummelPartyMcp.PatchTests
                 SettingsDrift(game, check);
                 AssetsDrift(game, check);
                 PrefabsDrift(game, check);
+                LinkSafetyDrift(game, check);
             }
             catch (Exception e)
             {
@@ -366,6 +367,59 @@ namespace PummelPartyMcp.PatchTests
             check("PummelPrefabImporter destroys the in-memory prefab object before it parses the file (hazard H6)", loadMeta != null && Calls(loadMeta).Contains("Object.DestroyImmediate"));
             MethodInfo onDestroy = pp?.GetMethod("OnDestroy", all);
             check("a prefab asset's OnDestroy nulls the scene instances' reference (remove_asset reports them as empty)", onDestroy != null && Calls(onDestroy).Contains("ModPrefabInstance.set_PrefabReference"));
+        }
+
+        /// <summary>
+        /// Review C1/C2/H1/M1: the game facts the link pre-checks rest on (which files a save writes, which classes rewrite their file,
+        /// the nested mesh removal, the screenshot name, the .pmeta written before decoding), read from the real assembly's IL.
+        /// </summary>
+        private static void LinkSafetyDrift(Assembly game, Action<string, bool> check)
+        {
+            const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+            Type mod = game.GetType("PummelMod", false);
+            Type rw = game.GetType("ModDataReaderWriter", false);
+            Type ed = game.GetType("EditorSystem", false);
+            HashSet<string> strs = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Type t in new[] { mod, rw, ed, game.GetType("MinigameMod", false), game.GetType("BoardMod", false), game.GetType("ItemMod", false), game.GetType("BoardSpaceMod", false) })
+            {
+                if (t == null)
+                {
+                    continue;
+                }
+                foreach (MethodBase m in t.GetMethods(all).Cast<MethodBase>().Concat(t.GetConstructors(all)).Concat(t.TypeInitializer == null ? new MethodBase[0] : new MethodBase[] { t.TypeInitializer }))
+                {
+                    if (m.GetMethodBody() != null)
+                    {
+                        strs.UnionWith(LdStrs(m));
+                    }
+                }
+            }
+            string[] missing = ModSaveTargets.DataFiles.Concat(new[] { ModSaveTargets.PreviewFile }).Where(f => !strs.Contains(f)).ToArray();
+            check("every Data file the save pre-check covers is named in the game's save code (" + string.Join(", ", missing) + " missing)", missing.Length == 0);
+            MethodInfo modSave = mod?.GetMethod("Save", Type.EmptyTypes);
+            HashSet<string> sc = modSave == null ? new HashSet<string>() : Calls(modSave);
+            check("PummelMod.Save writes metadata, workshop item, lighting, post-processing, scene, mod-specific data and every asset (the save pre-check list)",
+                new[] { "PummelMod.SaveMetaData", "PummelMod.SaveWorkshopItemDetails", "ModDataReaderWriter.SaveLightingSettings", "ModDataReaderWriter.SavePostProcessSettings", "ModDataReaderWriter.SaveScene", "PummelMod.SaveModSpecificData", "ModAssetExternal.Save" }.All(sc.Contains));
+            MethodInfo saveCurrent = ed?.GetMethod("SaveCurrentMod", all);
+            check("SaveCurrentMod also writes Preview.jpg (save_mod pre-check includes it)", saveCurrent != null && Calls(saveCurrent).Contains("EditorSystem.SavePreviewScreenshot"));
+            MethodInfo enter = ed?.GetMethod("SetEditorState", all);
+            check("SetEditorState(EnteringPlayMode) calls PummelMod.Save synchronously (start_playtest protection)", enter != null && Calls(enter).Contains("PummelMod.Save"));
+            MethodInfo matSave = game.GetType("PummelMaterial", false)?.GetMethod("Save", all);
+            MethodInfo vsSave = game.GetType("PummelVisualScript", false)?.GetMethod("Save", all);
+            check("materials and visual scripts rewrite their own file on save (the pre-check covers the file, not only the .pmeta)",
+                matSave != null && Calls(matSave).Contains("File.Open") && vsSave != null && Calls(vsSave).Contains("File.WriteAllText"));
+            MethodInfo onRemove = game.GetType("PummelProp", false)?.GetMethod("OnRemove", all);
+            check("removing a prop also removes its nested mesh asset (remove_asset checks the mesh's paths too)", onRemove != null && Calls(onRemove).Contains("PummelMod.RemoveAsset"));
+            MethodBase shot = ed == null ? null : ed.GetMethods(all).Cast<MethodBase>().Concat(ed.GetNestedTypes(all).SelectMany(n => n.GetMethods(all)).Cast<MethodBase>())
+                .FirstOrDefault(m => m.GetMethodBody() != null && LdStrs(m).Any(x => x.StartsWith("Screenshot", StringComparison.Ordinal) && x.EndsWith(".jpg", StringComparison.Ordinal)));
+            check("the play-mode screenshot is written as Textures/Screenshot<N>.jpg (capture_preview_image pre-checks that name)", shot != null && Calls(shot).Contains("PummelMod.get_FullTexturesFolder"));
+            MethodInfo tryMeta = game.GetType("PummelAssetImporter", false)?.GetMethod("TryCreateOrLoadMetaAsset", all);
+            check("the importer writes a missing .pmeta (SaveMetaFile) before the decoder runs (open pre-check, import rollback)", tryMeta != null && Calls(tryMeta).Contains("ModAssetExternal.SaveMetaFile"));
+            MethodInfo saveMeta = game.GetType("ModAssetExternal", false)?.GetMethod("SaveMetaFile", all);
+            check("SaveMetaFile rewrites <file>.pmeta in place (File.WriteAllBytes; a hard link would be written through)", saveMeta != null && Calls(saveMeta).Contains("File.WriteAllBytes"));
+            MethodInfo rename = game.GetType("ModAssetExternal", false)?.GetMethod("Rename", all);
+            check("ModAssetExternal.Rename moves the file, then the .pmeta, and raises a popup on failure (L8 partial-rename detection)",
+                rename != null && Calls(rename).Contains("File.Move") && Calls(rename).Contains("EditorPopupManager.AddPopup"));
         }
 
         private static void SettingsDrift(Assembly game, Action<string, bool> check)

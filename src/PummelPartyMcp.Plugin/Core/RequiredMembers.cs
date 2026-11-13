@@ -272,6 +272,17 @@ namespace PummelPartyMcp.Core
             M("PummelMod", "RemoveAsset", "remove_asset, import cleanup", "ModAsset");
             P("PummelMod", "FullAssetsFolder", "asset tools (folder re-check)");
             P("PummelMod", "FullMaterialsFolder", "create_material (folder re-check)");
+            P("PummelMod", "FullTexturesFolder", "capture_preview_image (folder re-check and link pre-check of Screenshot<N>.jpg)");
+            F("PummelMod", "workshopItem", "ModWorkshopItem", "remove_asset / get_asset references (Workshop thumbnail, read only)");
+            F("ModWorkshopItem", "previewImageGuid", "SerializableGuid", "reference scan (Workshop thumbnail, read only)");
+            F("ModWorkshopItem", "previewFiles", "System.Collections.Generic.List`1[WorkshopPreviewFile]", "reference scan (Workshop preview files, read only)");
+            F("WorkshopPreviewFile", "guid", "SerializableGuid", "reference scan (Workshop preview files, read only)");
+            M("ItemMod", "GetItemDetails", "reference scan (the item's prefabs and icon)");
+            F("ItemDetails", "prefabGuid", "SerializableGuid", "reference scan (item prefab)");
+            F("ItemDetails", "recievePrefabGuid", "SerializableGuid", "reference scan (item receive prefab)");
+            F("ItemDetails", "heldPrefabGuid", "SerializableGuid", "reference scan (item held prefab)");
+            F("ItemDetails", "iconTexture", "UnityEngine.Texture2D", "reference scan (item icon)");
+            F("SimpleModPlayerSettings", "hitTrigger", "ModSystem.Logic.HitTrigger", "reference scan (the hidden player hit trigger's actions)");
             M("PummelMod", "GetModPath", "asset tools (the mod's absolute folder)");
             M("PummelMod", "GetPreviewImageGuid", "remove_asset (preview image is never removed)");
             F("ModAssetExternal", "filePath", "System.String");
@@ -319,6 +330,7 @@ namespace PummelPartyMcp.Core
                 l.Add(new RequiredMember { Kind = "method", Type = type, Name = name, Params = parameters, UsedBy = u });
 
             M("EditorSystem", "CreateNewPrefab", "create_prefab (writes Assets/Prefabs/<name>.pfab and .pmeta)", "ModTransform");
+            P("PummelMod", "FullPrefabsFolder", "create_prefab (the folder CreateNewPrefab writes into must be <mod>\\Assets\\Prefabs)");
             P("EditorSystem", "CurrentPrefab", "open_prefab / close_prefab (the setter saves the prefab it leaves)");
             F("EditorSystem", "m_prefabsRoot", "UnityEngine.Transform", "prefab tools (create cleanup, hierarchy scans)");
             M("EditorSelectionManager", "DeselectAllObjectsAndGizmos", "close_prefab (the Return to Hierarchy sequence)");

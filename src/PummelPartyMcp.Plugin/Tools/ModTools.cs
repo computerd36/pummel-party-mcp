@@ -25,7 +25,7 @@ namespace PummelPartyMcp.Tools
         private static readonly TimeSpan LoadReplyMargin = TimeSpan.FromSeconds(1);
 
         /// <summary>save_mod refuses to start (TIMEOUT, nothing saved) with less than this left until the deadline.</summary>
-        private static readonly TimeSpan SaveBudget = TimeSpan.FromSeconds(1);
+        private static readonly TimeSpan SaveBudget = CommitBudgets.Save;
 
         /// <summary>A create/open is waiting for its load (main thread only). Other writes refuse meanwhile.</summary>
         private static bool s_lifecyclePending;
@@ -79,7 +79,7 @@ namespace PummelPartyMcp.Tools
                 inv => OpenTestMod(inv, poller, log),
                 DispatchTimeout));
 
-            registry.Register(ToolDefinition.Write("save_mod", WriteGuard.OpenMod(), null, inv => SaveMod(inv, log)));
+            registry.Register(ToolDefinition.Write("save_mod", WriteGuard.OpenMod(), null, inv => SaveMod(inv, log), CommitBudgets.SaveTimeout));
         }
 
         // ------------------------------------------------------------------ list_mods
@@ -256,6 +256,11 @@ namespace PummelPartyMcp.Tools
             }
             RefuseIfBrokenModList(ed.GetAvailableModManager());
             CheckCanSwitchAway(ed, args.DiscardUnsaved);
+            SandboxPath.RequireOpenable(folder); // C1: loading writes missing .pmeta files; never through a link
+            foreach (string line in ImportJournal.Recover(folder)) // M1: an import interrupted by a crash is not decoded again
+            {
+                log.Warning("open_test_mod: import recovery: " + line);
+            }
 
             // Same call the Open Mod dialog ends in (OpenModWithPopupPrompt -> OpenMod) without its unsaved-changes
             // popup, which CheckCanSwitchAway replaces.
@@ -295,6 +300,8 @@ namespace PummelPartyMcp.Tools
             // in memory first (refuse, nothing saved, when one cannot be serialised), keep a safety copy of each file, and verify them all
             // after the save; any that fails is restored (the save's other files stay saved).
             string assetsFull = AssetAccess.AssetsFolderOf(mod);
+            // C1: every file the save writes (Data files, Preview.jpg, every .pmeta/.pmat/.pfab); one link refuses the whole save
+            AssetAccess.RequireModSavable(mod, includePreview: true, "save_mod");
             List<PrefabFileJob> jobs = new List<PrefabFileJob>();
             foreach (PummelPrefab p in PrefabAccess.SavedPrefabs(mod))
             {

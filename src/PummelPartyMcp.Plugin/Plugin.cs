@@ -100,6 +100,23 @@ namespace PummelPartyMcp
             // 1. Publish block first, before anything else can run. Never removed at runtime.
             PublishBlockMonitor block = InstallPublishBlock(log);
 
+            // 1b. Review M1: an import interrupted by a crash while the game decoded it would be decoded again on every reopen of that
+            // sandbox mod; quarantine it (rename only, sandbox mods only, hash-checked) before any mod can be opened.
+            if (m_config.EnableWrites && m_config.ServerEnabled)
+            {
+                try
+                {
+                    foreach (string line in ImportJournal.RecoverAll(Path.Combine(Application.persistentDataPath, "WorkshopMods")))
+                    {
+                        Logger.LogWarning("import recovery: " + line);
+                    }
+                }
+                catch (Exception e)
+                {
+                    Logger.LogWarning("import recovery skipped: " + e.Message);
+                }
+            }
+
             // 2. RPC server (optional).
             if (!m_config.ServerEnabled)
             {

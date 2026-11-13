@@ -177,6 +177,18 @@ test("error.data is appended to error results as compact JSON; the token never a
   }
 });
 
+test("file-writing tools wait longer than the plugin's own limit + commit grace (Core/CommitBudgets.cs)", () => {
+  // plugin limits in seconds: import 120, other asset tools 30, prefab tools 30, capture 25, save 20; + 4 s grace + >= 1 s margin
+  const limits = {
+    import_asset: 120, set_import_settings: 30, create_material: 30, set_material: 30, remove_asset: 30,
+    create_prefab: 30, open_prefab: 30, close_prefab: 30, capture_preview_image: 25, save_mod: 20,
+  };
+  for (const [tool, s] of Object.entries(limits)) {
+    assert.ok(TOOL_TIMEOUTS_MS[tool] >= (s + 4 + 1) * 1000, `${tool}: ${TOOL_TIMEOUTS_MS[tool]} ms`);
+  }
+  assert.equal(TOOL_TIMEOUTS_MS.import_asset, 130000);
+});
+
 test("the three long timeouts are set, and the env override still wins", async () => {
   assert.equal(TOOL_TIMEOUTS_MS.start_playtest, 70000);
   assert.equal(TOOL_TIMEOUTS_MS.stop_playtest, 40000);

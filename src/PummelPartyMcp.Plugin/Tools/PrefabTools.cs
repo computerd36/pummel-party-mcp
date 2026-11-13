@@ -17,7 +17,7 @@ namespace PummelPartyMcp.Tools
     /// </summary>
     internal static class PrefabTools
     {
-        private static readonly TimeSpan PrefabTimeout = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan PrefabTimeout = CommitBudgets.PrefabTimeout;
 
         private sealed class CreateArgs
         {
@@ -109,9 +109,10 @@ namespace PummelPartyMcp.Tools
                 {
                     throw RpcException.InvalidParams(refusal);
                 }
-                if (incomplete)
+                string incompleteRefusal = PrefabSourceRules.RefusalForIncompleteScan(incomplete);
+                if (incompleteRefusal != null)
                 {
-                    warnings.Add("some component values of the source subtree could not be read, so references inside them could not be checked");
+                    throw new RpcException(ErrorCodes.InvalidState, $"'{source.name}': {incompleteRefusal}"); // M2: incomplete means "may hold references"
                 }
                 try
                 {
@@ -126,14 +127,25 @@ namespace PummelPartyMcp.Tools
             }
 
             string folder = Path.Combine(r.AssetsFull, "Prefabs");
+            // L4: CreateNewPrefab writes into PummelMod.FullPrefabsFolder; it must be exactly the folder every check below looks at
+            string gameFolder;
+            try
+            {
+                gameFolder = Path.GetFullPath(r.Mod.FullPrefabsFolder).TrimEnd('\\', '/');
+            }
+            catch (Exception e)
+            {
+                throw RpcException.Internal("the game's Prefabs folder path is invalid: " + e.Message);
+            }
+            if (!string.Equals(gameFolder, folder, StringComparison.OrdinalIgnoreCase))
+            {
+                throw RpcException.Internal("the game's Prefabs folder is not <mod>\\Assets\\Prefabs; refusing to create a prefab there");
+            }
             if (File.Exists(folder))
             {
                 throw new RpcException(ErrorCodes.InvalidState, "'Assets\\Prefabs' exists as a file; nothing was created");
             }
-            if (Directory.Exists(folder) && (new DirectoryInfo(folder).Attributes & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new RpcException(ErrorCodes.InvalidState, "'Assets\\Prefabs' is a link (junction/symlink); refusing to write through it");
-            }
+            SandboxPath.RequireFolderInsideMod(AssetImportRules.ModRootOf(r.AssetsFull), folder, "create_prefab (Assets\\Prefabs)");
 
             string editorName = r.Ed.GetUniqueAssetName<PummelPrefab>(source == null ? null : source.name);
             IEnumerable<string> assetNames = r.Mod.Assets.assets.OfType<PummelPrefab>().Select(p => p.name).ToArray();
@@ -145,12 +157,13 @@ namespace PummelPartyMcp.Tools
             string pfabPath = Path.Combine(folder, editorName + ".pfab");
             PrefabFileJob job = PrefabWriteGuard.PrepareNew(editorName, pfabPath, r.AssetsFull);
 
-            inv.Commit(TimeSpan.FromSeconds(5));
+            inv.Commit(CommitBudgets.CreatePrefab);
             services.Observe();
 
             PummelPrefab prefab = null;
             try
             {
+                PrefabWriteGuard.Recheck(job); // C1, right before the editor writes the two files
                 prefab = r.Ed.CreateNewPrefab(source); // registers the asset and writes the .pfab and .pmeta immediately
             }
             catch (Exception e)
@@ -180,15 +193,27 @@ namespace PummelPartyMcp.Tools
             bool renamed = false;
             if (plan.NeedsRename)
             {
-                prefab.Rename(plan.Name); // moves .pfab and .pmeta inside the same folder (both names were checked free above)
-                renamed = string.Equals(prefab.name, plan.Name, StringComparison.Ordinal);
-                if (EditorPopupManager.CurrentPopup != null)
+                string renamedPath = Path.Combine(folder, plan.Name + ".pfab");
+                string createdAs = prefab.name;
+                RenameResult rr;
+                try
                 {
-                    warnings.Add("the editor raised a dialog while renaming; close it by hand (see get_log)");
+                    // L8 + C1: link check of the four paths, new name free, old bytes recorded; success only if both files moved
+                    RenameSnapshot rs = RenameGuard.Before(AssetImportRules.ModRootOf(r.AssetsFull), prefab.filePath, renamedPath, EditorPopupManager.CurrentPopup != null);
+                    prefab.Rename(plan.Name); // moves .pfab and .pmeta inside the same folder
+                    rr = RenameGuard.After(rs, prefab.filePath, EditorPopupManager.CurrentPopup != null);
                 }
+                catch (RpcException e)
+                {
+                    rr = new RenameResult { Problem = e.Message };
+                }
+                renamed = rr.Ok && string.Equals(prefab.name, plan.Name, StringComparison.Ordinal);
                 if (!renamed)
                 {
-                    warnings.Add($"the prefab could not be renamed to '{plan.Name}'; it keeps the name '{prefab.name}'");
+                    throw new RpcException(ErrorCodes.Internal,
+                        $"the prefab was created and verified as '{createdAs}' (Assets/Prefabs/{createdAs}.pfab), but renaming it to '{plan.Name}' failed: {rr.Problem ?? "the name did not change"}. " +
+                        "It exists under its current name (list_assets); rename it by hand or remove it with remove_asset",
+                        new JObject { ["created"] = AssetAccess.Row(prefab, r.AssetsFull), ["movedBack"] = rr.MovedBack, ["orphanFile"] = rr.Orphan });
                 }
             }
 
@@ -283,6 +308,7 @@ namespace PummelPartyMcp.Tools
             {
                 if (AssetImportRules.IsStrictlyUnder(r.AssetsFull, prefab.filePath) && AssetAccess.InModList(r.Mod, prefab))
                 {
+                    AssetAccess.RequireRemovable(r.AssetsFull, prefab, "create_prefab cleanup");
                     r.Mod.RemoveAsset(prefab); // destroys the prefab object, deletes <file> and <file>.pmeta, unlists it
                     done.Add("unregistered the new prefab");
                 }
@@ -352,7 +378,7 @@ namespace PummelPartyMcp.Tools
                 warnings.Add($"the prefab cannot be serialised right now ({e.GetType().Name}: {e.Message}); close_prefab and save_mod will refuse to write it until that is fixed");
             }
 
-            inv.Commit(TimeSpan.FromSeconds(3));
+            inv.Commit(CommitBudgets.OpenPrefab);
             services.Observe();
             r.Ed.CurrentPrefab = prefab; // = PummelPrefab.Open(): the double-click in the Asset Browser. Saves nothing (no prefab was open).
             if (!ReferenceEquals(r.Ed.CurrentPrefab, prefab))
@@ -396,7 +422,7 @@ namespace PummelPartyMcp.Tools
             string name = prefab.name;
             string guid = prefab.guid.ToString();
 
-            inv.Commit(TimeSpan.FromSeconds(5));
+            inv.Commit(CommitBudgets.ClosePrefab);
             services.Observe();
 
             // The sequence of the UI's "Return to Hierarchy" (HierarchyWidget): refresh the live instances, then leave the context, which
@@ -424,6 +450,7 @@ namespace PummelPartyMcp.Tools
             Exception saveError = null;
             try
             {
+                PrefabWriteGuard.Recheck(job); // C1, right before the setter writes .pfab and .pmeta
                 r.Ed.CurrentPrefab = null; // saves the prefab (isEnabled, Save, hides it) and returns to the scene
             }
             catch (Exception e)

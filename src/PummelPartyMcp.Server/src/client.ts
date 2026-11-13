@@ -65,7 +65,9 @@ const HINTS: Record<string, string> = {
   ALREADY_EXISTS: "A mod with that name already exists (create_test_mod: choose another name or use open_test_mod). For import_asset/create_material the name is taken: pass a different name (nothing was created).",
   ASSET_IN_USE: "The asset is still used (error.data lists the references) or is the preview image. Clear the references first (set_property / remove_action / set_mod_settings / set_material), or for remove_asset retry with force true if the references may become null; changing a texture's compression needs its component/action/preview references cleared.",
   IMPORT_FAILED: "The game could not import the copied file; the plugin removed its copy (error.data.cleanedUp) and the source file was not touched. Check get_log, try a smaller or re-exported file.",
-  SERVER_BUSY: "The plugin is busy (too many requests in flight); wait a moment and retry.",
+  LINK_REFUSED:
+    "A path the call would write or delete runs through a junction, symlink or mount point inside the sandbox mod, or is a hard-linked file (the message names it); nothing was written or deleted. Links inside a mod folder are never written through: do not create them. Tell the human to remove the link; reading (list_assets/get_asset show linked: true) still works.",
+  SERVER_BUSY:"The plugin is busy (too many requests in flight); wait a moment and retry.",
   PAYLOAD_TOO_LARGE: "The request was larger than the plugin's 1 MB limit; send less data (fewer or smaller values) per call.",
   REQUEST_TIMEOUT: "The plugin did not receive the whole request within 10 s; retry.",
   HEADERS_TOO_LARGE: "The request headers were refused as too large (HTTP 431); this should not happen, check for a proxy on the port.",
@@ -83,7 +85,7 @@ export const TOOL_TIMEOUTS_MS: Record<string, number> = {
   screenshot: 30000,
   create_test_mod: 45000,
   open_test_mod: 45000,
-  save_mod: 30000,
+  save_mod: 30000, // plugin limit 20 s (Core/CommitBudgets.cs)
   // edit tools: the plugin's own limit is 15 s
   create_object: 20000,
   duplicate_object: 20000,
@@ -98,8 +100,9 @@ export const TOOL_TIMEOUTS_MS: Record<string, number> = {
   undo: 30000,
   set_mod_settings: 20000,
   capture_preview_image: 30000,
-  // asset tools: the plugin's own limits are 60 s (import, decoding runs on the game's main thread) and 30 s
-  import_asset: 70000,
+  // asset tools: the plugin's own limits are 120 s (import: copy, checks on the copy and the game's decode on its main thread) and 30 s
+  // (Core/CommitBudgets.cs), plus the 4 s commit grace and a network margin
+  import_asset: 130000,
   set_import_settings: 40000,
   create_material: 40000,
   set_material: 40000,

@@ -736,7 +736,8 @@ namespace PummelPartyMcp.Core
                 case JTokenType.Object:
                 {
                     JObject o = (JObject)token;
-                    if (o["truncated"] != null || o["unsupported"] != null || o["unavailable"] != null)
+                    // L1: {"truncatedItems": n} is the converter's marker for array items left out (MaxArrayItems)
+                    if (o["truncated"] != null || o["unsupported"] != null || o["unavailable"] != null || o["truncatedItems"] != null)
                     {
                         incomplete = true;
                     }
@@ -788,6 +789,91 @@ namespace PummelPartyMcp.Core
             $"{r.Kind} '{r.Owner}' ({r.Where})";
     }
 
+    /// <summary>One place that can hold asset references, as the game layer read it (JSON in the plugin's converter shape, or a plain guid).</summary>
+    public sealed class ReferenceSource
+    {
+        /// <summary>component (scene/prefab object; hits inside "actions[" become "action"), playerTrigger, material, setting, workshop.</summary>
+        public string Kind;
+        public string Owner;
+        public string OwnerGuid;
+        public JToken Data;
+
+        /// <summary>Where to report a hit (instead of the JSON path), e.g. "get_mod_settings details.previewImage".</summary>
+        public string FixedWhere;
+
+        /// <summary>The place could not be read: the scan is incomplete (which counts as "in use").</summary>
+        public bool ReadFailed;
+
+        /// <summary>A hit here means the asset is the mod's preview image (never removed).</summary>
+        public bool IsPreviewImage;
+    }
+
+    /// <summary>
+    /// The reference scan behind remove_asset, get_asset references and set_import_settings (review H1): every place an asset can be
+    /// referenced, re-derived from the decompiled game. The game layer turns each into <see cref="ReferenceSource"/>s; this collects
+    /// the hits. Pure; tested on fake data for every location.
+    /// </summary>
+    public static class ReferenceCollector
+    {
+        /// <summary>The locations the game layer reads (docs and tests use this list).</summary>
+        public static readonly string[] Locations =
+        {
+            "component properties of every scene object and every prefab's objects",
+            "actions held by components: targets, parameters and nested Display Popup choice lists",
+            "the Minigame player-settings triggers (weaponHitTrigger, tickTrigger, onDeathTrigger, onRespawnTrigger, onFirstSpawnTrigger, onRoundEndTrigger, and the hidden hitTrigger)",
+            "materials' texture slots",
+            "mod settings: music, ambience, preview image, board custom spaces",
+            "Item mods: the item's prefabs (use, receive, held) and icon texture",
+            "the Workshop item's thumbnail and preview files (read only)",
+        };
+
+        public sealed class Result
+        {
+            public List<AssetReference> Items = new List<AssetReference>();
+            public bool Incomplete;
+            public bool PreviewImage;
+        }
+
+        public static void Add(Result r, ReferenceSource s, string guid)
+        {
+            if (s == null)
+            {
+                return;
+            }
+            if (s.ReadFailed)
+            {
+                r.Incomplete = true;
+                return;
+            }
+            List<string> found = new List<string>();
+            bool incomplete = false;
+            ReferenceScan.FindGuid(s.Data, guid, string.Empty, found, ref incomplete);
+            if (incomplete)
+            {
+                r.Incomplete = true;
+            }
+            foreach (string path in found)
+            {
+                string kind = s.Kind == "component" && path.Contains("actions[") ? "action" : s.Kind;
+                r.Items.Add(new AssetReference { Kind = kind, Owner = s.Owner, OwnerGuid = s.OwnerGuid, Where = s.FixedWhere ?? (path.Length == 0 ? s.Owner : path) });
+                if (s.IsPreviewImage)
+                {
+                    r.PreviewImage = true;
+                }
+            }
+        }
+
+        public static Result Collect(IEnumerable<ReferenceSource> sources, string guid)
+        {
+            Result r = new Result();
+            foreach (ReferenceSource s in sources)
+            {
+                Add(r, s, guid);
+            }
+            return r;
+        }
+    }
+
     // ====================================================================================================================
     // Generated documentation block (docs/plugin-api.md)
     // ====================================================================================================================
@@ -803,8 +889,11 @@ namespace PummelPartyMcp.Core
             sb.Append("Destination folders inside the mod's `Assets` folder: Textures (png, jpg, jpeg), Props (obj), Audio (wav, mp3, ogg).\n\n");
             sb.Append("Constant caps: name <= ").Append(AssetImportRules.MaxStemLength).Append(" characters from `A-Za-z0-9 _.()-`; texture side <= ")
               .Append(AssetImportRules.MaxTextureSide).Append(" px; OBJ vertex lines <= ").Append(AssetImportRules.MaxObjVertexLines)
+              .Append(", OBJ face lines <= ").Append(AssetImportRules.MaxObjFaceLines)
               .Append("; at most ").Append(AssetImportRules.MaxDuplicateSuffix).Append(" numbered duplicates (`name (1)` ...). Size limits are configurable: `[Assets] MaxImportFileMB` (default ")
-              .Append(AssetLimits.DefaultMaxImportFileMB).Append(") and `MaxModAssetsMB` (default ").Append(AssetLimits.DefaultMaxModAssetsMB).Append(").\n\n");
+              .Append(AssetLimits.DefaultMaxImportFileMB).Append(") and `MaxModAssetsMB` (default ").Append(AssetLimits.DefaultMaxModAssetsMB).Append("). ")
+              .Append("Audio: `MaxAudioSeconds` (default ").Append(AssetLimits.DefaultMaxAudioSeconds).Append(", read from the WAV/OGG/MP3 header) and, for an OGG/MP3 whose duration the header does not give, `MaxCompressedAudioMB` (default ")
+              .Append(AssetLimits.DefaultMaxCompressedAudioMB).Append("). The content checks run on the copy inside the mod (written as `<name>.mcp-import`, renamed only after they pass).\n\n");
             sb.Append("#### Import settings (`set_import_settings`)\n\n| Asset type | Field | Choices | Default | Effect |\n|---|---|---|---|---|\n");
             foreach (ImportSettingField f in ImportSettingRules.All)
             {

@@ -39,6 +39,12 @@ namespace PummelPartyMcp.Core
 
         /// <summary>The name of a lighting / screen-effects preset (the list is read from the editor at run time).</summary>
         Preset,
+
+        /// <summary>
+        /// An action trigger (ModLogicTrigger subclass) held by the settings, e.g. the player "Event Triggers"; read-only here (edited
+        /// with the action tools) and scanned for asset/object references by FindReferences.
+        /// </summary>
+        Trigger,
     }
 
     /// <summary>Extra normalisation the UI applies to a field after the widget.</summary>
@@ -477,7 +483,7 @@ namespace PummelPartyMcp.Core
             // Event triggers: read-only pointers
             foreach (string trig in new[] { "weaponHitTrigger", "tickTrigger", "onDeathTrigger", "onRespawnTrigger", "onFirstSpawnTrigger", "onRoundEndTrigger" })
             {
-                ModSettingField t = b.Add(trig, "Event Triggers", SettingKind.String, "player", P, null, null, false);
+                ModSettingField t = b.Add(trig, "Event Triggers", SettingKind.Trigger, "player", P, null, null, false);
                 t.OmitFromGet = true;
                 ReadOnly(t, "an event trigger: use get_action_graph with scope \"playerSettings\" and add_action / set_action / remove_action / move_action");
                 t.NoTypeCheck = true;
@@ -916,6 +922,7 @@ namespace PummelPartyMcp.Core
                 case SettingKind.Color: t = "color"; break;
                 case SettingKind.Asset: t = "assetRef"; break;
                 case SettingKind.AssetList: t = "assetRef[]"; break;
+                case SettingKind.Trigger: t = "trigger"; break;
                 default: t = "preset"; break;
             }
             return f.IsParam ? "param(" + t + ")" : t;

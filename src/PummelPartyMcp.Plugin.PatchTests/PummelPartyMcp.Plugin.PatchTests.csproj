@@ -37,6 +37,8 @@
     <Compile Include="..\PummelPartyMcp.Plugin\Core\AssetSettingsRules.cs" Link="Core\AssetSettingsRules.cs" />
     <Compile Include="..\PummelPartyMcp.Plugin\Core\AssetImportCore.cs" Link="Core\AssetImportCore.cs" />
     <Compile Include="..\PummelPartyMcp.Plugin\Core\TestModName.cs" Link="Core\TestModName.cs" />
+    <Compile Include="..\PummelPartyMcp.Plugin\Core\SandboxPath.cs" Link="Core\SandboxPath.cs" />
+    <Compile Include="..\PummelPartyMcp.Plugin\Core\AudioHeaders.cs" Link="Core\AudioHeaders.cs" />
   </ItemGroup>
 
   <ItemGroup>

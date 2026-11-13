@@ -90,6 +90,7 @@ namespace PummelPartyMcp.Tools
                 if (rel != null)
                 {
                     row["relativePath"] = rel;
+                    AssetAccess.AddLinkFlag(row, modRoot, ext);
                 }
                 try
                 {

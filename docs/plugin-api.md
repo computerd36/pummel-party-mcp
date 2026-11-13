@@ -92,8 +92,9 @@ validator refusal: `{"validation": {...}}`). Clients that ignore `data` still ge
 | `GUARD_NOT_TEST_MOD` | the open mod (open-mod tools) or the target / open mod (lifecycle tools) is not a `MCP_` mod; the message names it |
 | `INVALID_STATE` | editor state forbids the call: play mode (also the transitional states `EnteringPlayMode` / `ExitingPlayMode`), no playtest running (`get_playtest_state`), a mod that fails the validator (`start_playtest`), unsaved changes, a prefab being edited, an open editor dialog, a broken editor mod list, an object outside the current editing context, the left mouse button held in the game window, the open mod changed while an edit was pending (the message says what to do) |
 | `ALREADY_EXISTS` | `create_test_mod`: a folder or a mod (Meta name) with that name exists, case-insensitive; `import_asset`: no free name (`name`, `name (1)` ... `(20)` all taken); `create_prefab`: the file the editor would write already exists on disk, or no free name up to `_99`; `create_material`: the file the editor would create (or the requested name) already exists |
-| `ASSET_IN_USE` | `remove_asset` (references, or the preview image) and `set_import_settings` (a compression change would break references): `error.data` lists them |
+| `ASSET_IN_USE` | `remove_asset` (references, or the preview image, or the mod settings could not be read) and `set_import_settings` (a compression change would break references): `error.data` lists them |
 | `IMPORT_FAILED` | `import_asset`: the game's importer rejected the copied file; the copy was removed (`error.data.cleanedUp`), the source was not touched |
+| `LINK_REFUSED` | a path the call would write or delete runs through a junction, symlink or mount point inside the sandbox mod (including the mod folder itself), or is a hard-linked file (or its link count cannot be determined); nothing was written or deleted, the message names the path. See [Links inside a sandbox mod](#links-inside-a-sandbox-mod-every-write-and-delete) |
 | `GAME_VERSION_UNTESTED` | write tool called while the running game version is not in the plugin's tested list and not accepted by `[Safety] AcceptedGameVersion` (or the version could not be read); read tools are unaffected. See [Game-version gate](#game-version-gate) |
 
 Edit tools additionally use `NOT_FOUND` (object / component / the edited object was deleted meanwhile),
@@ -1856,7 +1857,10 @@ otherwise (select `Custom` in the same call or first).
   overwrites the custom effects on disk with the preset's, and they are gone after reopening the mod (in memory they
   survive until then). The plugin never does this silently: switching from Custom to a preset while custom effects exist
   adds a `warnings` entry, and `list_mod_settings` / `get_mod_settings` carry a `saveWarning` while that state exists.
-  Select `Custom` again before `save_mod` to keep the effects.
+  Select `Custom` again before `save_mod` to keep the effects. **Deliberate decision** (Phase 4 review, doc 06 risk 2
+  "partly"): this switch is **warned about, not refused**. Selecting a preset is a legitimate, intended edit (the editor
+  allows it with one click), the custom effects stay intact in memory until a save, and the warning plus `saveWarning`
+  tell the agent exactly how to keep them; refusing would block a normal workflow to protect against a reversible state.
 - Screen effects: field `<effect>` (bool) adds (`true`) or removes (`false`, its values are lost) the effect: `ambientOcclusion`,
   `bloom` (the game's ComputeBloom, labelled "Bloom"), `chromaticAberration`, `colorGrading`, `depthOfField`, `grain`,
   `lensDistortion`, `vignette`; `<effect>.enabled` is its header checkbox; `<effect>.<parameter>` is `{value, override}`
@@ -1975,12 +1979,12 @@ Saved to: Data/ModSettings.json (written by save_mod). The player type and every
 | `health` | int | 100 | shown while useHealth is on; clamped 1..1000 |
 | `showNameTags` | bool | true |  |
 | `nameTagType` | enum | WorldSpaceWorldSizeOccluded | shown while showNameTags is on; choices: WorldSpaceScreenSize, WorldSpaceWorldSize, WorldSpaceWorldSizeOccluded; UI labels: WorldSpaceScreenSize = "Screen Space", WorldSpaceWorldSize = "World Space", WorldSpaceWorldSizeOccluded = "True World Space"; "no name tags" is showNameTags = false |
-| `weaponHitTrigger` | string | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
-| `tickTrigger` | string | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
-| `onDeathTrigger` | string | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
-| `onRespawnTrigger` | string | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
-| `onFirstSpawnTrigger` | string | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
-| `onRoundEndTrigger` | string | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
+| `weaponHitTrigger` | trigger | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
+| `tickTrigger` | trigger | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
+| `onDeathTrigger` | trigger | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
+| `onRespawnTrigger` | trigger | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
+| `onFirstSpawnTrigger` | trigger | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
+| `onRoundEndTrigger` | trigger | none | read-only: an event trigger: use get_action_graph with scope "playerSettings" and add_action / set_action / remove_action / move_action |
 
 Implied: the editor forces topDownCameraMode to Static for the ThirdPerson player type.
 
@@ -2312,8 +2316,43 @@ game version accepted). None of them is allowed inside `run_batch` (named reason
 
 All five write tools refuse (`INVALID_STATE`) while an editor dialog (including "Unapplied Import Settings") is open or an
 asset with unapplied import settings is selected; `import_asset`, `set_import_settings` and `remove_asset` also refuse
-while a prefab is being edited. Nothing here is undoable (`undoable: false`): files are written or deleted when the
-call runs, not at `save_mod`.
+while a prefab is being edited (`create_material` and `set_material` also work inside a prefab). Nothing here is undoable
+(`undoable: false`): files are written or deleted when the call runs, not at `save_mod`.
+
+### Links inside a sandbox mod (every write and delete)
+
+Review C1 (plugin 0.8.0). The game enumerates `Assets` with `GetFiles(AllDirectories)`, which follows junctions, and its
+writes (`File.WriteAllBytes`, `FileMode.Create`, `File.Delete`) go straight through a junction, a symlink or a hard link.
+So one central, Unity-free check, `Core/SandboxPath.cs` (`RequireInsideMod`), runs on the main thread immediately before
+**every** file operation of the plugin and before every game call that writes or deletes a file for it, on every path that
+call touches. It refuses when:
+
+- the path, after normalisation, is not strictly below the mod root, or the mod root's folder name fails the `MCP_` rule
+  (`GUARD_NOT_TEST_MOD`), or the mod root itself is a reparse point;
+- any folder from the mod root down to the file's parent (including `Assets` and each sub-folder) is a reparse point
+  (junction, directory symlink, mount point);
+- the file exists and is a reparse point (file symlink) or a folder;
+- the file exists with more than one hard link, or its link count cannot be determined (Win32 `GetFileInformationByHandle`).
+
+Error `LINK_REFUSED` (links) or `INVALID_STATE`; the message names the operation and the offending path relative to the mod
+and ends "nothing was written or deleted". Reading through links stays allowed: `list_assets` and `get_asset` mark such
+assets `linked: true` with `linkedReason`. Paths checked per call:
+
+| Call | Paths checked before the game call / file operation |
+|---|---|
+| `import_asset` | `Assets` and `Assets\<Sub>` (folders), the staging copy, the final copy, its `.pmeta`; again right before `ImportFile`; every rollback delete; the `McpRecovery` journal |
+| `set_import_settings` | the `.pmeta` (rewritten), the file and `.pmeta` (and a prop's nested mesh file and `.pmeta`) that `ReimportAsset` would delete if the file were missing |
+| `create_material` | `Assets\Materials`, `<unique>.pmat` + `.pmeta`, the renamed `.pmat` + `.pmeta`, the files `Save` rewrites, the cleanup's `RemoveAsset` paths |
+| `set_material` | `.pmat` and `.pmeta` (rewritten in place) |
+| `remove_asset` | every path `PummelMod.RemoveAsset` deletes: file + `.pmeta`, for a prop also the nested mesh's file + `.pmeta` |
+| `create_prefab` | `Assets\Prefabs`, the new `.pfab` + `.pmeta` (and again right before `CreateNewPrefab`), the rename targets, the cleanup paths |
+| `close_prefab` | `.pfab` + `.pmeta`, again right before the `CurrentPrefab` setter saves them; restore and delete paths |
+| `save_mod`, `start_playtest` | every file `PummelMod.Save` writes (Data: Meta.json, WorkshopItem.json, Lighting.json, PostProcessing.data, MainScene.scene, MinigameDefinitionData.json, MapDetails.json, ItemDetails.json, ModSettings.json; save_mod also Preview.jpg) and, per saved asset, its `.pmeta` plus the `.pmat`/`.pfab`/`.pgf` itself: one bad target refuses the whole save, nothing written, every refused path named (up to 8) |
+| `capture_preview_image` | `Assets\Textures`, the `Screenshot<N>.jpg` the editor will write and its `.pmeta` |
+| `open_test_mod` | the mod root must not be a link; a file reached through a link inside `Assets` without a `.pmeta` refuses the open (loading would write that `.pmeta` through the link) |
+| prefab restore | the target, the temp file, the `McpRecovery` safety copy |
+
+Do not create junctions or links inside a mod folder; the tools refuse to write through them.
 
 ### File-system safety (import)
 
@@ -2330,12 +2369,20 @@ call runs, not at `save_mod`.
    trailing space or dot, no separators or drive letters, no control characters, no reserved device names (CON, NUL,
    COM1, ...). Without `name` the source's file name is used with other characters replaced by `_`.
 4. **No overwrite.** A free name is chosen where neither the file nor `<file>.pmeta` exists (`name`, then `name (1)` ...
-   `name (20)`; all taken: `ALREADY_EXISTS`, nothing copied). The file is created with `FileMode.CreateNew`; if it appears
-   in between, the next name is tried. Only then `PummelMod.ImportFile(FileInfo)` registers the file that is now inside
-   the mod.
-5. On any failure after the copy, only what this call created is deleted: the copy and the `.pmeta` the importer wrote for
-   it (each path re-checked to be exactly `Assets\<Sub>\<name>` first; if the asset got registered it is unregistered with
-   `RemoveAsset`, which deletes the same two files). The reply is `IMPORT_FAILED` with `error.data.cleanedUp`. The OBJ
+   `name (20)`; all taken: `ALREADY_EXISTS`, nothing copied). The copy is first written as `<name>.<ext>.mcp-import`
+   (`FileMode.CreateNew`; an extension the game has no importer for, so a leftover is never decoded), hashed and
+   length-checked; **every content check and cap then runs on that copy** (review M1), and only then it is renamed to its
+   final name (`File.Move`, which fails if the name appeared in between: the next name is tried). Only then
+   `PummelMod.ImportFile(FileInfo)` registers the file that is now inside the mod.
+5. On any failure after the copy, only what this call created is deleted: the staging copy, the copy, and the `.pmeta`
+   only when this call can prove it created it (it did not exist right before the import step and that step was reached;
+   review L11). Each path is re-checked to be exactly `Assets\<Sub>\<name>` and to pass the link check first; if the asset
+   got registered it is unregistered with `RemoveAsset`, which deletes the same two files. The reply is `IMPORT_FAILED`
+   with `error.data.cleanedUp`; a content check that fails on the copy is `INVALID_PARAMS` ("checked on the copy"). The
+   importer writes the `.pmeta` **before** it decodes: right before `ImportFile` the plugin writes
+   `<mod>\McpRecovery\import-pending.json` and removes it right after; if the game dies during the decode, the next plugin
+   start (and `open_test_mod`) renames the copy to `<name>.<ext>.mcp-import-failed` (and its own `.pmeta` to
+   `...mcp-import-failed.pmeta`) after checking its SHA-256, so the mod is not decoded again on every reopen. The OBJ
    importer's "empty list, no cleanup" failure is handled the same way; `.bmp` (offered by the editor menu, no importer) is
    refused up front.
 6. Allow-list: `.png .jpg .jpeg` (textures), `.obj` (meshes), `.wav .mp3 .ogg` (audio); case-insensitive on input, the
@@ -2343,10 +2390,14 @@ call runs, not at `save_mod`.
    before anything is copied: PNG signature and header, JPEG markers, RIFF/WAVE, OggS, MP3 ID3 tag or frame sync, OBJ as
    text (no NUL byte in the first 8 KB) with at least one `v ` line. A renamed file (a PNG called `.wav`, a text file
    called `.png`) is refused; zero-byte files are refused.
-7. Limits: `[Assets] MaxImportFileMB` (default 50) and `MaxModAssetsMB` (default 500, total size of the mod's `Assets`
-   folder after the import), edited in the plugin config and re-read on every call; plus constants: texture sides <= 8192 px
-   (read from the header), OBJ vertex lines <= 500,000, name <= 64 characters, at most 20 numbered duplicates. The editor
-   has none of these; the audio decode busy-waits on the main thread, so keep audio small.
+7. Limits: `[Assets] MaxImportFileMB` (default 50), `MaxModAssetsMB` (default 500, total size of the mod's `Assets`
+   folder after the import), `MaxAudioSeconds` (default 600: the clip's duration read from the WAV `fmt`/`data` chunks,
+   the OGG Vorbis/Opus header and last granule position, or the MP3 Xing/Info/VBRI frame count; an MP3 without a frame
+   count is also refused when its first-frame bitrate implies more) and `MaxCompressedAudioMB` (default 15: the size limit
+   for an OGG/MP3 whose header gives no duration; a WAV without a readable header is refused), edited in the plugin config
+   and re-read on every call; plus constants: texture sides <= 8192 px (read from the header), OBJ vertex lines <= 500,000
+   and face lines <= 1,000,000, name <= 64 characters, at most 20 numbered duplicates. The editor has none of these; the
+   audio decode busy-waits on the main thread.
 8. Sources: any readable **local absolute path** (`C:\...`). Refused in this version: UNC (`\\server\share`), device
    (`\\.\`, `\\?\`) and network-drive paths, alternate data streams, links/junctions, folders, relative paths. Reason: the
    audio loader and the native OBJ loader are unverified on them (the copy itself would be safe); this is a limitation
@@ -2356,7 +2407,12 @@ call runs, not at `save_mod`.
    which the audio loader (raw path string, not a URI) may not handle [unverified in the game].
 9. Time: the copy and the registration run on the main thread inside the call (the guard and the mod folder are only known
    there; at most one file of the configured size). Commit point: a timeout before the copy starts is safe to retry
-   ("nothing was changed"); after it the call returns its own result.
+   ("nothing was changed"); after it the call returns its own result. The time a call needs left at its commit point is
+   sized for the work after it (review L7, `Core/CommitBudgets.cs`, nothing measured in the game): import 90 s (limit
+   120 s), set_import_settings 20 s, create/set_material and remove_asset 10 s (limit 30 s), create/close_prefab 15 s and
+   open_prefab 10 s (limit 30 s), capture_preview_image 15 s (limit 25 s), save_mod 12 s (limit 20 s). If the main thread
+   stalls beyond the limit anyway, the reply says "the change was applied" (never a silent TIMEOUT). The MCP server waits at
+   least the limit + 4 s commit grace + a margin.
 
 ### `list_asset_rules` (read)
 
@@ -2374,11 +2430,16 @@ and for the mod's own assets: textures `width`/`height`/`importSettings`/`import
 `get_hierarchy` node shape; the guids work with `get_object`), `instanceCount` and `instances` (`[{guid, name}]`: Prefab
 Instance objects in the scene that use it; spawners, items and actions that use it are in `references`); materials `shader`,
 `knownShader`, `properties` (in the shapes `set_material` accepts) and `propertyFields`; `removable` (+ `removableReason`);
-`references`: `{count, items: [{kind, owner, ownerGuid?, where}], scanComplete, objectsScanned}` where `kind` is
-`component`, `action`, `material` or `setting`. The scan reads every scene and prefab object with the plugin's own value
-converter (so it finds what `get_object` shows: component properties, action parameters and targets), materials' texture
-slots and the settings the settings tools know (music, ambience, preview image). `scanComplete: false` means some component
-value could not be read (the scan is then not a proof of "unused"). Needs an open mod; edit mode.
+`references`: `{count, items: [{kind, owner, ownerGuid?, where}], scanComplete, settingsScanFailed, objectsScanned,
+scanned}` where `kind` is `component`, `action`, `playerTrigger`, `material`, `setting` or `workshop`. The scan (review
+H1, `ReferenceCollector.Locations`) reads every scene and prefab object with the plugin's own value converter (so it finds
+what `get_object` shows: component properties, action parameters and targets, nested Display Popup choice lists), the
+Minigame player-settings triggers (the six Event Triggers and the hidden `hitTrigger`, which are not scene objects),
+materials' texture slots, the settings the settings tools know (music, ambience, preview image, board custom spaces), an
+Item mod's prefabs (use, receive, held) and icon, and the Workshop item's thumbnail and preview files (read only).
+`scanComplete: false` means something could not be read or an array was cut off (`truncatedItems`, review L1): the scan
+is then not a proof of "unused" and counts as "in use". `linked: true` marks a file that runs through a link (see
+[Links](#links-inside-a-sandbox-mod-every-write-and-delete)). Needs an open mod; edit mode.
 
 ### `import_asset` (write, guard OpenMod)
 
@@ -2388,12 +2449,13 @@ value could not be read (the scan is then not a proof of "unused"). Needs an ope
 | `name` | string | asset name, see rule 3; default derived from the file name |
 | `type` | `Texture`, `Prop`, `AudioClip` | optional; must match the file |
 
-Timeout 60 s. Reply: `asset` (the `list_assets` row of the new asset: `guid`, `name`, `type`, `className`, `location:
+Timeout 120 s. Reply: `asset` (the `list_assets` row of the new asset: `guid`, `name`, `type`, `className`, `location:
 "external"`, `relativePath`, `fileExists`, `sizeBytes`), `copy` (`relativePath`, `sizeBytes`, `sha256` of the copied
 bytes, equal to the source's), `source` (`path`, `sizeBytes`, `modified: false`), `nameDerived`, `renamedBecauseExists`,
-`checks` (what was verified before copying), `limits`, `modAssetsBytesAfter`, `undoable: false`, `note`. Errors:
-`INVALID_PARAMS` (path/name/type, extension, content, size, caps), `NOT_FOUND` (source missing), `INVALID_STATE`
-(dialog, prefab edited, `Assets\<Sub>` is a file or a link), `ALREADY_EXISTS` (no free name), `IMPORT_FAILED` (the game's
+`checks` (the pre-checks on the source and the `copy:` checks on the copy), `checkedOnCopy: true`, `limits` (incl.
+`maxAudioSeconds`, `maxCompressedAudioMB`), `modAssetsBytesAfter`, `undoable: false`, `note`. Errors:
+`INVALID_PARAMS` (path/name/type, extension, content, size, caps, duration), `NOT_FOUND` (source missing), `INVALID_STATE`
+(dialog, prefab edited, `Assets\<Sub>` is a file), `LINK_REFUSED` (a link on the way), `ALREADY_EXISTS` (no free name), `IMPORT_FAILED` (the game's
 importer rejected the file; the copy was removed). The game may also create an empty `PummelModCache\<id>` folder in its
 own data folder for PNG/JPG imports (directory only, hazard H17). A neighbouring `.mtl` is not copied.
 
@@ -2422,8 +2484,11 @@ reopened (reply `warnings`). If the re-import fails, the previous values are res
 `defaultShaderGuid`; `shader` = the name or guid of a built-in Shader asset). Before the call the plugin asks the editor
 which name it will use (`GetUniqueAssetName`, a check against *asset names* only) and refuses with `ALREADY_EXISTS` when
 that file or its `.pmeta` already exists on disk without a loaded material (the editor would overwrite it); a custom `name`
-is applied afterwards with the editor's own rename (both target names are checked free first). A failure after creation
-removes the new material again. `set_material {guid, shader?, properties?}` changes only the open mod's **own** materials
+is applied afterwards with the editor's own rename (both target names are checked free first). The rename counts as done
+only when both files are at the new name, nothing is left at the old one and no editor dialog appeared (review L8,
+`RenameGuard`); a half-done rename (file moved, `.pmeta` not) is moved back only when provably safe (the moved bytes equal
+the recorded ones, both paths pass the link check), otherwise the leftover is named. A failed rename, like any failure
+after creation, fails the call and removes the new material again. `set_material {guid, shader?, properties?}` changes only the open mod's **own** materials
 (never built-in ones). Properties are validated per shader from the generated table before anything changes (unknown key,
 wrong type, a texture that is not a texture asset, a conditional property whose condition is false: all refuse the call),
 clamped like the inspector (ranges to the **shader's own range**, read at run time; colours 0..1; emission up to 64) and
@@ -2443,13 +2508,18 @@ the existing tools: `set_property` on a renderer's `materials` array or a prop's
 file path is strictly inside** the mod's `Assets` folder ("external" alone is not enough, doc 07 H11); its class is a
 texture, prop (mesh), audio clip, material or **prefab** (`.pfab`); it is not a built-in asset, not the open prefab, not selected with unapplied import settings;
 for a prop the nested mesh asset points at the same file (the editor's removal deletes that path too); and it is not
-the mod's preview image (never removed, even with `force`: set it to null or another texture first). The editor's own
+the mod's preview image (never removed, even with `force`: set it to null or another texture first); and the mod settings
+could be read (if that scan throws, the asset may be the preview image, so it is not removed even with `force`; review
+L3). Every path the removal deletes passes the link check (`LINK_REFUSED` otherwise). The editor's own
 `PummelMod.RemoveAsset` is then called, which destroys the Unity object, deletes `<file>` and `<file>.pmeta` and unlists
 the asset; a selected (non-dirty) asset is deselected first. Before that the references are scanned (see `get_asset`): any
 reference, or an incomplete scan, refuses the call with `ASSET_IN_USE` (`error.data` = the references) unless
 `force: true`; with `force` the reply lists `referencesNulled` — they become null at the next `save_mod` (in memory they
 point at a destroyed object until then). For a prefab the scan covers Prefab Instance objects in the scene, Spawner prefab
-lists, item prefabs, Spawn Prefab / Give Minigame Item / Set Player Visual action parameters and settings; references held by
+lists, item prefabs, Spawn Prefab / Give Minigame Item / Set Player Visual action parameters (also inside the player-settings
+triggers and nested popup choices), an Item mod's use/receive/held prefabs and settings; for a texture also materials'
+texture slots, the preview image and the Workshop item's thumbnail and preview files (`kind: "workshop"`: refused without
+`force`; with `force` the Workshop item keeps a dangling guid, which the plugin never writes); references held by
 objects inside the prefab itself (an item prefab naming itself) are ignored, because they go away with it. The editor's removal
 (`PummelPrefab.OnDestroy`) sets every scene instance's reference to none (they show "Missing Prefab" and are saved without a
 prefab); the prefab's undo stack stays in the editor's list (harmless). Reply: `removed`, `deletedFiles`, `undoable: false`, `note`.
@@ -2474,7 +2544,7 @@ visual effect of a mesh re-import on placed objects. The in-game test script is 
 
 Importable files: .png, .jpg, .jpeg, .obj, .wav, .mp3, .ogg (case-insensitive; the copy gets a lower-case extension). Destination folders inside the mod's `Assets` folder: Textures (png, jpg, jpeg), Props (obj), Audio (wav, mp3, ogg).
 
-Constant caps: name <= 64 characters from `A-Za-z0-9 _.()-`; texture side <= 8192 px; OBJ vertex lines <= 500000; at most 20 numbered duplicates (`name (1)` ...). Size limits are configurable: `[Assets] MaxImportFileMB` (default 50) and `MaxModAssetsMB` (default 500).
+Constant caps: name <= 64 characters from `A-Za-z0-9 _.()-`; texture side <= 8192 px; OBJ vertex lines <= 500000, OBJ face lines <= 1000000; at most 20 numbered duplicates (`name (1)` ...). Size limits are configurable: `[Assets] MaxImportFileMB` (default 50) and `MaxModAssetsMB` (default 500). Audio: `MaxAudioSeconds` (default 600, read from the WAV/OGG/MP3 header) and, for an OGG/MP3 whose duration the header does not give, `MaxCompressedAudioMB` (default 15). The content checks run on the copy inside the mod (written as `<name>.mcp-import`, renamed only after they pass).
 
 #### Import settings (`set_import_settings`)
 
@@ -2563,7 +2633,7 @@ All refuse (`INVALID_STATE`) while an editor dialog is open or an asset with una
 (`ModHierarchySerializer.SaveTransform`). A component whose serialisation throws, a full disk or a crash leaves a truncated file,
 and a truncated prefab makes the **whole mod fail to load** (`PummelPrefabImporter` reads past the end). The game's own paths that
 write a prefab: `Create > Prefab` (`EditorSystem.CreateNewPrefab`), leaving the prefab context (the `CurrentPrefab` setter), the
-Apply/Reimport button, and every `PummelMod.Save`. The plugin wraps the three it triggers (create, close, `save_mod`):
+Apply/Reimport button, and every `PummelMod.Save`. The plugin wraps the four it triggers (create, close, `save_mod`, and the synchronous save inside `start_playtest`, review C2):
 
 1. **Dry run** (before anything is written): the same `SaveTransform` call runs against a `MemoryStream` for the in-memory
    prefab (it writes no file; the editor's own undo snapshot makes the same call every frame). Any exception refuses the
@@ -2578,11 +2648,15 @@ Apply/Reimport button, and every `PummelMod.Save`. The plugin wraps the three it
    non-empty valid JSON. There is no read-only parse entry in the game (`LoadTransform` instantiates objects and touches editor
    state), so the length equality with the in-memory serialisation is the completeness proof; a structural parse is not done.
 4. **Repair** on any failure: an existing prefab gets its previous bytes back (written to `<file>.mcp-restore.tmp` in the same
-   folder, swapped in with `File.Replace`, verified, temp removed even on error); a new prefab's `.pfab` and `.pmeta` are
+   folder, swapped in with `File.Replace` - or, in a runtime without `File.Replace` (`PlatformNotSupportedException` /
+   `NotImplementedException`), with `File.Copy(overwrite)`, the strategy of `Core/TokenAuth.cs` (review L5) - verified, temp
+   removed even on error; every path passes the link check first); a new prefab's `.pfab` and `.pmeta` are
    removed, after re-checking that each path is strictly inside the mod's `Assets` folder and is a `.pfab`/`.pmeta`
    (the same rules as the asset import cleanup); the registered asset of a failed `create_prefab` is unregistered
-   (`PummelMod.RemoveAsset`, which also destroys the copy). The error says what was restored or removed (`restoreProblem` if
-   even that failed). No temp file is left behind.
+   (`PummelMod.RemoveAsset`, which also destroys the copy). The error says what was restored or removed. If even the restore
+   fails, the error says **RESTORE FAILED** loudly and the safety copy is kept on disk - only in that case - as
+   `<mod>McpRecovery<file>.<time>.mcp-snapshot` (a folder the game never reads; `preservedSnapshots` in the reply): copy
+   it back by hand before reopening the mod. No temp file is left behind.
 
 `ReimportAsset(prefab)` is never called (it destroys the in-memory prefab before it parses the file, doc 07 H6).
 
@@ -2594,7 +2668,9 @@ copy of that object and its children (the Asset Browser drag-and-drop). Refused:
 Space component (the editor's own rule); a subtree whose components or actions hold references to **objects** (action targets,
 object properties): the editor copies those references unchanged (the copy gets fresh object and component guids, but the stored
 references are not remapped when a prefab is created, only when an instance is made), so they would keep pointing at scene objects
-- the plugin refuses and lists them (`INVALID_PARAMS`) instead of letting them break silently; a subtree that cannot be serialised.
+- the plugin refuses and lists them (`INVALID_PARAMS`) instead of letting them break silently; a subtree whose component values
+could not all be read or were cut off (`INVALID_STATE`: references cannot be ruled out, review M2); a subtree that cannot be
+serialised. The game's `FullPrefabsFolder` must be `<mod>AssetsPrefabs` (review L4).
 References to assets (materials, textures, sounds) are fine. The source objects stay exactly as they were in the scene (no
 instance replaces them; `create_object kind prefabInstance` places one). The prefab root is reset to position 0, rotation 0,
 scale 1; its active flag follows the source; it is deactivated in memory afterwards like every closed prefab.
@@ -2604,7 +2680,10 @@ loaded asset (NTFS is case-insensitive). The plugin asks the editor which name i
 file (or its `.pmeta`) exists on disk or the name has characters outside `A-Z a-z 0-9 space _ . ( ) -` (rename the source object
 first with `set_object`), and picks a free name itself: `name` (or the source object's name, or `Prefab_<n>`), then `_1`..`_99`,
 checked against asset names (case-insensitive) and files. `nameAdjusted` is true when a requested name had to change. A name
-different from the editor's is applied with `ModAssetExternal.Rename` afterwards (both target files checked free first).
+different from the editor's is applied with `ModAssetExternal.Rename` afterwards (both target files checked free first). A rename
+that does not complete (file moved without its `.pmeta`, an editor dialog, nothing moved) fails the call with `INTERNAL`: the
+prefab exists and is verified under the editor's name (`error.data.created`), a half-done move is undone only when provably safe
+(`movedBack`), otherwise the leftover is named (`orphanFile`); it is never reported as success (review L8).
 
 ```json
 {"asset": {"guid": "...", "name": "Crate", "type": "Prefab", "relativePath": "Assets/Prefabs/Crate.pfab", "sizeBytes": 412, "fileExists": true},
@@ -2782,9 +2861,16 @@ mods).
 2. `ValidateCurrentMod()` (always, as the button). With errors and `validateFirst` true: `INVALID_STATE`, message
    `the mod does not pass the editor's validator (N validator errors: <titles>) ...`, `error.data.validation` = the
    `validate_mod` counts + issues block (`valid`, `errorCount`, `warningCount`, `infoCount`, `issues`).
+2b. Save protection (review C2 + C1), in the same main-thread step as the Play call: the link pre-check of every file
+   `PummelMod.Save` will write (`LINK_REFUSED`, nothing written), and the dry run + safety copy of every prefab (a prefab
+   that cannot be serialised refuses the playtest with `INVALID_STATE`, nothing changed).
 3. Commit point (needs ≥ 20 s of the limit left, else `TIMEOUT`, nothing changed).
 4. Apply the toolbar choices exactly as the dropdown/checkbox do (widget fields, `PlayerPrefs` when the choice changes,
-   the `GameManager` values), then `SetEditorState(EnteringPlayMode)`. **This saves the test mod** (see below).
+   the `GameManager` values), then `SetEditorState(EnteringPlayMode)`. **This saves the test mod** (see below). Right after
+   that synchronous save every prefab file is verified like after `save_mod`; a bad one is restored (a new one removed) and
+   the call fails with `INTERNAL` saying which prefab files were restored and whether the playtest **WAS started** (then
+   stop it with `stop_playtest`) or **NOT started** (`error.data`: `playtestStarted`, `state`, `prefabs`,
+   `restoredPrefabs`). On success the reply carries `prefabsVerified` (and `prefabWarnings` if any).
 5. Wait (frame by frame) until `PlayMode`; the reply is sent then. If the editor went back to `Editing` at once:
    `INTERNAL` (playtest copy failed to load; the editor shows its popup; the mod was saved). If it returns to edit mode
    before `PlayMode`: `INVALID_STATE`. If `PlayMode` is not reached 1 s before the deadline: `TIMEOUT` saying the mod
@@ -3189,10 +3275,21 @@ exactly what was applied; revert by hand with `delete_object` or one `undo` per 
 | `[Safety] ForceGameVersionUntested` | `false` | Test switch: treats the running version as untested even if it is in the tested list. Can only make the gate stricter; it never accepts a version. |
 | `[Assets] MaxImportFileMB` | `50` | `import_asset`: largest source file, 1..1024 MB. Read on every import call (no restart). |
 | `[Assets] MaxModAssetsMB` | `500` | `import_asset`: largest total size of the sandbox mod's `Assets` folder after the import, 1..8192 MB. Read on every import call. |
+| `[Assets] MaxAudioSeconds` | `600` | `import_asset`: longest audio clip, 1..7200 s, read from the WAV/OGG/MP3 header of the copy (the game decodes the whole clip on its main thread). Read on every import call. |
+| `[Assets] MaxCompressedAudioMB` | `15` | `import_asset`: largest OGG/MP3 whose duration its header does not give (e.g. a VBR MP3 without a Xing/VBRI header), 1..1024 MB. Read on every import call. |
 | `[Server] Enabled` | `true` | `false`: no RPC server; the publish block stays active. |
 | `[Server] Port` | `38917` | Read at game start. If the port cannot be bound (already in use), one Error is logged and the plugin stays idle: no dispatcher, frame poller, save watch or undo observer runs and no tool is served. The Workshop publish block stays active. |
 
 **Config reload.** BepInEx 5.4.23 does not watch the `.cfg` file, so a plain edit would only apply after a game restart. The plugin therefore stats the file on every guarded call (write tools, `get_status`, `self_test`) and calls `ConfigFile.Reload()` when its modification time changed; `EnableWrites`, `AcceptedGameVersion` and `ForceGameVersionUntested` follow edits without a restart (a malformed file keeps the values already loaded). `ping` runs on the HTTP thread and reports the values loaded at the last reload. `PluginEnabled`, `Enabled` and `Port` are still read at game start only.
+
+### Links inside sandbox mods
+
+The plugin never writes, creates, moves or deletes a file through a junction, directory symlink, mount point, file
+symlink or hard link inside a sandbox mod, nor when the mod folder itself is a link (`LINK_REFUSED`, nothing written). The
+rule is central (`Core/SandboxPath.cs`) and runs before every file operation and every game call that writes or deletes
+files for the plugin; the full list is under [Links inside a sandbox mod](#links-inside-a-sandbox-mod-every-write-and-delete).
+At start (with writes enabled) the plugin also renames a copy left by an import that a crash interrupted during decoding
+(`McpRecoveryimport-pending.json`; sandbox mods only, hash-checked, rename only).
 
 ### Token file
 

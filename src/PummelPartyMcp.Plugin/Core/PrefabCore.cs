@@ -155,9 +155,16 @@ namespace PummelPartyMcp.Core
         public string RestoreProblem;
         public List<string> Warnings = new List<string>();
 
+        /// <summary>L5: a restore failed and the safety copy was kept in this file (path relative to the mod folder; only in that case).</summary>
+        public List<string> PreservedSnapshots = new List<string>();
+
         public JObject ToJson()
         {
             JObject o = new JObject { ["name"] = Name, ["ok"] = Ok, ["sizeBytes"] = Length };
+            if (PreservedSnapshots.Count > 0)
+            {
+                o["preservedSnapshots"] = new JArray(PreservedSnapshots.ToArray());
+            }
             if (Problem != null)
             {
                 o["problem"] = Problem;
@@ -262,6 +269,17 @@ namespace PummelPartyMcp.Core
             {
                 throw new RpcException(ErrorCodes.InvalidState, "the file of the prefab '" + name + "' is not a .pfab inside the mod's Assets folder" + (directlyInPrefabsFolder ? "\\Prefabs" : string.Empty) + "; the plugin does not protect or write it");
             }
+            string root = AssetImportRules.ModRootOf(System.IO.Path.GetFullPath(assetsFolder));
+            SandboxPath.RequireInsideMod(root, pfabPath, $"the prefab '{name}' (.pfab)");
+            SandboxPath.RequireInsideMod(root, pfabPath + AssetImportRules.MetaExtension, $"the prefab '{name}' (.pmeta)");
+        }
+
+        /// <summary>Re-runs the link check on the job's two files; called right before the editor call that writes them.</summary>
+        public static void Recheck(PrefabFileJob job)
+        {
+            string root = AssetImportRules.ModRootOf(System.IO.Path.GetFullPath(job.AssetsFolder));
+            SandboxPath.RequireInsideMod(root, job.PfabPath, $"the prefab '{job.Name}' (.pfab)");
+            SandboxPath.RequireInsideMod(root, job.MetaPath, $"the prefab '{job.Name}' (.pmeta)");
         }
 
         /// <summary>Verifies the files after the editor wrote them; restores or removes them when they are bad. Never throws.</summary>
@@ -360,6 +378,12 @@ namespace PummelPartyMcp.Core
                             problems.Add("not deleted (not a prefab file inside the mod's Assets\\Prefabs folder): " + p);
                             continue;
                         }
+                        string link = LinkProblem(job, p);
+                        if (link != null)
+                        {
+                            problems.Add($"not deleted ({link})");
+                            continue;
+                        }
                         if (File.Exists(p))
                         {
                             File.SetAttributes(p, FileAttributes.Normal);
@@ -379,17 +403,28 @@ namespace PummelPartyMcp.Core
                 {
                     try
                     {
+                        string link = LinkProblem(job, s.Path);
                         if (s.Existed)
                         {
                             if (File.Exists(s.Path) && File.ReadAllBytes(s.Path).SequenceEqual(s.Bytes))
                             {
                                 continue; // already the previous content
                             }
-                            AtomicWrite(s.Path, s.Bytes);
+                            if (link != null)
+                            {
+                                problems.Add($"not restored ({link})");
+                                continue;
+                            }
+                            AtomicWrite(s.Path, s.Bytes, AssetImportRules.ModRootOf(System.IO.Path.GetFullPath(job.AssetsFolder)));
                             o.Restored = true;
                         }
                         else if (File.Exists(s.Path) && RemovablePath(job, s.Path))
                         {
+                            if (link != null)
+                            {
+                                problems.Add($"not deleted ({link})");
+                                continue;
+                            }
                             File.SetAttributes(s.Path, FileAttributes.Normal);
                             File.Delete(s.Path);
                             o.Removed = true;
@@ -397,13 +432,110 @@ namespace PummelPartyMcp.Core
                     }
                     catch (Exception e)
                     {
-                        problems.Add($"could not restore {System.IO.Path.GetFileName(s.Path)}: {e.Message}");
+                        string kept = s.Existed && s.Bytes != null ? PreserveSnapshot(job, s, o) : null;
+                        problems.Add($"RESTORE FAILED for {System.IO.Path.GetFileName(s.Path)} ({e.GetType().Name}: {e.Message}); " +
+                                     (kept != null
+                                         ? $"its content from before the write was kept in '{kept}' inside the mod folder (a folder the game does not read): copy it back over '{System.IO.Path.GetFileName(s.Path)}' by hand before reopening the mod"
+                                         : "its safety copy could not be kept on disk either; do not reopen the mod before checking the file"));
                     }
                 }
             }
             if (problems.Count > 0)
             {
                 o.RestoreProblem = string.Join("; ", problems.ToArray());
+            }
+        }
+
+        /// <summary>Folder (below the mod root, outside Assets and Data: the game never reads it) for safety copies of failed restores.</summary>
+        public const string RecoveryFolder = "McpRecovery";
+
+        public const string SnapshotSuffix = ".mcp-snapshot";
+
+        /// <summary>
+        /// L5: keeps the safety copy of a file whose restore failed as &lt;mod&gt;\McpRecovery\&lt;file&gt;.&lt;time&gt;.mcp-snapshot (CreateNew, link
+        /// check). Only called in that failure case. Returns the path relative to the mod folder, or null when it could not be written.
+        /// </summary>
+        private static string PreserveSnapshot(PrefabFileJob job, FileSnapshot s, PrefabFileOutcome o)
+        {
+            try
+            {
+                string root = AssetImportRules.ModRootOf(System.IO.Path.GetFullPath(job.AssetsFolder));
+                string dir = System.IO.Path.Combine(root, RecoveryFolder);
+                SandboxPath.RequireFolderInsideMod(root, dir, "keeping the safety copy");
+                Directory.CreateDirectory(dir);
+                string name = System.IO.Path.GetFileName(s.Path) + "." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", System.Globalization.CultureInfo.InvariantCulture) + SnapshotSuffix;
+                string target = System.IO.Path.Combine(dir, name);
+                SandboxPath.RequireInsideMod(root, target, "keeping the safety copy");
+                using (FileStream fs = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    fs.Write(s.Bytes, 0, s.Bytes.Length);
+                    fs.Flush(true);
+                }
+                string rel = RecoveryFolder + "/" + name;
+                o.PreservedSnapshots.Add(rel);
+                return rel;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// L5 test seam for the swap step of <see cref="AtomicWrite"/>: File.Replace may be missing in the game's runtime (the same
+        /// assumption as Core/TokenAuth.cs), so a PlatformNotSupportedException/NotImplementedException falls back to Copy(overwrite).
+        /// </summary>
+        public static Action<string, string> ReplaceOp = (temp, path) => File.Replace(temp, path, null);
+
+        public static Action<string, string, bool> CopyOp = File.Copy;
+
+        public static Action<string, string> MoveOp = File.Move;
+
+        /// <summary>Restores the seams to the real file operations (tests).</summary>
+        public static void ResetFileOps()
+        {
+            ReplaceOp = (temp, path) => File.Replace(temp, path, null);
+            CopyOp = File.Copy;
+            MoveOp = File.Move;
+        }
+
+        /// <summary>Which swap strategy the last <see cref="AtomicWrite"/> used ("replace", "copy-fallback", "move"); for tests and logs.</summary>
+        public static string LastSwap;
+
+        private static void Swap(string temp, string path)
+        {
+            if (!File.Exists(path))
+            {
+                MoveOp(temp, path);
+                LastSwap = "move";
+                return;
+            }
+            try
+            {
+                ReplaceOp(temp, path);
+                LastSwap = "replace";
+            }
+            catch (PlatformNotSupportedException)
+            {
+                CopyOp(temp, path, true); // runtime without File.Replace: not atomic, but a complete file (verified below)
+                LastSwap = "copy-fallback";
+            }
+            catch (NotImplementedException)
+            {
+                CopyOp(temp, path, true);
+                LastSwap = "copy-fallback";
+            }
+        }
+
+        private static string LinkProblem(PrefabFileJob job, string p)
+        {
+            try
+            {
+                return SandboxPath.Check(AssetImportRules.ModRootOf(System.IO.Path.GetFullPath(job.AssetsFolder)), p, out string _, out string _);
+            }
+            catch (Exception e)
+            {
+                return "the path cannot be checked: " + e.Message;
             }
         }
 
@@ -417,12 +549,17 @@ namespace PummelPartyMcp.Core
         }
 
         /// <summary>Writes the bytes next to the target and swaps them in, so a failure never truncates the target. The temp file is always removed.</summary>
-        public static void AtomicWrite(string path, byte[] bytes)
+        public static void AtomicWrite(string path, byte[] bytes, string modRoot = null)
         {
             string temp = path + RestoreTempSuffix;
             if (File.Exists(temp))
             {
                 temp = path + "." + Guid.NewGuid().ToString("N").Substring(0, 8) + RestoreTempSuffix;
+            }
+            if (modRoot != null)
+            {
+                SandboxPath.RequireInsideMod(modRoot, path, "restoring the safety copy");
+                SandboxPath.RequireInsideMod(modRoot, temp, "restoring the safety copy (temporary file)");
             }
             try
             {
@@ -431,14 +568,7 @@ namespace PummelPartyMcp.Core
                     fs.Write(bytes, 0, bytes.Length);
                     fs.Flush(true);
                 }
-                if (File.Exists(path))
-                {
-                    File.Replace(temp, path, null);
-                }
-                else
-                {
-                    File.Move(temp, path);
-                }
+                Swap(temp, path);
                 byte[] check = File.ReadAllBytes(path);
                 if (check.Length != bytes.Length || !check.SequenceEqual(bytes))
                 {
@@ -474,6 +604,135 @@ namespace PummelPartyMcp.Core
             string.Join("; ", failed.Select(f =>
                 $"'{f.Name}': {f.Problem}" + (f.Restored ? " (previous file content restored)" : f.Removed ? " (the broken file was removed)" : string.Empty)
                 + (f.RestoreProblem != null ? " [" + f.RestoreProblem + "]" : string.Empty)).ToArray());
+    }
+
+    /// <summary>State recorded right before ModAssetExternal.Rename (review L8).</summary>
+    public sealed class RenameSnapshot
+    {
+        public string ModRoot;
+        public string OldFile;
+        public string NewFile;
+        public long OldLength;
+        public string OldSha256;
+        public bool PopupBefore;
+    }
+
+    public sealed class RenameResult
+    {
+        public bool Ok;
+        public string Problem;
+
+        /// <summary>The file had been moved without its .pmeta and was provably safe to move back; it was.</summary>
+        public bool MovedBack;
+
+        /// <summary>A file left at the new name (not moved back because that was not provably safe); relative to the mod folder.</summary>
+        public string Orphan;
+    }
+
+    /// <summary>
+    /// Review L8: ModAssetExternal.Rename moves the file, then the .pmeta, and on any exception raises a modal popup and returns; a
+    /// failure between the two moves leaves the file at the new name, the .pmeta at the old one and the asset pointing at the old
+    /// path. <see cref="Before"/> checks and records; <see cref="After"/> decides success only when both files are at the new name,
+    /// nothing is left at the old name and no popup appeared; a half-done move is undone only when provably safe (the new name was
+    /// free before, the old name is free now, the moved bytes equal the recorded ones, both paths pass the link check).
+    /// </summary>
+    public static class RenameGuard
+    {
+        public static RenameSnapshot Before(string modRoot, string oldFile, string newFile, bool popupOpen)
+        {
+            SandboxPath.RequireAllInsideMod(modRoot, new[] { oldFile, oldFile + AssetImportRules.MetaExtension, newFile, newFile + AssetImportRules.MetaExtension }, "rename");
+            if (!AssetImportRules.IsFree(newFile))
+            {
+                throw new RpcException(ErrorCodes.AlreadyExists, $"'{System.IO.Path.GetFileName(newFile)}' (or its .pmeta) already exists; not renamed");
+            }
+            if (popupOpen)
+            {
+                throw new RpcException(ErrorCodes.InvalidState, "an editor dialog is open; not renamed");
+            }
+            byte[] bytes = File.ReadAllBytes(oldFile);
+            return new RenameSnapshot { ModRoot = modRoot, OldFile = oldFile, NewFile = newFile, OldLength = bytes.Length, OldSha256 = Sha(bytes), PopupBefore = popupOpen };
+        }
+
+        private static string Sha(byte[] b)
+        {
+            using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create())
+            {
+                return Convert.ToBase64String(sha.ComputeHash(b));
+            }
+        }
+
+        private static bool Same(string a, string b)
+        {
+            try
+            {
+                return string.Equals(System.IO.Path.GetFullPath(a), System.IO.Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        /// <summary><paramref name="assetPathNow"/>: the asset's filePath after the call; <paramref name="popupNow"/>: a dialog is open now. Never throws.</summary>
+        public static RenameResult After(RenameSnapshot s, string assetPathNow, bool popupNow)
+        {
+            RenameResult r = new RenameResult();
+            try
+            {
+                string oldMeta = s.OldFile + AssetImportRules.MetaExtension, newMeta = s.NewFile + AssetImportRules.MetaExtension;
+                bool newFile = File.Exists(s.NewFile), newM = File.Exists(newMeta), oldFile = File.Exists(s.OldFile), oldM = File.Exists(oldMeta);
+                bool popup = popupNow && !s.PopupBefore;
+                if (Same(assetPathNow, s.NewFile) && newFile && newM && !oldFile && !oldM && !popup)
+                {
+                    r.Ok = true;
+                    return r;
+                }
+                List<string> why = new List<string>();
+                if (popup)
+                {
+                    why.Add("the editor raised an error dialog (close it by hand)");
+                }
+                if (newFile && !oldFile && oldM && !newM)
+                {
+                    why.Add("the file was moved to the new name but its .pmeta was not (partial rename)");
+                    byte[] moved = File.ReadAllBytes(s.NewFile);
+                    bool content = moved.Length == s.OldLength && Sha(moved) == s.OldSha256;
+                    bool links = SandboxPath.Check(s.ModRoot, s.NewFile, out string _, out string _) == null && SandboxPath.Check(s.ModRoot, s.OldFile, out string _, out string _) == null;
+                    if (content && links && Same(assetPathNow, s.OldFile))
+                    {
+                        File.Move(s.NewFile, s.OldFile);
+                        r.MovedBack = File.Exists(s.OldFile) && !File.Exists(s.NewFile);
+                    }
+                    if (!r.MovedBack)
+                    {
+                        r.Orphan = System.IO.Path.GetFileName(s.NewFile);
+                        why.Add($"'{r.Orphan}' was left at the new name (moving it back was not provably safe)");
+                    }
+                    else
+                    {
+                        why.Add("the file was moved back to its old name");
+                    }
+                }
+                else if (oldFile && oldM && !newFile && !newM)
+                {
+                    why.Add("nothing was moved: the asset keeps its old name");
+                }
+                else if (!Same(assetPathNow, s.NewFile))
+                {
+                    why.Add($"the asset still points at '{System.IO.Path.GetFileName(assetPathNow)}'");
+                }
+                else
+                {
+                    why.Add($"unexpected files afterwards (new: {newFile}/{newM}, old: {oldFile}/{oldM})");
+                }
+                r.Problem = string.Join("; ", why.ToArray());
+            }
+            catch (Exception e)
+            {
+                r.Problem = "the rename could not be verified: " + e.Message;
+            }
+            return r;
+        }
     }
 
     /// <summary>Name choice of create_prefab: the editor names the file itself and checks only asset names, so the plugin checks the rest.</summary>
@@ -566,7 +825,7 @@ namespace PummelPartyMcp.Core
             }
             if (token is JObject o)
             {
-                if (o["truncated"] != null || o["unsupported"] != null || o["unavailable"] != null)
+                if (o["truncated"] != null || o["unsupported"] != null || o["unavailable"] != null || o["truncatedItems"] != null)
                 {
                     incomplete = true;
                 }
@@ -596,6 +855,15 @@ namespace PummelPartyMcp.Core
         /// stored references are not remapped when a prefab is made), so they would silently keep pointing at the scene objects. The plugin
         /// refuses instead; returns null when there are none.
         /// </summary>
+        /// <summary>
+        /// Review M2: a subtree whose component values could not all be read may hold references the scan did not see; consistent with
+        /// "incomplete means in use" elsewhere, create_prefab refuses (nothing created). Null when the scan was complete.
+        /// </summary>
+        public static string RefusalForIncompleteScan(bool incomplete) => incomplete
+            ? "some component values of the subtree could not be read (or were cut off), so object/action references inside them cannot be ruled out; nothing was created. " +
+              "Check the objects with get_object (values shown as unavailable/truncated), simplify them, or create an empty prefab and build its contents inside it"
+            : null;
+
         public static string RefusalForReferences(IList<SubtreeReference> refs)
         {
             if (refs == null || refs.Count == 0)

@@ -25,6 +25,9 @@ namespace PummelPartyMcp.Core
         // asset tools (plugin 0.8.0)
         public const string AssetInUse = "ASSET_IN_USE";
         public const string ImportFailed = "IMPORT_FAILED";
+
+        /// <summary>A path the operation would write or delete runs through a junction/symlink/mount point or is a hard-linked file (SandboxPath).</summary>
+        public const string LinkRefused = "LINK_REFUSED";
     }
 
     /// <summary>Thrown by tools to return a specific error code to the caller.</summary>

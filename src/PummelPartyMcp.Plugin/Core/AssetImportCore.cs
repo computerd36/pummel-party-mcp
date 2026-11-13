@@ -19,17 +19,29 @@ namespace PummelPartyMcp.Core
     {
         public const int DefaultMaxImportFileMB = 50;
         public const int DefaultMaxModAssetsMB = 500;
+        public const int DefaultMaxAudioSeconds = 600;
+        public const int DefaultMaxCompressedAudioMB = 15;
 
         public long MaxImportFileBytes { get; }
         public long MaxModAssetsBytes { get; }
 
-        public AssetLimits(int maxImportFileMB, int maxModAssetsMB)
+        /// <summary>[Assets] MaxAudioSeconds: longest clip (from the header of the copy).</summary>
+        public int MaxAudioSeconds { get; }
+
+        /// <summary>[Assets] MaxCompressedAudioMB: largest OGG/MP3 whose duration cannot be read from its header.</summary>
+        public long MaxCompressedAudioBytes { get; }
+
+        public AssetLimits(int maxImportFileMB, int maxModAssetsMB, int maxAudioSeconds = DefaultMaxAudioSeconds, int maxCompressedAudioMB = DefaultMaxCompressedAudioMB)
         {
             MaxImportFileBytes = Math.Max(1, maxImportFileMB) * 1024L * 1024L;
             MaxModAssetsBytes = Math.Max(1, maxModAssetsMB) * 1024L * 1024L;
+            MaxAudioSeconds = Math.Max(1, maxAudioSeconds);
+            MaxCompressedAudioBytes = Math.Max(1, maxCompressedAudioMB) * 1024L * 1024L;
         }
 
         public static AssetLimits Default => new AssetLimits(DefaultMaxImportFileMB, DefaultMaxModAssetsMB);
+
+        public int MaxCompressedAudioMB => (int)(MaxCompressedAudioBytes / (1024L * 1024L));
 
         public int MaxImportFileMB => (int)(MaxImportFileBytes / (1024L * 1024L));
         public int MaxModAssetsMB => (int)(MaxModAssetsBytes / (1024L * 1024L));
@@ -46,6 +58,8 @@ namespace PummelPartyMcp.Core
         public int Width;
         public int Height;
         public int VertexLines;
+        public int FaceLines;
+        public double? AudioSeconds;
         public List<string> Checks = new List<string>();
     }
 
@@ -71,6 +85,13 @@ namespace PummelPartyMcp.Core
         public const int MaxSourcePathLength = 259;
         public const int MaxTextureSide = 8192;
         public const int MaxObjVertexLines = 500000;
+        public const int MaxObjFaceLines = 1000000;
+
+        /// <summary>
+        /// Review M1: the copy is written under this suffix first (an extension the game has no importer for, so a leftover is never
+        /// decoded on reopen), checked, and only then renamed to its final name and registered.
+        /// </summary>
+        public const string StagingSuffix = ".mcp-import";
         public const int MaxDuplicateSuffix = 20;
         public const string MetaExtension = ".pmeta";
 
@@ -269,12 +290,13 @@ namespace PummelPartyMcp.Core
             {
                 throw RpcException.Internal("the mod's Assets folder is not <mod folder>\\Assets; refusing to write there");
             }
-            if (Directory.Exists(assetsFull) && (new DirectoryInfo(assetsFull).Attributes & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new RpcException(ErrorCodes.InvalidState, "the mod's Assets folder is a link (junction/symlink); refusing to write through it");
-            }
+            // the mod root itself and the Assets folder must be real folders (no junction/symlink/mount point)
+            SandboxPath.RequireFolderInsideMod(rootFull, assetsFull, "the mod's Assets folder");
             return assetsFull;
         }
+
+        /// <summary>The mod root of a validated Assets folder (its parent).</summary>
+        public static string ModRootOf(string assetsFull) => Path.GetDirectoryName(assetsFull.TrimEnd('\\', '/'));
 
         /// <summary>
         /// The destination path for (kind, stem, extension): Assets\Sub\stem.ext, verified after normalisation to be exactly one folder
@@ -487,12 +509,79 @@ namespace PummelPartyMcp.Core
 
         private const int PrefixBytes = 1024 * 1024;
 
-        private static void Sniff(ImportSource s)
+        private static void Sniff(ImportSource s) => SniffFile(s.FullPath, s, onCopy: false);
+
+        /// <summary>
+        /// Review M1: every content check and cap, run on the COPY inside the mod (after the copy, before the game sees it), so a source
+        /// swapped after the pre-checks cannot get past them: signature and header, image size, OBJ vertex AND face lines, audio duration
+        /// from the WAV/OGG/MP3 header (compressed files whose duration cannot be read: lower size cap). Adds "(copy)" checks.
+        /// </summary>
+        public static void CheckCopy(string copyPath, ImportSource s, AssetLimits limits)
         {
+            long len = new FileInfo(copyPath).Length;
+            if (len != s.Length)
+            {
+                throw Refuse($"the copy is {len} bytes, the checked source was {s.Length}; the source changed during the import");
+            }
+            SniffFile(copyPath, s, onCopy: true);
+            if (s.Kind == AssetImportKind.Mesh)
+            {
+                ObjCounts c = CountObjLines(copyPath);
+                if (c.Vertices == 0)
+                {
+                    throw Refuse("the OBJ file has no vertex ('v ') lines; it was not imported");
+                }
+                if (c.Vertices > MaxObjVertexLines)
+                {
+                    throw Refuse($"the OBJ file has more than {MaxObjVertexLines} vertex lines (limit of this plugin; the editor has none)");
+                }
+                if (c.Faces > MaxObjFaceLines)
+                {
+                    throw Refuse($"the OBJ file has more than {MaxObjFaceLines} face lines (limit of this plugin; the editor has none)");
+                }
+                s.VertexLines = c.Vertices;
+                s.FaceLines = c.Faces;
+                s.Checks.Add($"copy: text OBJ with {c.Vertices} vertex lines (<= {MaxObjVertexLines}) and {c.Faces} face lines (<= {MaxObjFaceLines})");
+            }
+            if (s.Kind == AssetImportKind.Audio)
+            {
+                AudioDuration d = AudioHeaders.Read(copyPath, s.Extension);
+                if (d.Seconds.HasValue)
+                {
+                    if (d.Seconds.Value > limits.MaxAudioSeconds)
+                    {
+                        throw Refuse($"the audio is {d.Seconds.Value:0} s long ({d.Method}); the limit is {limits.MaxAudioSeconds} s ([Assets] MaxAudioSeconds; the game decodes the whole clip on the main thread and waits for it)");
+                    }
+                    s.AudioSeconds = d.Seconds;
+                    s.Checks.Add($"copy: audio duration {d.Seconds.Value:0.#} s from the {d.Method} <= {limits.MaxAudioSeconds} s");
+                }
+                else if (s.Extension == ".wav")
+                {
+                    throw Refuse("the WAV header (fmt/data chunks) could not be read, so the duration is unknown; re-export the file as PCM WAV");
+                }
+                else
+                {
+                    if (d.CbrEstimateSeconds.HasValue && d.CbrEstimateSeconds.Value > limits.MaxAudioSeconds)
+                    {
+                        throw Refuse($"the audio would be about {d.CbrEstimateSeconds.Value:0} s long at the bitrate of its first frame ({d.Method}); the limit is {limits.MaxAudioSeconds} s ([Assets] MaxAudioSeconds)");
+                    }
+                    if (len > limits.MaxCompressedAudioBytes)
+                    {
+                        throw Refuse($"the duration of this {s.Extension} file cannot be read from its header ({d.Method}) and it is {Mb(len)} MB; such files are accepted only up to {limits.MaxCompressedAudioMB} MB ([Assets] MaxCompressedAudioMB)");
+                    }
+                    s.Checks.Add($"copy: audio duration not readable from the header ({d.Method}); size {Mb(len)} MB <= {limits.MaxCompressedAudioMB} MB ([Assets] MaxCompressedAudioMB)");
+                }
+            }
+        }
+
+        private static void SniffFile(string path, ImportSource s, bool onCopy)
+        {
+            string tag = onCopy ? "copy: " : string.Empty;
+            string not = onCopy ? "it was not imported" : "it was not copied";
             byte[] prefix;
             try
             {
-                using (FileStream fs = new FileStream(s.FullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 {
                     int want = (int)Math.Min(PrefixBytes, fs.Length);
                     prefix = new byte[want];
@@ -522,69 +611,73 @@ namespace PummelPartyMcp.Core
                 case ".png":
                     if (!TryPngSize(prefix, out int pw, out int ph))
                     {
-                        throw Refuse("the file does not look like a PNG image (wrong signature); it was not copied");
+                        throw Refuse("the file does not look like a PNG image (wrong signature); " + not);
                     }
-                    CheckDims(s, pw, ph);
-                    s.Checks.Add("PNG signature and header");
+                    CheckDims(s, pw, ph, tag);
+                    s.Checks.Add(tag + "PNG signature and header");
                     break;
                 case ".jpg":
                 case ".jpeg":
                     if (!IsJpeg(prefix))
                     {
-                        throw Refuse("the file does not look like a JPEG image (wrong signature); it was not copied");
+                        throw Refuse("the file does not look like a JPEG image (wrong signature); " + not);
                     }
                     if (!TryJpegSize(prefix, out int jw, out int jh))
                     {
-                        throw Refuse("the JPEG header could not be read (size unknown); it was not copied");
+                        throw Refuse("the JPEG header could not be read (size unknown); " + not);
                     }
-                    CheckDims(s, jw, jh);
-                    s.Checks.Add("JPEG signature and header");
+                    CheckDims(s, jw, jh, tag);
+                    s.Checks.Add(tag + "JPEG signature and header");
                     break;
                 case ".wav":
                     if (!IsWav(prefix))
                     {
-                        throw Refuse("the file does not look like a WAV file (no RIFF/WAVE header); it was not copied");
+                        throw Refuse("the file does not look like a WAV file (no RIFF/WAVE header); " + not);
                     }
-                    s.Checks.Add("RIFF/WAVE header");
+                    s.Checks.Add(tag + "RIFF/WAVE header");
                     break;
                 case ".ogg":
                     if (!IsOgg(prefix))
                     {
-                        throw Refuse("the file does not look like an Ogg file (no OggS header); it was not copied");
+                        throw Refuse("the file does not look like an Ogg file (no OggS header); " + not);
                     }
-                    s.Checks.Add("OggS header");
+                    s.Checks.Add(tag + "OggS header");
                     break;
                 case ".mp3":
                     if (!IsMp3(prefix))
                     {
-                        throw Refuse("the file does not look like an MP3 file (no ID3 tag or frame sync); it was not copied");
+                        throw Refuse("the file does not look like an MP3 file (no ID3 tag or frame sync); " + not);
                     }
-                    s.Checks.Add("MP3 ID3 tag or frame sync");
+                    s.Checks.Add(tag + "MP3 ID3 tag or frame sync");
                     break;
                 case ".obj":
                     if (!IsTextWithoutNul(prefix, 8192))
                     {
-                        throw Refuse("the file does not look like a text OBJ file (binary content in the first block); it was not copied");
+                        throw Refuse("the file does not look like a text OBJ file (binary content in the first block); " + not);
                     }
-                    s.VertexLines = CountVertexLines(s.FullPath);
+                    if (onCopy)
+                    {
+                        break; // CheckCopy counts vertex and face lines of the copy
+                    }
+                    s.VertexLines = CountVertexLines(path);
                     if (s.VertexLines == 0)
                     {
-                        throw Refuse("the OBJ file has no vertex ('v ') lines; it was not copied");
+                        throw Refuse("the OBJ file has no vertex ('v ') lines; " + not);
                     }
                     if (s.VertexLines > MaxObjVertexLines)
                     {
                         throw Refuse($"the OBJ file has more than {MaxObjVertexLines} vertex lines (limit of this plugin; the editor has none)");
                     }
-                    s.Checks.Add($"text OBJ with {s.VertexLines} vertex lines (<= {MaxObjVertexLines})");
+                    s.Checks.Add(tag + $"text OBJ with {s.VertexLines} vertex lines (<= {MaxObjVertexLines})");
                     break;
             }
-            if (s.Kind == AssetImportKind.Audio)
+            if (s.Kind == AssetImportKind.Audio && !onCopy)
             {
-                s.Checks.Add("audio file size within the limit (the game decodes audio on the main thread and waits for it)");
+                s.Checks.Add(tag + "audio file size within the limit (the game decodes audio on the main thread and waits for it)");
             }
         }
 
-        private static void CheckDims(ImportSource s, int w, int h)
+        private static void CheckDims(ImportSource s, int w, int h, string tag = "")
         {
             if (w < 1 || h < 1)
             {
@@ -596,7 +689,7 @@ namespace PummelPartyMcp.Core
             }
             s.Width = w;
             s.Height = h;
-            s.Checks.Add($"image size {w}x{h} <= {MaxTextureSide} per side");
+            s.Checks.Add(tag + $"image size {w}x{h} <= {MaxTextureSide} per side");
         }
 
         public static bool TryPngSize(byte[] b, out int w, out int h)
@@ -748,6 +841,60 @@ namespace PummelPartyMcp.Core
             return count;
         }
 
+        public struct ObjCounts
+        {
+            public int Vertices;
+            public int Faces;
+        }
+
+        /// <summary>Counts "v " and "f " lines (or with a tab) in the whole file, stopping early once either is past its cap.</summary>
+        public static ObjCounts CountObjLines(string path)
+        {
+            ObjCounts c = new ObjCounts();
+            int state = 0; // 0 line start, 1 saw 'v', 3 saw 'f', 2 elsewhere in a line
+            byte[] buf = new byte[64 * 1024];
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                int n;
+                while ((n = fs.Read(buf, 0, buf.Length)) > 0)
+                {
+                    for (int i = 0; i < n; i++)
+                    {
+                        byte ch = buf[i];
+                        if (ch == (byte)'\n' || ch == (byte)'\r')
+                        {
+                            state = 0;
+                            continue;
+                        }
+                        if (state == 0)
+                        {
+                            state = ch == (byte)'v' ? 1 : ch == (byte)'f' ? 3 : 2;
+                        }
+                        else if (state == 1 || state == 3)
+                        {
+                            if (ch == (byte)' ' || ch == (byte)'\t')
+                            {
+                                if (state == 1)
+                                {
+                                    c.Vertices++;
+                                }
+                                else
+                                {
+                                    c.Faces++;
+                                }
+                                if (c.Vertices > MaxObjVertexLines || c.Faces > MaxObjFaceLines)
+                                {
+                                    return c;
+                                }
+                            }
+                            state = 2;
+                        }
+                    }
+                }
+            }
+            return c;
+        }
+
         // ------------------------------------------------------------------ size of the mod's assets
 
         public static long FolderSize(string folder)
@@ -807,25 +954,17 @@ namespace PummelPartyMcp.Core
         /// <summary>Creates the sub-folder (refusing a file or a link at that place) and returns its path.</summary>
         public static string EnsureSubFolder(string assetsFull, AssetImportKind kind)
         {
-            if (!Directory.Exists(assetsFull))
-            {
-                Directory.CreateDirectory(assetsFull);
-            }
+            string root = ModRootOf(assetsFull);
             string sub = Path.Combine(assetsFull, SubFolderOf(kind));
             if (File.Exists(sub))
             {
                 throw new RpcException(ErrorCodes.InvalidState, $"'Assets\\{SubFolderOf(kind)}' exists as a file; nothing was copied");
             }
-            if (Directory.Exists(sub))
-            {
-                if ((new DirectoryInfo(sub).Attributes & FileAttributes.ReparsePoint) != 0)
-                {
-                    throw new RpcException(ErrorCodes.InvalidState, $"'Assets\\{SubFolderOf(kind)}' is a link (junction/symlink); refusing to write through it");
-                }
-            }
-            else
+            SandboxPath.RequireFolderInsideMod(root, sub, "import_asset (destination folder)");
+            if (!Directory.Exists(sub))
             {
                 Directory.CreateDirectory(sub);
+                SandboxPath.RequireFolderInsideMod(root, sub, "import_asset (destination folder)");
             }
             return sub;
         }
@@ -835,8 +974,28 @@ namespace PummelPartyMcp.Core
         {
             public ImportDestination Destination;
             public bool FileCreated;
+
+            /// <summary>M1: the staging copy (&lt;dest&gt;.mcp-import) this call created and that still exists under that name.</summary>
+            public string StagingPath;
+            public bool StagingCreated;
             public long Bytes;
             public string Sha256;
+
+            /// <summary>
+            /// The step that makes the game write the .pmeta (ImportFile / CreateNewMaterial) was reached. Together with
+            /// <see cref="MetaExistedBefore"/> = false (recorded right before that step) this proves the .pmeta is this call's own.
+            /// </summary>
+            public bool MetaStepReached;
+
+            /// <summary>The .pmeta existed right before the step that writes it (then it is never deleted by the rollback).</summary>
+            public bool MetaExistedBefore = true;
+
+            /// <summary>Records the .pmeta state right before the game writes it.</summary>
+            public void BeforeMetaStep()
+            {
+                MetaExistedBefore = Destination == null || File.Exists(Destination.MetaPath) || Directory.Exists(Destination.MetaPath);
+                MetaStepReached = true;
+            }
         }
 
         public sealed class CleanupReport
@@ -846,11 +1005,13 @@ namespace PummelPartyMcp.Core
         }
 
         /// <summary>
-        /// Copies the source into the mod: free name chosen, file created with CreateNew (fails if it appears in between: the next
-        /// free name is tried, bounded), source read-only with full sharing, never modified. <paramref name="beforeCreate"/> is a test
-        /// hook called right before each create attempt with the target path.
+        /// Copies the source into the mod: free name chosen; the copy is first written as &lt;name&gt;.mcp-import (CreateNew, an extension
+        /// the game ignores), hashed and length-checked, then every content check and cap runs on that copy (review M1), and only then
+        /// it is renamed to its final name (File.Move: fails if the name appeared meanwhile; the next free name is tried, bounded). The
+        /// source is read-only with full sharing and never modified. <paramref name="beforeCreate"/> is a test hook called right before
+        /// each create attempt with the final target path.
         /// </summary>
-        public static Created CopyIntoMod(ImportSource source, string assetsFull, string stem, Action<string> beforeCreate = null)
+        public static Created CopyIntoMod(ImportSource source, string assetsFull, string stem, Action<string> beforeCreate = null, AssetLimits limits = null)
         {
             EnsureSubFolder(assetsFull, source.Kind);
             int from = 0;
@@ -863,20 +1024,30 @@ namespace PummelPartyMcp.Core
                     from = dest.Suffix + 1; // appeared between the check and now
                     continue;
                 }
-                Created created = new Created { Destination = dest };
+                string staging = dest.FullPath + StagingSuffix;
+                if (File.Exists(staging) || Directory.Exists(staging))
+                {
+                    from = dest.Suffix + 1; // a leftover staging copy of an earlier interrupted import: leave it, take the next name
+                    continue;
+                }
+                Created created = new Created { Destination = dest, StagingPath = staging };
+                string root = ModRootOf(assetsFull);
+                SandboxPath.RequireInsideMod(root, staging, "import_asset (staging copy)");
+                SandboxPath.RequireInsideMod(root, dest.FullPath, "import_asset (copy target)");
+                SandboxPath.RequireInsideMod(root, dest.MetaPath, "import_asset (.pmeta the game will write)");
                 FileStream outStream = null;
                 try
                 {
                     try
                     {
-                        outStream = new FileStream(dest.FullPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                        outStream = new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.None);
                     }
-                    catch (IOException) when (File.Exists(dest.FullPath) || Directory.Exists(dest.FullPath))
+                    catch (IOException) when (File.Exists(staging) || Directory.Exists(staging))
                     {
                         from = dest.Suffix + 1; // lost the race: not ours, nothing to clean
                         continue;
                     }
-                    created.FileCreated = true;
+                    created.StagingCreated = true;
                     using (SHA256 sha = SHA256.Create())
                     using (FileStream inStream = new FileStream(source.FullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                     {
@@ -904,7 +1075,39 @@ namespace PummelPartyMcp.Core
                     outStream.Flush();
                     outStream.Dispose();
                     outStream = null;
+
+                    // M1: every content check and cap on the copy itself (a source swapped after the pre-checks cannot pass)
+                    CheckCopy(staging, source, limits ?? AssetLimits.Default);
+
+                    SandboxPath.RequireInsideMod(root, staging, "import_asset (staging copy)");
+                    SandboxPath.RequireInsideMod(root, dest.FullPath, "import_asset (copy target)");
+                    if (!IsFree(dest.FullPath))
+                    {
+                        Rollback(created); // removes only the staging copy (the final name is someone else's)
+                        from = dest.Suffix + 1;
+                        continue;
+                    }
+                    try
+                    {
+                        File.Move(staging, dest.FullPath); // fails if the final name appeared in between
+                    }
+                    catch (IOException) when (File.Exists(dest.FullPath) || Directory.Exists(dest.FullPath))
+                    {
+                        Rollback(created);
+                        from = dest.Suffix + 1;
+                        continue;
+                    }
+                    created.StagingCreated = File.Exists(staging);
+                    created.FileCreated = true;
                     return created;
+                }
+                catch (RpcException e) when (e.Code == ErrorCodes.InvalidParams)
+                {
+                    outStream?.Dispose();
+                    outStream = null;
+                    CleanupReport report = Rollback(created);
+                    throw new RpcException(ErrorCodes.InvalidParams,
+                        e.Message + $" (checked on the copy inside the mod; removed {(report.Deleted.Count == 0 ? "nothing" : string.Join(", ", report.Deleted.ToArray()))}; nothing was registered; the source file was not touched)");
                 }
                 catch (Exception e)
                 {
@@ -925,12 +1128,29 @@ namespace PummelPartyMcp.Core
         public static CleanupReport Rollback(Created created)
         {
             CleanupReport report = new CleanupReport();
-            if (created == null || created.Destination == null || !created.FileCreated)
+            if (created == null || created.Destination == null || (!created.FileCreated && !created.StagingCreated))
             {
                 return report;
             }
             ImportDestination d = created.Destination;
-            foreach (string p in new[] { d.FullPath, d.MetaPath })
+            List<string> targets = new List<string>();
+            if (created.StagingCreated && created.StagingPath != null)
+            {
+                targets.Add(created.StagingPath); // M1: the staging copy (the game ignores it, but it is this call's own)
+            }
+            if (created.FileCreated)
+            {
+                targets.Add(d.FullPath);
+            }
+            if (created.MetaStepReached && !created.MetaExistedBefore)
+            {
+                targets.Add(d.MetaPath); // provably this call's own .pmeta (absent right before the game wrote it)
+            }
+            else if (File.Exists(d.MetaPath))
+            {
+                report.Problems.Add($"kept {Path.GetFileName(d.MetaPath)}: this call cannot prove it created it");
+            }
+            foreach (string p in targets)
             {
                 try
                 {
@@ -941,6 +1161,12 @@ namespace PummelPartyMcp.Core
                     if (!inside)
                     {
                         report.Problems.Add("not deleted (not inside the mod's Assets folder): " + p);
+                        continue;
+                    }
+                    string why = SandboxPath.Check(ModRootOf(d.AssetsFolder), full, out string _, out string _);
+                    if (why != null)
+                    {
+                        report.Problems.Add($"not deleted ({why})");
                         continue;
                     }
                     if (File.Exists(full))
