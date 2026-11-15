@@ -5,6 +5,7 @@ using System.Linq;
 using Newtonsoft.Json.Linq;
 using PummelPartyMcp.Core;
 using PummelPartyMcp.Game;
+using UnityEngine;
 
 namespace PummelPartyMcp.Tools
 {
@@ -103,6 +104,22 @@ namespace PummelPartyMcp.Tools
                 catch (Exception)
                 {
                     // size is informational
+                }
+            }
+            if (a is PummelAudioClip pac)
+            {
+                // only a clip that is already loaded: nothing is loaded or decoded for the listing
+                try
+                {
+                    AudioClip clip = pac.unityObject as AudioClip; // not UnityAudioClip: that getter would load a built-in clip
+                    if (clip != null)
+                    {
+                        row["lengthSeconds"] = Math.Round(clip.length, 3);
+                    }
+                }
+                catch (Exception)
+                {
+                    // length is informational
                 }
             }
             rows.Add(new AssetEntry

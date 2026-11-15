@@ -77,6 +77,18 @@ namespace PummelPartyMcp.Core
             F("ModSystem.Logic.ModLogicTrigger", "m_owner", "ModSystem.Logic.IEventReceiver", "PlaytestLogicRecorder");
             M("ModSystem.Logic.ModLogicTrigger", "RunActionsLocal", "PlaytestHooks", "ModSystem.Logic.ModEvent");
 
+            // editor camera (screenshot camera) and audio state (get_playtest_state)
+            F("EditorCamera", "m_targetPosition", "UnityEngine.Vector3", "EditorCameraAccess");
+            F("EditorCamera", "m_targetVelocity", "UnityEngine.Vector3", "EditorCameraAccess");
+            F("EditorCamera", "m_zRotation", "System.Single", "EditorCameraAccess (pitch)");
+            F("EditorCamera", "m_yRotation", "System.Single", "EditorCameraAccess (yaw)");
+            F("AudioSystem", "audioSystemObj", "AudioSystemObj", "PlaytestStateReader (audio)", true);
+            F("AudioSystem", "masterVolume", "System.Single", "PlaytestStateReader (audio)", true);
+            F("AudioSystem", "musicVolume", "System.Single", "PlaytestStateReader (audio)", true);
+            F("AudioSystem", "effectsVolume", "System.Single", "PlaytestStateReader (audio)", true);
+            F("AudioSystemObj", "currentMusic", "TempAudioSource", "PlaytestStateReader (audio)");
+            F("AudioSystemObj", "audioSources", "System.Collections.Generic.List`1[TempAudioSource]", "PlaytestStateReader (audio)");
+
             // mod metadata, assets, components
             F("PummelMod", "m_metaData", null, "EditorAccess, get_open_mod, write guard");
             F("ModItem", "m_itemPummelPrefab", null, "ComponentReader");

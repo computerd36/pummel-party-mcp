@@ -17,7 +17,7 @@ const READ_TOOLS = [
   "validate_mod", "get_playtest_state", "get_playtest_events", "self_test", "list_mod_settings", "get_mod_settings",
   "get_asset", "list_asset_rules",
 ];
-const SIZE_LIMIT = 40000;
+const SIZE_LIMIT = 42000;
 
 async function session({ handler, delayMs, token = "ptoken", env = {}, raw } = {}) {
   const dir = makeTempDir();
@@ -259,6 +259,38 @@ test("screenshot results are validated before building image content", async () 
       assert.equal(r.isError, true, JSON.stringify(bad[i]));
       assert.ok(r.content.every((c) => c.type === "text"));
     }
+  } finally {
+    await s.close();
+  }
+});
+
+test("screenshot passes camera through unchanged and the text names an applied camera", async () => {
+  const seen = [];
+  let reply;
+  const s = await session({
+    handler: (method, params) => {
+      seen.push(params);
+      return { ok: true, result: reply };
+    },
+  });
+  try {
+    const camera = { position: { x: 1, y: 2.5, z: -3 }, lookAt: { x: 0, y: 0, z: 0 } };
+    reply = { pngBase64: "AAAA", width: 640, height: 360, camera: { position: { x: 1, y: 2.5, z: -3 }, rotation: { x: 30.5, y: 200 } } };
+    const r = await s.client.callTool({ name: "screenshot", arguments: { maxWidth: 640, camera } });
+    assert.deepEqual(seen[0].camera, camera);
+    assert.equal(seen[0].maxWidth, 640);
+    const text = r.content.find((c) => c.type === "text").text;
+    assert.equal(text, "Screenshot 640 x 360, camera at (1, 2.5, -3) pitch 30.5 yaw 200");
+
+    for (const bad of [{ position: 5, rotation: {} }, "x", { position: { x: 1, y: 2, z: 3 } }, null]) {
+      reply = { pngBase64: "AAAA", width: 640, height: 360, camera: bad };
+      const r2 = await s.client.callTool({ name: "screenshot", arguments: {} });
+      assert.equal(r2.content.find((c) => c.type === "text").text, "Screenshot 640 x 360", JSON.stringify(bad));
+    }
+    reply = { pngBase64: "AAAA", width: 640, height: 360 };
+    const r3 = await s.client.callTool({ name: "screenshot", arguments: {} });
+    assert.equal(r3.content.find((c) => c.type === "text").text, "Screenshot 640 x 360");
+    assert.equal(seen[seen.length - 1].camera, undefined);
   } finally {
     await s.close();
   }

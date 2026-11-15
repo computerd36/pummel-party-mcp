@@ -422,8 +422,9 @@ no triggers. With `scope: "playerSettings"`: six entries, one per trigger the Mi
 | `limit` | int | 100 | page size, 1..500 |
 | `offset` | int | 0 | number of matching assets to skip, >= 0 |
 
-Errors: `INVALID_PARAMS` (bad `limit`/`offset`), `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`. During a playtest
-the result additionally has `"playMode": true` (the editor mod's asset list, unchanged by the playtest).
+Errors: `INVALID_PARAMS` (bad `limit`/`offset`), `EDITOR_NOT_OPEN`, `BUSY_LOADING`, `NO_MOD_OPEN`. AudioClip rows also
+carry `lengthSeconds` (3 decimals, as `get_asset`) when the clip is already loaded; a built-in clip that is not loaded
+has no such field (nothing is loaded or decoded for the listing). During a playtest the result additionally has `"playMode": true` (the editor mod's asset list, unchanged by the playtest).
 
 Result: an object. `assets` is sorted by `type`, then `name`, then `guid` (ordinal, ignore case) before paging.
 `total` and `hasMore` describe the filtered set; `typeCounts` counts assets per type after `includeBuiltIn` and
@@ -476,11 +477,38 @@ output of the game, editor and playtests). Without `sinceId` the newest `max` en
 
 ### `screenshot`
 
-Params: `maxWidth` (int 64-7680, default 1280). Works with the editor open or closed.
+Params: `maxWidth` (int 64-7680, default 1280), `camera` (optional, see below). Without `camera` it works with the
+editor open or closed and captures whatever the view shows.
 
 ```json
 {"pngBase64": "iVBORw0KGgoAAAANSUhEUgAA...", "width": 1280, "height": 720}
 ```
+
+`camera` moves the Mod Editor's scene-view camera before the capture, so an agent can look at the scene from a chosen
+angle. Exactly one of these forms (anything else is `INVALID_PARAMS` with a message saying why):
+
+| Form | Meaning |
+|---|---|
+| `{"position": {x,y,z}, "lookAt": {x,y,z}}` | camera at `position`, aimed at `lookAt` (same point is refused; straight up or down works) |
+| `{"position": {x,y,z}, "rotation": {x,y}}` | `rotation.x` is pitch and `rotation.y` yaw in degrees (positive pitch looks down; pitch is clamped to -90..90, yaw wrapped to 0..360; there is no roll) |
+| `{"focus": "<object guid>"}` | frames the object like the editor's F key (bounds of its renderers along the camera's current direction; an object without renderers is framed 2 units in front of its position); optionally with `rotation` to choose the viewing direction first. `focus` with `position` or `lookAt` is refused |
+
+The reply then also has `camera: {position: {x,y,z}, rotation: {x,y}}`, the values actually applied (rounded to 3
+decimals). `camera` needs the Mod Editor in edit mode with a mod open (`EDITOR_NOT_OPEN`, `NO_MOD_OPEN`,
+`BUSY_LOADING`; `INVALID_STATE` during a playtest, with the reason in the message; `NOT_FOUND` for an unknown `focus`
+guid). It is a view change only and not a write tool: it works for any open mod (the `MCP_` guard is for writes to mod
+data), changes nothing in the mod, saves nothing, adds no undo step and does not set the unsaved-edits flag. The camera
+stays where it was put, with one exception: `open_prefab` re-frames the camera on the prefab and `close_prefab` restores
+the view from before the prefab was opened (`EditorSystem` prefab context switch), so a camera set while a prefab is
+open is lost at `close_prefab`. `focus` also needs an object that is active in the current context: a prefab's objects
+need `open_prefab` first, scene objects need `close_prefab` first, and a switched-off object is refused with
+`INVALID_STATE` (an inactive object has no renderers, so the camera would frame empty space). The reported
+`rotation` is the pitch/yaw passed to the editor camera (for `focus` without `rotation`: the camera's own current pitch
+and yaw, unclamped), not recomputed Euler angles. A capture that does not finish after the camera moved answers
+`TIMEOUT` with a message saying the camera was moved; call `screenshot` again. How it is applied: `EditorCamera` (reached as `EditorSystem.SceneViewWidget.CurEditorCamera`)
+rebuilds its rotation from its own pitch/yaw every frame and smooths its position toward a private target, so the plugin
+sets both the public setters (`SetRotation`, `SetTargetPosition`, `Focus`) and the transform, and zeroes the private
+velocity. It then waits two rendered frames and the end of the frame before capturing.
 
 Captured on the main thread after `WaitForEndOfFrame` with `ScreenCapture.CaptureScreenshotAsTexture()`, downscaled
 (keeping aspect ratio) when wider than `maxWidth`, PNG-encoded; all temporary textures are destroyed. The capture
@@ -2997,7 +3025,24 @@ starting, retry), `ExitingPlayMode` (ending; read `get_playtest_events`), editor
 ```
 
 Top level: `running` (always true), `mod`, `modType`, `playtest` (counts playtests since the game started, matches
-`get_playtest_events.playtest`), `paused` (`Time.timeScale == 0`), `alivePlayers`, `events` `{count, lastId}`.
+`get_playtest_events.playtest`), `paused` (`Time.timeScale == 0`), `alivePlayers`, `events` `{count, lastId}`, `audio`.
+
+`audio` (every playtest, whatever the mod type; any value that cannot be read is omitted or null, it never fails the call):
+`{"music": {clip, volume, playing, timeSeconds, lengthSeconds} | null, "ambience": {...} | null, "modAudioSources": [...], "activeSources",
+"masterVolume", "musicVolume", "effectsVolume"}`, floats rounded to 3 decimals. `music` is the game's music source
+(`AudioSystemObj.currentMusic`), `ambience` the playing pooled source of sound type Ambience (what a minigame's ambience
+plays through); both are the minigame settings' Music and Ambience only, and `null` when there is no such source or it
+holds no clip. In a Mod Editor playtest `ambience` stays `null` even with an Ambience set: the game starts ambience in
+`MinigameController.OnPlayersReady`, which only the board-game flow calls (seen in the game: Music played, ambience did not). `modAudioSources` lists the mod's own Audio Source components in the running scene (the editor's
+edit-time copies are skipped): `{object, clip, volume, playing, loop, timeSeconds, lengthSeconds}` (`timeSeconds` and
+`lengthSeconds` only with a clip), at most 20, with `modAudioSourcesTotal` when there are more. A looping Audio Source
+object used as music shows up there, not under `music`; Play Sound on an Audio Source target plays that source
+directly. A one-shot Play Sound on a non-Audio-Source target plays through the game's pool and is only counted in
+`activeSources`. Nothing is loaded for any of this. `clip` is the AudioClip name, `volume` the
+source's current volume (fades show), `playing` its `isPlaying`, `timeSeconds` its `time`, `lengthSeconds` the clip's
+length. `activeSources` is the number of pooled/temporary one-shot and looping sources playing now (the ambience source
+included, the music source not). The three volumes are the player's own game options as applied
+(`AudioSystem` master/music/effects, 0..1): a music volume of 0 explains silence.
 Minigame mods add:
 
 | Field | Meaning (source) |
@@ -3233,7 +3278,7 @@ resolve (they would read as `registered: false`).
 
 | Tool | During a playtest |
 |---|---|
-| `ping`, `get_log`, `screenshot` | work unchanged (`get_log` and `screenshot` are the way to observe a playtest from outside; the screenshot shows the editor window with the play view) |
+| `ping`, `get_log`, `screenshot` | work unchanged (`get_log` and `screenshot` are the way to observe a playtest from outside; the screenshot shows the editor window with the play view); `screenshot`'s `camera` is edit mode only (`INVALID_STATE`) |
 | `get_status` | works; `playtest` block with `running: true`, times, `paused`, `minigame` / `board` state, `eventCount`, `lastEventId`, `alivePlayers` |
 | `get_playtest_state` | **needs** a running playtest (`PlayMode`): reads the runtime players and minigame/board; `INVALID_STATE` in every other state (the message says what to do) |
 | `get_playtest_events` | works in every state, also with the editor closed and after the playtest (reads the plugin's own buffer; answered on the HTTP thread) |

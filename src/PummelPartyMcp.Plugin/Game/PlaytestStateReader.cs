@@ -75,8 +75,198 @@ namespace PummelPartyMcp.Game
                 j["reason"] = "only Minigame and Board mods have a readable playtest state";
                 j["players"] = new JArray();
             }
+            JObject audio = ReadAudio(ed);
+            if (audio != null)
+            {
+                j["audio"] = audio;
+            }
             j["events"] = new JObject { ["count"] = feed.EventCount, ["lastId"] = feed.LastEventId };
             return j;
+        }
+
+        // ------------------------------------------------------------------ audio
+
+        /// <summary>
+        /// The game's audio state: music source (AudioSystemObj.currentMusic), the ambience source (the pooled TempAudioSource whose
+        /// SoundType is Ambience and that is playing), the number of pooled sources currently playing, and the player's own volume
+        /// settings (AudioSystem's applied master/music/effects volumes, 0..1). Read-only; every value that cannot be read is left
+        /// out (or null), and nothing here may fail the state call.
+        /// </summary>
+        public static JObject ReadAudio(EditorSystem ed)
+        {
+            try
+            {
+                JObject a = new JObject();
+                object sys = null;
+                try
+                {
+                    sys = GameReflection.FindField(typeof(AudioSystem), "audioSystemObj")?.GetValue(null);
+                }
+                catch (Exception)
+                {
+                    // leave null
+                }
+                AudioSystemObj obj = sys as AudioSystemObj;
+                TempAudioSource music = null;
+                TempAudioSource ambience = null;
+                int active = -1;
+                if (obj != null)
+                {
+                    try
+                    {
+                        music = GameReflection.FindField(typeof(AudioSystemObj), "currentMusic")?.GetValue(obj) as TempAudioSource;
+                    }
+                    catch (Exception)
+                    {
+                        // leave null
+                    }
+                    try
+                    {
+                        if (GameReflection.FindField(typeof(AudioSystemObj), "audioSources")?.GetValue(obj) is IList list)
+                        {
+                            active = 0;
+                            for (int i = 0; i < list.Count; i++)
+                            {
+                                TempAudioSource src = list[i] as TempAudioSource;
+                                if (src == null || !src.IsPlaying)
+                                {
+                                    continue;
+                                }
+                                active++;
+                                if (ambience == null && src.SoundType == SoundType.Ambience)
+                                {
+                                    ambience = src;
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        active = -1;
+                    }
+                }
+                a["music"] = AudioSourceJson(music);
+                a["ambience"] = AudioSourceJson(ambience);
+                if (active >= 0)
+                {
+                    a["activeSources"] = active;
+                }
+                AddModAudioSources(a, ed);
+                AddVolume(a, "masterVolume", "masterVolume");
+                AddVolume(a, "musicVolume", "musicVolume");
+                AddVolume(a, "effectsVolume", "effectsVolume");
+                return a;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        public const int MaxModAudioSources = 20;
+
+        /// <summary>
+        /// The mod's own Audio Source components in the running scene (ModAudioSource wraps a plain AudioSource that Play Sound on an
+        /// Audio Source target plays directly, outside the game's pool). The editor's own edit-time copies (under the hierarchy and
+        /// prefab roots) are skipped. Nothing is loaded; at most 20 are listed, modAudioSourcesTotal says how many exist.
+        /// </summary>
+        private static void AddModAudioSources(JObject a, EditorSystem ed)
+        {
+            try
+            {
+                Transform h = ed == null ? null : ed.m_hierarchyRoot;
+                Transform pr = ed == null ? null : ed.m_prefabsRoot;
+                JArray list = new JArray();
+                int total = 0;
+                foreach (ModAudioSource m in UnityEngine.Object.FindObjectsOfType<ModAudioSource>())
+                {
+                    if (m == null || (h != null && m.transform.IsChildOf(h)) || (pr != null && m.transform.IsChildOf(pr)))
+                    {
+                        continue;
+                    }
+                    total++;
+                    if (list.Count >= MaxModAudioSources)
+                    {
+                        continue;
+                    }
+                    try
+                    {
+                        AudioSource s = m.Component as AudioSource;
+                        if (s == null)
+                        {
+                            continue;
+                        }
+                        JObject o = new JObject { ["object"] = m.gameObject.name };
+                        AudioClip clip = s.clip;
+                        o["clip"] = clip == null ? null : clip.name;
+                        o["volume"] = Math.Round(s.volume, 3);
+                        o["playing"] = s.isPlaying;
+                        o["loop"] = s.loop;
+                        if (clip != null)
+                        {
+                            o["timeSeconds"] = Math.Round(s.time, 3);
+                            o["lengthSeconds"] = Math.Round(clip.length, 3);
+                        }
+                        list.Add(o);
+                    }
+                    catch (Exception)
+                    {
+                        // skip this one
+                    }
+                }
+                a["modAudioSources"] = list;
+                if (total > list.Count)
+                {
+                    a["modAudioSourcesTotal"] = total;
+                }
+            }
+            catch (Exception)
+            {
+                // omitted
+            }
+        }
+
+        private static void AddVolume(JObject a, string name, string field)
+        {
+            try
+            {
+                if (GameReflection.FindField(typeof(AudioSystem), field)?.GetValue(null) is float v && !float.IsNaN(v) && !float.IsInfinity(v))
+                {
+                    a[name] = Math.Round(v, 3);
+                }
+            }
+            catch (Exception)
+            {
+                // omitted
+            }
+        }
+
+        /// <summary>{clip, volume, playing, timeSeconds, lengthSeconds} of a source that holds a clip; null for none.</summary>
+        private static JToken AudioSourceJson(TempAudioSource t)
+        {
+            try
+            {
+                AudioSource s = t == null ? null : t.audioSource;
+                if (s == null)
+                {
+                    return JValue.CreateNull();
+                }
+                AudioClip clip = s.clip;
+                if (clip == null)
+                {
+                    return JValue.CreateNull();
+                }
+                JObject o = new JObject { ["clip"] = clip.name };
+                o["volume"] = Math.Round(s.volume, 3);
+                o["playing"] = s.isPlaying;
+                o["timeSeconds"] = Math.Round(s.time, 3);
+                o["lengthSeconds"] = Math.Round(clip.length, 3);
+                return o;
+            }
+            catch (Exception)
+            {
+                return JValue.CreateNull();
+            }
         }
 
         // ------------------------------------------------------------------ minigame

@@ -43,6 +43,7 @@ namespace PummelPartyMcp.Tests
             AssetTests.Run((name, ok) => Check(name, ok));
             PrefabTests.Run((name, ok) => Check(name, ok));
             ReviewFixTests.Run((name, ok) => Check(name, ok));
+            CameraTests.Run((name, ok) => Check(name, ok));
             AssetListingTests();
             ServerTests();
             Console.WriteLine();

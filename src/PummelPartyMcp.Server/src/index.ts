@@ -15,6 +15,16 @@ const client = new PluginClient(opts);
 // carry what is specific to the tool.
 // ---------------------------------------------------------------------------
 
+
+/** ", camera at (x, y, z) pitch p yaw y" for a screenshot reply that carries the applied camera; "" otherwise. */
+function cameraNote(c: any): string {
+  const ok = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  const p = c?.position;
+  const r = c?.rotation;
+  if (!p || !r || typeof p !== "object" || typeof r !== "object" || !ok(p.x) || !ok(p.y) || !ok(p.z) || !ok(r.x) || !ok(r.y)) return "";
+  return `, camera at (${p.x}, ${p.y}, ${p.z}) pitch ${r.x} yaw ${r.y}`;
+}
+
 const PLAYER_TRIGGERS = "weaponHitTrigger, tickTrigger, onDeathTrigger, onRespawnTrigger, onFirstSpawnTrigger, onRoundEndTrigger";
 
 const PARAGRAPHS: string[] = [
@@ -27,7 +37,7 @@ const PARAGRAPHS: string[] = [
 
   "EDIT RULES: edit tools need the Editing state and return INVALID_STATE while an editor dialog is open, the left mouse button is held in the game window, or play mode is active (stop_playtest, or wait / tell the human, then retry). Every edit selects the edited object. Replies carry changed, undoable, undoStackLength (plus undoPending/note). One call = one undo step. undo has no redo; creating an object is not undoable (use delete_object). Undoing a component add pushes an extra snapshot (extraUndoEntries): one more undo re-adds it. Player-settings trigger edits (scope playerSettings) are NOT undoable: written by save_mod.",
 
-  "PLAYTEST: validate_mod first. start_playtest SAVES the open sandbox mod (prefab files are dry-run before and verified after that save like save_mod: prefabsVerified; a prefab that cannot be serialised or a link in the mod refuses the start; if a prefab file had to be restored the error says which and whether the playtest started), applies players/aiOnly, presses Play, returns in PlayMode (limit 60 s); INVALID_STATE on validator errors (error.data.validation; validateFirst false = Run With Errors), an open prefab or dialog, or a BoardSpace mod. aiOnly true: AIs play, rounds run by themselves; otherwise a human plays player 1 (no input is sent). VERIFY, never assume a trigger or action worked: get_playtest_state (running only: players alive/health/score/position/deaths, minigame state/round/time, useHealth + note; supported:false + reason when the minigame controller is missing: still loading or the round is over) and get_playtest_events (ring of 500: player_died/respawned, health_changed, score_changed, round_started/ended, minigame_finished, trigger_fired, action_executed; page with sinceId; cleared when the next playtest starts, so stop_playtest first and read afterwards works). Also get_status.playtest, get_log, screenshot. HEALTH: with useHealth off (default) health is a 0/1 flag (0 until the first player reset at round start, then 1, and 1 again after every respawn): a Change Health value of 0 does nothing (any operation, so Set 0 kills nobody); for a non-zero value a result of 0 or less after clamping kills at once (Add -25, Subtract 25, Set -1; from health 1, Divide 2 kills but Multiply 2 clamps to 1 and does not), a result above 0 leaves health at 1. Only a player target is affected (Source (Activator) in a Trigger or Logic Hit). Kill/Destroy (type Kill) kills a player target without this arithmetic, with the same refusals as any death; a non-player target is deactivated, so target the player: Source (Activator) in a Trigger or Logic Hit, Receiver in player-settings triggers (it killed AI players from a kill-zone trigger in a test). Hit points need Use Health in the Minigame Settings (by hand). action_executed means the action ran, not that it had an effect or was audible (a target action with no target logs it too). During play these also work: ping, get_status, get_log, screenshot, list_mods, list_component_types, get_hierarchy (EDIT-TIME scene), list_assets/list_trigger_types/list_action_types without address. INVALID_STATE: get_object, get_action_graph, list_action_types with address, get_open_mod, validate_mod and all edit/lifecycle tools incl. save_mod, undo, run_batch. stop_playtest before editing. After a start TIMEOUT: get_status, then stop_playtest; do not retry blindly.",
+  "PLAYTEST: validate_mod first. start_playtest SAVES the open sandbox mod (prefab files are dry-run before and verified after that save like save_mod: prefabsVerified; a prefab that cannot be serialised or a link in the mod refuses the start; if a prefab file had to be restored the error says which and whether the playtest started), applies players/aiOnly, presses Play, returns in PlayMode (limit 60 s); INVALID_STATE on validator errors (error.data.validation; validateFirst false = Run With Errors), an open prefab or dialog, or a BoardSpace mod. aiOnly true: AIs play, rounds run by themselves; otherwise a human plays player 1 (no input is sent). VERIFY, never assume a trigger or action worked: get_playtest_state (running only: players alive/health/score/position/deaths, minigame state/round/time, useHealth + note; supported:false + reason when the minigame controller is missing: still loading or the round is over; audio shows whether music is really playing: music and ambience (the minigame settings' Music and Ambience only) {clip, volume, playing, timeSeconds, lengthSeconds} or null; modAudioSources lists the mod's own Audio Source objects {object, clip, volume, playing, loop, timeSeconds, lengthSeconds} (max 20, modAudioSourcesTotal when more), so a looping Audio Source used as music appears there, not under music; in a Mod Editor playtest ambience stays null even with an Ambience set (the game starts it only when a minigame is launched from a board game; Music does play); activeSources = the game's pooled sounds playing now, which is where a one-shot Play Sound on a non-Audio-Source target shows up (only as a count); and the player's own masterVolume/musicVolume/effectsVolume 0..1, so a music volume of 0 in the game options explains silence) and get_playtest_events (ring of 500: player_died/respawned, health_changed, score_changed, round_started/ended, minigame_finished, trigger_fired, action_executed; page with sinceId; cleared when the next playtest starts, so stop_playtest first and read afterwards works). Also get_status.playtest, get_log, screenshot. HEALTH: with useHealth off (default) health is a 0/1 flag (0 until the first player reset at round start, then 1, and 1 again after every respawn): a Change Health value of 0 does nothing (any operation, so Set 0 kills nobody); for a non-zero value a result of 0 or less after clamping kills at once (Add -25, Subtract 25, Set -1; from health 1, Divide 2 kills but Multiply 2 clamps to 1 and does not), a result above 0 leaves health at 1. Only a player target is affected (Source (Activator) in a Trigger or Logic Hit). Kill/Destroy (type Kill) kills a player target without this arithmetic, with the same refusals as any death; a non-player target is deactivated, so target the player: Source (Activator) in a Trigger or Logic Hit, Receiver in player-settings triggers (it killed AI players from a kill-zone trigger in a test). Hit points need Use Health in the Minigame Settings (by hand). action_executed means the action ran, not that it had an effect or was audible (a target action with no target logs it too). During play these also work: ping, get_status, get_log, screenshot (not its camera: edit mode only), list_mods, list_component_types, get_hierarchy (EDIT-TIME scene), list_assets/list_trigger_types/list_action_types without address. INVALID_STATE: get_object, get_action_graph, list_action_types with address, get_open_mod, validate_mod and all edit/lifecycle tools incl. save_mod, undo, run_batch. stop_playtest before editing. After a start TIMEOUT: get_status, then stop_playtest; do not retry blindly.",
   "MOD ID: publishedFileId \"256\" means never published (the game's local id for unpublished mods), not a Workshop item or a minigame id.",
   "MINIMAL VALID MINIGAME: NumberOfRounds > 0 (default 1) plus at least one ACTIVE Player Spawn (create_object kind playerSpawn; defaults cover all counts, players and respawn) = valid true. Warnings never block (empty description, no preview image, no collider below a spawn: cube/plane/prop have one). Board mods cannot be made valid via the plugin.",
   "BATCH: run_batch runs 1-100 steps {tool, params?, id?} in order in one write-queue turn (limit 120 s); each write step has its own guard, commit and undo step. Allowed: the edit tools, undo, save_mod and the get_/list_ read tools in its schema (not lifecycle, playtest, screenshot, ping, get_status, get_log, get_open_mod, validate_mod). NO ROLLBACK (object creation is not undoable): stopOnError (default true) stops at the first failed step and results lists what was applied; revert with delete_object or undo per step; false = attempt all; nothing is saved without a save_mod step. Step failures are in results ({ok, result|error}), not a call error; the call fails only on up-front validation (INVALID_PARAMS naming the step, nothing run) or a guard. id [A-Za-z][A-Za-z0-9_-]{0,63}, unique. PLACEHOLDERS: a string VALUE (any depth, not keys) in params starting with $ is a reference $<id>(.name|[n]){1,8} into an EARLIER step's result (no forward/self refs), replaced by that JSON value of any type before the step runs: \"$floor.guid\", \"$dup.objects[0].guid\". \"$$5\" = literal \"$5\"; any other $ string is refused up front; a reference to a failed step or missing path fails that step.",
@@ -49,6 +59,10 @@ const PARAGRAPHS: string[] = [
   "SPAWNS AND RESPAWN: nothing kills a player for falling (no height limit found in the player, controller or mover code): without a catch zone (a trigger below the course) a player falls forever. At round 1 and at every later round start the game places players at spawns whose SpawnUsageType includes InitialSpawn (never at respawn-only spawns). A respawn (after a real death, if respawn is on) picks a random spawn whose SpawnUsageType includes Respawn and whose AllowedPlayers includes that player, not the nearest one, and ignores PlayerCountMask (initial spawns honour both AllowedPlayers and PlayerCountMask). Player Spawns are collected once at minigame start (active ones only); enabling or disabling spawns later changes nothing, so keep spawns outside per-round courses and do not try checkpoints by enabling spawns. So a spawn can be reserved for one player, but spawns are fixed objects and triggers cannot filter by player: respawn alone cannot give per-stage checkpoints. With no respawn spawn at all the player respawns at (0, half the player height, 0) without a log line; with respawn spawns that none allows the player, the same position and the log shows 'Failed to get spawn point for player index'. Players cannot move while the minigame is not in the Playing state (intro and countdown). A death clears a stun; round start does not clear it (code), a stun otherwise ends by its duration.",
 
   "CHECKPOINT PATTERN (seen in a test, never kill): a catch-zone or hazard Trigger (TriggerOnEnter) runs: Position (space World, operation Set) or Match Transform on the entering player (targetFlags Source = Activator) to a hidden holding spot, Wait, then Position or Match Transform to the start of the stage reached. Both actions set the transform of the player directly (velocity is not reset by them). Each firing keeps its own event, so Source stays the same player across the Wait (the action runner is created per event and holds it). Match Transform takes a marker object in its transform parameter and also turns the player to the marker's yaw; Position takes numbers. Actions keep running during the round-reset and round-start waits, so a Wait that spans the round end teleports the player after the round-reset teleport: keep the Wait short. Falling never kills: see SPAWNS AND RESPAWN (usage_guide playtest). Put invisible walls between stages so players cannot skip stages: an empty object with a Box Collider works as one (seen in a test). Trigger option OneUsePerPlayer is per activating player (each player once) and is NOT reset per round: the list is never cleared, so a player who used the trigger once stays spent for the rest of the minigame, later rounds included. Moving platforms driven by tween animations carry players (seen in a test).",
+
+  "PUNCH KNOCKBACK (optional: it makes brawl-style minigames more fun, no minigame needs it): with the player setting canPunch on (cooldown punchRechargeSpeed, \"Cooldown (s)\", game default 0.75 s, minimum 0.1), a melee hit fires the player-settings trigger weaponHitTrigger (On Weapon Hit) on the player who was hit; it does not fire while that player is invulnerable (the respawn invulnerability window). In that trigger Receiver is the hit player (Hit Player) and Source is the puncher (Source Player). The trigger's weapon type filter (trigger parameter m_hitType, flags Melee, Projectile) is NONE by default, so the trigger does nothing until it is set: set_trigger {scope:\"playerSettings\", trigger:\"weaponHitTrigger\", parameters:{m_hitType:\"Melee\"}}. Knockback recipe: add_action to weaponHitTrigger, type Change Player Velocity, targetFlags Receiver, parameters operation Set, speed about 17.5, space Local, localTarget Source, velocityDir Forward: the hit player is pushed away in the direction the puncher faces, even with punch damage 0. The action only affects living players.",
+
+  "SCREENSHOT CAMERA: screenshot {camera} moves the editor's scene-view camera first (Mod Editor in edit mode with a mod open; INVALID_STATE during a playtest, where screenshot shows the game view). Forms: {position:{x,y,z}, lookAt:{x,y,z}}; {position, rotation:{x: pitch, y: yaw}} in degrees (positive pitch looks down); {focus: \"<object guid>\"} frames the object like the editor's F key, optionally with rotation to choose the viewing direction first. focus cannot be combined with position or lookAt. The reply's camera holds the position and rotation actually applied. The camera stays where it was put (a view change only: the mod, undo stack and unsaved-edits flag are untouched, it also works on mods that are not test mods); move it back by hand or with another camera call. open_prefab re-frames the camera on the prefab and close_prefab restores the view from before the prefab was opened, so a camera set while a prefab is open is lost at close_prefab. focus needs an object that is visible in the current context: an object of a prefab needs open_prefab first, a scene object needs close_prefab first, a switched-off object is refused (INVALID_STATE). Without camera the screenshot shows the current view, as before.",
 
   "SCORING AND RANKING: Set Placement (target the player, Source) gives the finisher 100 x (player count - players already finished) points: with 8 players 800 for first down to 100 for eighth. It counts once per player per round. With end conditions Timer + FinishMinigame the round ends when every player has finished or the timer runs out. The final ranking follows total score for MostPoints and FinishOrder alike (the game has no separate finish-order ranking; LeastPoints ranks by negated score, which negates the Set Placement points too, so finishing first ranks worst: do not combine them), so Change Score actions count towards it as well as Set Placement points. Scores are 16-bit (-32768..32767). The death counter and death effects only happen on a real death: no action counts a death without killing the player.",
 
@@ -76,15 +90,15 @@ const ASSETS_TOPIC =
   "REMOVE: remove_asset {guid, force?} deletes the file and its .pmeta NOW (not undoable) and only for the mod's own custom textures, props, audio clips, materials and prefabs (never built-in assets or the open prefab; a removed prefab leaves its instances empty). It is refused with ASSET_IN_USE and the list of references (objects/components of the scene and every prefab, action parameters and targets incl. nested popup choices, the Minigame player-settings triggers, materials' texture slots, settings such as music/ambience/custom spaces, an Item mod's prefabs and icon, the Workshop item's thumbnail and preview files; an incomplete scan counts as in use) unless force true, which removes anyway (referencesNulled lists them; referencesNote explains). Scene Prefab Instances are set to none by the game at once; other references still point at the removed asset until a reopen (read tools can show its name). Seen in the game for an action parameter: the guid stays in the saved scene file and reads as missing after a reopen; other kinds not checked. A material list can read [null] instead of empty; an undo afterwards logged \"Couldn't find object with guid\" once (restoring nothing is inferred from the code). Save and reopen to see the real state. The mod's preview image is never removed (set it to null or another texture first), nor is any asset while the mod settings cannot be read (even with force). LINKS: a path the call would write or delete that runs through a junction/symlink/mount point inside the mod, or a hard-linked file, is refused with LINK_REFUSED (nothing written); list_assets/get_asset mark such assets linked: true (reading works). Never create links inside a mod folder. save_mod + get_asset/list_assets afterwards confirms the state.\n\n" +
   "PREFABS: create_prefab {name?, fromObject?} makes a prefab through the editor (Create > Prefab, or dragging a scene object onto the Asset Browser): an empty one, or a copy of the scene object fromObject (guid) with its children. Assets/Prefabs/<name>.pfab + .pmeta are written NOW (not undoable), the source object stays untouched in the scene (no instance replaces it), the copy gets new object/component guids and its root sits at the origin. Refused: a subtree containing a Prefab Instance or Board Space, whose actions/components reference scene objects, or whose values could not all be read (incomplete scan) (the editor copies those references unchanged, so they would keep pointing at the scene); a name that exists as an asset or as a file is never reused (a free _n name is chosen and reported: nameAdjusted). open_prefab {guid} enters the prefab edit context (the Asset Browser double-click; no file is written): get_hierarchy then shows the prefab and object/component/property/action tools and undo (the prefab's own undo stack) work on it; edits stay in memory. close_prefab {} saves the prefab to disk NOW (.pfab + .pmeta, verified) and refreshes every instance in the scene (the Return to Hierarchy sequence); until then instances show the old version. While a prefab is open create_prefab, open_prefab, import_asset, remove_asset, create_test_mod/open_test_mod and start_playtest are refused (call close_prefab; their refusals name it); save_mod works and also writes the open prefab. create_prefab/open_prefab/close_prefab are not allowed in run_batch; edits inside an open prefab may be batched. Place an instance with create_object kind prefabInstance {prefab: guid}; use it with a Spawn Prefab action or Spawner (list_assets type Prefab). SAFETY OF THE FILES: a prefab file the game fails to write completely makes the whole mod unloadable, so every prefab write (create, close, save_mod, and the save start_playtest makes) is dry-run in memory first (a prefab that cannot be serialised refuses the call, nothing written), the file is checked afterwards (header, length) and a bad one is restored from a copy taken before (new ones are removed): the reply or the error says so. get_asset on a prefab shows its object tree, scene instances and references.\n\n" +
   "MESHES: the built-in meshes LowPolyCube, Primitive Cube 01 and LowPolyPlane did not show a tiled texture in a test (flat colour; a cut-out texture can make the object invisible); imported OBJ meshes with UVs in 0..1 work. LowPolyPlane is about 10 x 10 units at scale 1 (observed). " +
-  "SOUNDS: list_assets shows only clip names. Some built-in clips are music tracks, not effects (seen: Kick Shock, Night Bazaars, How It Begins, Rock Music), so check a clip before using it in Play Sound. The game plays sounds through a pool of audio sources (it starts with 8 and grows to 32): with many sounds at once the log warns 'All audio sources in use, creating new source', and at the limit 'All audio sources in use, and max sources reached, stopping random source.' (a playing sound is cut off). Use fewer, shorter sounds.";
+  "SOUNDS: list_assets shows clip names and, for a clip that is already loaded, lengthSeconds (omitted for a built-in clip that is not loaded; nothing is loaded for the listing). get_playtest_state audio shows what plays during a playtest. Some built-in clips are music tracks, not effects (seen: Kick Shock, Night Bazaars, How It Begins, Rock Music), so check a clip before using it in Play Sound. The game plays sounds through a pool of audio sources (it starts with 8 and grows to 32): with many sounds at once the log warns 'All audio sources in use, creating new source', and at the limit 'All audio sources in use, and max sources reached, stopping random source.' (a playing sound is cut off). Use fewer, shorter sounds.";
 
 const P = (...prefixes: string[]) => PARAGRAPHS.filter((p) => prefixes.some((x) => p.startsWith(x)));
 
 const TOPICS: Record<string, string> = {
   overview: [PARAGRAPHS[0], ...P("WORKFLOW:", "MINIMAL VALID MINIGAME:")].join("\n\n"),
   safety: P("SAFETY:", "MOD ID:").join("\n\n"),
-  editing: P("EDIT RULES:", "CLAMPING:", "TRANSFORMS:", "PROPERTY VALUES", "PROPERTY RULES:").join("\n\n"),
-  actions: P("ACTIONS:", "ADDRESSES:", "ACTION PARAMETERS", "TARGETS:", "CHECKPOINT PATTERN").join("\n\n"),
+  editing: P("EDIT RULES:", "CLAMPING:", "TRANSFORMS:", "PROPERTY VALUES", "PROPERTY RULES:", "SCREENSHOT CAMERA:").join("\n\n"),
+  actions: P("ACTIONS:", "ADDRESSES:", "ACTION PARAMETERS", "TARGETS:", "CHECKPOINT PATTERN", "PUNCH KNOCKBACK").join("\n\n"),
   playtest: P("PLAYTEST:", "MINIGAME NOTES:", "SPAWNS AND RESPAWN:", "SCORING AND RANKING:", "PLAYTEST LIMITS:", "ROUND LAYOUTS:", "KNOWN LOG LINES:").join("\n\n"),
   batch: P("BATCH:").join("\n\n"),
   settings: SETTINGS_TOPIC,
@@ -111,11 +125,11 @@ const WRITE_DESTRUCTIVE_IDEMPOTENT = { ...WRITE, destructiveHint: true, idempote
 type Annotations = { readOnlyHint: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint: boolean };
 
 // A non-empty string. A refinement instead of .min(1): the published schema then omits "minLength":1, which was repeated
-// ~50 times in tools/list (about 700 characters of the 40,000 budget); empty strings are still refused before the plugin.
+// ~50 times in tools/list (about 700 characters of the 42,000 budget); empty strings are still refused before the plugin.
 const nonEmpty = () => z.string().refine((v) => v.length > 0, { message: "must not be empty" });
 
 // registerTool() stamps every tool with execution: { taskSupport: "forbidden" }, which is also what a missing field means in the
-// MCP spec (no task support). Removing it saves ~40 characters per tool (about 1,600 of the 40,000 budget).
+// MCP spec (no task support). Removing it saves ~40 characters per tool (about 1,600 of the 42,000 budget).
 function withoutDefaultExecution<T extends { execution?: unknown }>(tool: T): T {
   tool.execution = undefined;
   return tool;
@@ -278,13 +292,13 @@ register(
 );
 register(
   "get_open_mod",
-  "Returns the open mod: name, type, metadata, settings, publishedFileId (\"256\" = never published, a local id; not a Workshop item). Needs an open mod.",
+  "The open mod: name, type, metadata, settings, publishedFileId (\"256\" = never published, a local id; not a Workshop item). Needs an open mod.",
   {},
   READ_ONLY,
 );
 register(
   "get_hierarchy",
-  "Returns the object tree with each object's guid, name, components and children (guids for other tools). Needs an open mod.",
+  "The object tree with each object's guid, name, components and children (guids for other tools). Needs an open mod.",
   {
     rootGuid: nonEmpty().optional().describe("Only this object's subtree."),
     maxDepth: z.number().int().min(0).max(64).optional().describe("0..64 (default 64); deeper nodes show depthLimited."),
@@ -295,7 +309,7 @@ register(
 );
 register(
   "get_object",
-  "Returns one object's transform and components with all property values (the shapes set_property takes). Needs an open mod.",
+  "One object's transform and components with all property values (the shapes set_property takes). Needs an open mod.",
   { guid: guidSchema },
   READ_ONLY,
   { narrow: "this tool has no filter; inspect a smaller object or use get_hierarchy" },
@@ -336,7 +350,7 @@ register(
 );
 register(
   "get_log",
-  "Returns recent game log entries { entries, nextId, dropped, sessionId }; pass the previous nextId as sinceId to poll. Works with the editor closed and while the game is busy.",
+  "Recent game log entries { entries, nextId, dropped, sessionId }; pass the previous nextId as sinceId to poll. Works with the editor closed and while the game is busy.",
   {
     max: z.number().int().min(1).max(2000).optional().describe("1..2000 (default 200)."),
     sinceId: z.number().int().min(0).optional().describe("A previous nextId."),
@@ -347,8 +361,14 @@ register(
 );
 register(
   "screenshot",
-  "Captures the game's current view as a PNG (image content). Works with the editor open or closed.",
-  { maxWidth: z.number().int().min(64).max(7680).optional().describe("64..7680 (default 1280).") },
+  "Captures the game's current view as a PNG (image content). Works with the editor open or closed; camera (edit mode) moves the editor view first.",
+  {
+    maxWidth: z.number().int().min(64).max(7680).optional().describe("64..7680 (default 1280)."),
+    camera: z
+      .record(z.string(), z.any())
+      .optional()
+      .describe("Editor view: {position, lookAt}, {position, rotation:{x pitch,y yaw}} or {focus: guid, rotation?}; points {x,y,z}."),
+  },
   READ_ONLY,
   {
     format: (r) => {
@@ -366,7 +386,7 @@ register(
       return {
         content: [
           { type: "image", mimeType: "image/png", data: r.pngBase64 },
-          { type: "text", text: `Screenshot ${r.width} x ${r.height}` },
+          { type: "text", text: `Screenshot ${r.width} x ${r.height}${cameraNote(r.camera)}` },
         ],
       };
     },
@@ -374,7 +394,7 @@ register(
 );
 register(
   "list_mods",
-  "Lists the editor's mod projects [{ name, folderName, type, isTestMod, isOpen }]; isTestMod = MCP_ sandbox. Needs the Mod Editor open (EDITOR_NOT_OPEN otherwise); no mod needs to be loaded.",
+  "Lists the editor's mod projects [{ name, folderName, type, isTestMod, isOpen }]; isTestMod = MCP_ sandbox. Needs the Mod Editor open (else EDITOR_NOT_OPEN); no mod need be loaded.",
   {},
   READ_ONLY,
 );
@@ -422,7 +442,7 @@ register(
 
 register(
   "get_playtest_state",
-  "State of the RUNNING playtest (else INVALID_STATE): { players: [{ index, name, isAI, team?, alive, health?, score, position, deaths, stunned?, respawnIn?, heldItem? }], minigame { state, round, rounds, timeRemaining?, results? }, useHealth, note }; Board mods: board, keys, trophies. Compact; poll it.",
+  "State of the RUNNING playtest (else INVALID_STATE): { players: [{ index, name, isAI, team?, alive, health?, score, position, deaths, stunned?, respawnIn?, heldItem? }], minigame { state, round, rounds, timeRemaining?, results? }, useHealth, note, audio { music, ambience, activeSources, volumes } }; Board mods: board, keys, trophies. Compact; poll it.",
   {},
   READ_ONLY,
 );
@@ -670,7 +690,7 @@ register(
 );
 register(
   "set_property",
-  `Sets one property of one component. Value shapes and the list of non-settable properties are in usage_guide (PROPERTY VALUES/RULES). The reply's applied shows what was stored; inspectorClamped lists inspector-clamped properties.${RULES}`,
+  `Sets one property of one component. Value shapes and non-settable properties: usage_guide (PROPERTY VALUES/RULES). The reply's applied shows what was stored; inspectorClamped lists inspector-clamped properties.`,
   {
     guid: guidSchema,
     component: compSchema,
@@ -684,7 +704,7 @@ register(
 );
 register(
   "set_properties",
-  `Sets 1-64 properties of one component in one call: one undo step, and if any value is invalid nothing changes. Value shapes and non-settable properties: usage_guide (PROPERTY VALUES/RULES).${RULES}`,
+  `Sets 1-64 properties of one component in one call: one undo step, and if any value is invalid nothing changes. Value shapes and non-settable properties: usage_guide (PROPERTY VALUES/RULES).`,
   {
     guid: guidSchema,
     component: compSchema,
@@ -697,7 +717,7 @@ register(
 );
 register(
   "undo",
-  `Undoes the last editor step(s) like Ctrl+Z on the current context's stack; no redo. One edit can add two stack entries (selection is a step), but steps 1 still reverts the edit. Returns { undone, events, undoStackLength }; undone 0 + note = empty stack.${RULES}`,
+  `Undoes the last editor step(s) like Ctrl+Z on the current context's stack; no redo. One edit can add two stack entries (selection is a step); steps 1 still reverts the edit. Returns { undone, events, undoStackLength }; undone 0 + note = empty stack.${RULES}`,
   { steps: z.number().int().min(1).max(20).optional().describe("1-20 (default 1).") },
   WRITE_DESTRUCTIVE,
 );
@@ -852,7 +872,7 @@ const batchStepSchema = z
   .strict();
 register(
   "run_batch",
-  `Runs 1-100 steps in order (up to 120 s); params may reference earlier results ("$floor.guid"; usage_guide: BATCH). NO ROLLBACK; stopOnError (default true) stops at the first failure. Can contain deletes.${RULES}`,
+  `Runs 1-100 steps in order (up to 120 s); params may reference earlier results ("$floor.guid"; usage_guide: BATCH). NO ROLLBACK; stopOnError (default true) stops at the first failure. Can contain deletes.`,
   z
     .object({
       steps: z
