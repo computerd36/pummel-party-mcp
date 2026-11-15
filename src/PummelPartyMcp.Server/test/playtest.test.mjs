@@ -309,6 +309,27 @@ test("get_playtest_state and get_playtest_events: read-only, strict schemas, par
     const assets = (await s.client.callTool({ name: "usage_guide", arguments: { topic: "assets" } })).content[0].text;
     assert.match(assets, /LowPolyPlane is about 10 x 10 units/);
     assert.match(assets, /shaderAsset/);
+    assert.match(assets, /All audio sources in use, and max sources reached, stopping random source/);
+    assert.match(assets, /Kick Shock, Night Bazaars/);
+    const settingsTopic = (await s.client.callTool({ name: "usage_guide", arguments: { topic: "settings" } })).content[0].text;
+    assert.match(settingsTopic, /Music volume had to be raised/);
+    const editing = (await s.client.callTool({ name: "usage_guide", arguments: { topic: "editing" } })).content[0].text;
+    assert.match(editing, /newParentGuid is required/);
+    assert.match(guide, /nothing kills a player for falling/);
+    assert.match(guide, /SpawnUsageType includes InitialSpawn/);
+    assert.match(guide, /random spawn whose SpawnUsageType includes Respawn/);
+    assert.match(guide, /100 x \(player count - players already finished\)/);
+    assert.match(guide, /FinishOrder alike/);
+    assert.match(guide, /never jump from the ground/);
+    assert.match(actions, /CHECKPOINT PATTERN/);
+    assert.match(actions, /Source stays the same player across the Wait/);
+    assert.match(actions, /OneUsePerPlayer is per activating player/);
+    assert.doesNotMatch(actions, /help text says/);
+    assert.match(actions, /keep the Wait short/);
+    assert.match(guide, /does not prove the gap is jumpable/);
+    assert.match(guide, /Player Spawns are collected once at minigame start/);
+    assert.match(guide, /probably a race in the game/);
+    assert.match(assets, /starts with 8 and grows to 32/);
     assert.match(guide, /publishedFileId "256"[^.]*never published/);
     assert.match(guide, /not a Workshop item or a minigame id/);
   } finally {

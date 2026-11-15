@@ -3160,10 +3160,36 @@ The runtime is `SimpleModController` / `SimpleModPlayer` (editor-made minigames)
   -32768..32767). The game itself adds points in two cases: `LastManStanding` placement gives a dying player
   `10 * (players already dead + 1)` points (and each survivor the same at the round end), and finishing (`Set Placement` /
   `SetFinished`) gives `100 * (players - already finished)`. Nothing else changes a score unless a Change Score action does.
+- **Falling, spawns and respawn:** no height limit exists in `SimpleModPlayer`, `SimpleModController`, `MinigameController` or
+  `CharacterMover`, so a player without a catch-zone trigger falls forever. Round 1 (`MinigameController.SpawnPlayers`) and every
+  later round start (`SimpleModController.ModResetRound`) call `ModPlayerSpawn.DetermineInitialSpawnPoints` on the spawns whose
+  `SpawnUsageType` includes `InitialSpawn`. A respawn (`DetermineRespawnPoint`) takes a random spawn (seeded by the kill seed) among
+  those with `Respawn` whose `AllowedPlayers` includes the player; it is not the nearest and `PlayerCountMask` is ignored (initial spawns honour both, `FilterSpawnsForPlayerCount`). With no respawn spawn at all the player goes to
+  (0, half the player height, 0) without a log line; with respawn spawns that none allows, same position and the log shows "Failed to get spawn point for player index".
+  `FindSpawnPoints` (`FindObjectsOfType`, active objects only) collects the spawns once, while the list is empty, so enabling or disabling
+  spawns later changes nothing. Players cannot act while
+  the controller is not `Playing` (`CanDoActions`); `ResetPlayer` does not clear a stun (only a death does).
+- **Action runners and triggers:** each trigger firing creates a `ModActionRunner` that holds its `ModEvent`, so Source is kept across a
+  Wait. Position and Match Transform set the transform of a player directly (no velocity reset). `ModTrigger.OneUsePerPlayer` keeps a
+  list of activating sources that is never cleared (each player once, not reset per round). Actions keep running during the round-reset and
+  round-start waits (`ShouldMinigameBeRunningActions`), so a Wait that spans the round end teleports after the round-reset teleport.
+  Match Transform on a player turns it to the marker's yaw only (`TeleportPlayer` with `Euler(0, y, 0)`).
+- **AI:** `GetAIInput` sends jump only once the AI has been airborne for 0.35 x coyote time (at most every 0.5 s): walking off an edge it gets a
+  coyote jump, it uses extra air jumps, and a jump buffered just before landing fires on landing. It never jumps deliberately at a gap, so an AI
+  crossing a gap does not prove the gap is jumpable.
+- **Round layouts:** the scene is not reset between rounds (only players are), no trigger knows the round number and the initial spawns are the
+  same every round. A layout per round works with Logic objects whose RoundEnd triggers run Set Active on the courses and the next Logic
+  object; the chain advances one step per round (a Logic object enabled during a RoundEnd event does not fire in that event).
+- **Players overlapping:** players do not block each other (8 players in a small pen overlapped freely in a test); there is no setting for it.
+- **Known log line:** at a playtest start of a mod with many assets `ArgumentOutOfRangeException` in
+  `ModBehaviourMonitor.FindAndRemoveNullBehaviours` was seen in 2 of 3 starts of a 61-asset mod. Probably a race: the mod-preparation thread
+  switches the active mod (`WorkshopController`) while the main thread walks the asset list. The playtest runs normally.
+- **Audio pool:** `AudioSystemObj` pools sources (8 at start, `MaxSourceCount` 32); it logs "All audio sources in use, creating new source" and
+  at the limit "All audio sources in use, and max sources reached, stopping random source.".
 - **Rounds and results:** the round ends when an enabled end condition is met (`Timer`: time up; `ObtainPoints`: someone
   reached `pointsToWin`; `RemainingPlayersAlive`: `minPlayersAlive` or fewer left and respawn is off, solo or team mode;
   `FinishMinigame`: everyone finished). After the last round `BuildResults` copies the scores to `GamePlayer.MinigameScore`
-  (negated for `LeastPoints`) and the controller goes to `PreScoreScreen`: that is `minigame_finished`.
+  (negated for `LeastPoints`, which negates the `Set Placement` points too; `FinishOrder` has no branch of its own and ranks by score like `MostPoints`) and the controller goes to `PreScoreScreen`: that is `minigame_finished`.
 
 ### What a playtest writes and what reaches Steam
 
