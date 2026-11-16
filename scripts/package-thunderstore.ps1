@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   Output (gitignored): artifacts\thunderstore\  and  artifacts\PummelPartyMcp-<version>.zip
-  Package content: manifest.json, README.md, CHANGELOG.md, icon.png, BepInEx\plugins\PummelPartyMcp\PummelPartyMcp.Plugin.dll
+  Package content: manifest.json, README.md, CHANGELOG.md (copied from the root CHANGELOG.md), icon.png, BepInEx\plugins\PummelPartyMcp\PummelPartyMcp.Plugin.dll
   The version comes from <Version> in the plugin csproj, so it cannot drift.
   Only the plugin's own DLL is packaged; the script fails if any other DLL would be included.
   The game folder is only read by the build (reference assemblies); nothing is written there.
@@ -91,7 +91,10 @@ Copy-Item -LiteralPath $builtDll -Destination (Join-Path $pluginOut $dllName)
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $readme = (Get-Content -LiteralPath (Join-Path $template 'README.md') -Raw) -replace '\{\{VERSION\}\}', $version
 [System.IO.File]::WriteAllText((Join-Path $stage 'README.md'), $readme, $utf8NoBom)
-Copy-Item -LiteralPath (Join-Path $template 'CHANGELOG.md') -Destination (Join-Path $stage 'CHANGELOG.md')
+# The root CHANGELOG.md is the source of truth; packaging\thunderstore\CHANGELOG.md is a copy kept identical.
+$rootChangelog = Join-Path $repo 'CHANGELOG.md'
+if (-not (Test-Path -LiteralPath $rootChangelog -PathType Leaf)) { throw "Root CHANGELOG.md not found: $rootChangelog" }
+Copy-Item -LiteralPath $rootChangelog -Destination (Join-Path $stage 'CHANGELOG.md')
 Copy-Item -LiteralPath (Join-Path $template 'icon.png') -Destination (Join-Path $stage 'icon.png')
 
 $description = "Lets an AI agent see and edit Pummel Party's Mod Editor through MCP. Sandbox mods only, loopback only; blocks Workshop publishing while enabled. Unofficial."

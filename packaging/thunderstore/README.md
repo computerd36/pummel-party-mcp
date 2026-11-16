@@ -18,6 +18,12 @@ While this plugin is enabled, publishing to the Steam Workshop (create, update, 
 
 ## The MCP server is installed separately
 
-This package contains only the BepInEx plugin (it needs BepInEx 5, x64, Mono). The MCP server that your AI client talks to is a Node.js program that is not part of this package; get it, the full documentation and the source from the project repository (link: see the website field of this package, or search for `pummel-party-mcp`).
+This package contains only the BepInEx plugin (it needs BepInEx 5, x64, Mono). The MCP server that your AI client talks to is a separate Node.js program (Node.js 22 or newer). Add it to Claude Code once:
+
+```
+claude mcp add pummel-party-mcp -- cmd /c npx -y pummel-party-mcp
+```
+
+Then start the game, open the Mod Editor and start Claude Code. The full documentation, the troubleshooting list, the changelog and the source are in the project repository (see the website field of this package).
 
 Back up your mod projects before you use this. Tested on game version `1.14.1k` (Windows, Steam).

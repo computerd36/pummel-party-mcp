@@ -33,3 +33,9 @@ artifacts/
 
 # icon source file (local)
 *.psd
+
+# Release output (scripts/prepare-release.ps1)
+/release-out/
+
+# npm pack output
+*.tgz

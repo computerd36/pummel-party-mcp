@@ -28,7 +28,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        node: [20, 24]
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -76,3 +76,37 @@ jobs:
             if [ -f "$f" ] && [ "$(wc -c < "$f")" -gt 5242880 ]; then echo "Over 5 MB: $f"; fail=1; fi
           done < <(git ls-files)
           exit $fail
+
+  server-package:
+    name: npm package file list
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/PummelPartyMcp.Server/package-lock.json
+      - name: Install
+        run: npm ci
+        working-directory: src/PummelPartyMcp.Server
+      # Dry run only: nothing is written or published. prepack builds the server first.
+      - name: Pack (dry run) and check the file list
+        shell: bash
+        working-directory: src/PummelPartyMcp.Server
+        run: |
+          set -eu
+          npm pack --dry-run --json 2>/dev/null > "$RUNNER_TEMP/pack.json"
+          node -e '
+            const fs = require("fs");
+            const raw = fs.readFileSync(process.env.RUNNER_TEMP + "/pack.json", "utf8");
+            const pack = JSON.parse(raw.slice(raw.search(/^\[\s*$/m)));
+            const files = pack[0].files.map((f) => f.path);
+            const allowed = (p) => p.startsWith("dist/") || ["README.md", "LICENSE", "package.json"].includes(p);
+            console.log(files.join("\n"));
+            const bad = files.filter((p) => !allowed(p));
+            if (bad.length > 0) { console.error("Files outside the allow-list:\n" + bad.join("\n")); process.exit(1); }
+            for (const need of ["package.json", "README.md", "LICENSE", "dist/index.js"]) {
+              if (!files.includes(need)) { console.error("Missing from the package: " + need); process.exit(1); }
+            }
+          '

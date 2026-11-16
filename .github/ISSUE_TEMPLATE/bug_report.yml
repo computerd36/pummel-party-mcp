@@ -1,0 +1,81 @@
+name: Bug report
+description: Something does not work as described
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not post the contents of the token file** (`BepInEx\config\PummelPartyMcp.token`) or any private mod files. Anyone who has the token can control the plugin on your PC. If a log excerpt contains a token or a personal path, remove it first.
+
+        Before you file: check [Troubleshooting](https://github.com/computerd36/pummel-party-mcp#troubleshooting) in the README.
+  - type: input
+    id: game-version
+    attributes:
+      label: Game version
+      description: The Pummel Party version, for example as shown by `get_status` (`gameVersionCheck.running`).
+      placeholder: "1.14.1k"
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: From the first PummelPartyMcp line in `BepInEx\LogOutput.log`, or the Thunderstore package version.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: server-version
+    attributes:
+      label: Server version
+      description: The `pummel-party-mcp` npm version (shown in the server's start-up line on stderr, or by `npm view pummel-party-mcp version`).
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: MCP client and version
+      description: Claude Code is the supported client.
+      placeholder: "Claude Code x.y.z"
+    validations:
+      required: true
+  - type: textarea
+    id: self-test
+    attributes:
+      label: "`self_test` output"
+      description: Ask the agent to call `self_test` (with the game running and the Mod Editor open) and paste the result. If the tool does not respond, say so.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log excerpt
+      description: The relevant lines of `BepInEx\LogOutput.log` (lines with `PummelPartyMcp`, and any error around the time of the problem). Not the whole file.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you ask the agent to do, and what happened step by step?
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Include error messages and codes (for example `GAME_VERSION_UNTESTED`).
+    validations:
+      required: true
