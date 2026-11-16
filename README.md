@@ -1,17 +1,12 @@
-<img src="packaging/thunderstore/icon.png" alt="pummel-party-mcp icon" width="128" align="left">
-
-# pummel-party-mcp
+<h1><img src="packaging/thunderstore/icon.png" alt="" width="72" align="absmiddle">&nbsp; pummel-party-mcp</h1>
 
 **Build, edit and playtest Pummel Party minigames with an AI agent, through the game's own Mod Editor.**
 
 [![CI](https://github.com/computerd36/pummel-party-mcp/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/computerd36/pummel-party-mcp/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/computerd36/pummel-party-mcp?label=release)](https://github.com/computerd36/pummel-party-mcp/releases)
 [![npm](https://img.shields.io/npm/v/pummel-party-mcp?label=npm)](https://www.npmjs.com/package/pummel-party-mcp)
-[![Thunderstore](https://img.shields.io/thunderstore/v/computerd36/PummelPartyMcp?label=thunderstore)](https://thunderstore.io/c/pummel-party/p/computerd36/PummelPartyMcp/)
+[![Thunderstore: PummelPartyMcp](https://img.shields.io/badge/thunderstore-PummelPartyMcp-blue)](https://thunderstore.io/c/pummel-party/p/computerd36/PummelPartyMcp/)
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-green)](LICENSE)
-
-<br clear="left">
-
 ![56 tools](https://img.shields.io/badge/tools-56-blue)
 ![Pummel Party 1.14.1k](https://img.shields.io/badge/Pummel%20Party-1.14.1k-orange)
 ![BepInEx 5.4.23.5](https://img.shields.io/badge/BepInEx-5.4.23.5-purple)
