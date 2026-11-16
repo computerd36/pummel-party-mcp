@@ -217,6 +217,6 @@ Write-Host ''
 Write-Host 'Prepared only. Nothing was published, tagged, pushed or uploaded.' -ForegroundColor Green
 Write-Host 'Manual steps that remain (details: docs\release-checklist.md):'
 Write-Host '  - In the game: build with this DLL, run self_test (ok: true), do the in-game checks.'
-Write-Host '  - Thunderstore: put the BepInEx dependency string into the manifest (package-thunderstore.ps1), validate the zip, upload by hand (a version can never be uploaded twice).'
+Write-Host '  - Thunderstore: check the BepInEx dependency in the manifest is still current, validate the zip, upload by hand (a version can never be uploaded twice).'
 Write-Host '  - GitHub: tag v<version>, create the release, attach the same zip and publish its SHA-256.'
 Write-Host '  - npm: remove "private": true, npm publish --dry-run, then publish by hand (2FA), then check npx -y pummel-party-mcp from a clean folder.'

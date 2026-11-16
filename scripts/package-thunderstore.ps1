@@ -104,7 +104,9 @@ $manifest = [ordered]@{
     version_number = $version
     website_url    = 'https://github.com/computerd36/pummel-party-mcp'
     description    = $description
-    dependencies   = @()  # PLACEHOLDER: add the BepInEx pack dependency string of this game's Thunderstore community (not known from the repo; do not guess)
+    # The BepInEx pack of the pummel-party community on Thunderstore (BepInEx 5.4.23.5, Mono), looked up 2026-11-16.
+    # It must match the BepInEx version the plugin is built and tested against.
+    dependencies   = @('BepInEx-BepInExPack-5.4.2305')
 }
 [System.IO.File]::WriteAllText((Join-Path $stage 'manifest.json'), ($manifest | ConvertTo-Json -Depth 4), $utf8NoBom)
 

@@ -69,14 +69,14 @@ The plugin cannot be built in CI, because it needs the game's assemblies. Everyt
 
 ## 4. Plugin distribution (Thunderstore)
 
-Facts: community PummelParty, team computerd36, package name `PummelPartyMcp`, category Tools, not NSFW. The package name can never be changed later.
+Facts: community `pummel-party` (https://thunderstore.io/c/pummel-party/), team computerd36, package name `PummelPartyMcp`, category Tools, not NSFW. The package name can never be changed later.
 
-- [ ] Look up the exact BepInEx dependency string on the BepInEx package's page in the PummelParty community on Thunderstore (format `Team-Package-x.y.z`). Do not guess it. Put it into `dependencies` in `scripts\package-thunderstore.ps1` (`$manifest`, the line marked PLACEHOLDER), and check that the BepInEx version it installs matches the one the plugin is built and tested against (5.4.23.5). Run the packaging again.
+- [ ] The manifest depends on `BepInEx-BepInExPack-5.4.2305` (BepInEx 5.4.23.5, Mono; looked up on 2026-11-16, set in `scripts\package-thunderstore.ps1`). Before uploading, open the BepInExPack page in the community and check that this version still exists and still matches the BepInEx version the plugin is built and tested against (5.4.23.5).
 - [ ] The icon `packaging/thunderstore/icon.png` is your final 256x256 PNG.
 - [ ] Manifest check: `name` is `PummelPartyMcp`; `version_number` is `<v>`; `website_url` is the GitHub repository; `description` is at most 250 characters (the script checks).
 - [ ] Open the zip and check its list of entries (the script prints it).
 - [ ] Validate the zip with Thunderstore's manifest validator (on the upload page) and look at the README in the markdown preview.
-- [ ] After the tag (see the order at the top): upload by hand: community PummelParty, team computerd36, category Tools. A version number can never be uploaded twice, so check the version first.
+- [ ] After the tag (see the order at the top): upload by hand: community Pummel Party, team computerd36, category Tools. A version number can never be uploaded twice, so check the version first.
 - [ ] A new package may need moderator approval before it is visible. Wait for it; the page is not public until then.
 - [ ] Install it once from Thunderstore with a mod manager on a clean profile and check the log line.
 
@@ -105,7 +105,6 @@ Facts: community PummelParty, team computerd36, package name `PummelPartyMcp`, c
 
 ## Open items to settle before the first release
 
-- The BepInEx dependency string for the Thunderstore manifest (section 4).
 - The final icon.
 - The final text for "What is active during normal play" in the README.
 - The Thunderstore README and the root README both name the tested game version; update both after a game update.
