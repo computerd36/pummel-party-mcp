@@ -438,8 +438,9 @@ namespace PummelPartyMcp.Core
 
         private static string Rel(string prefix, string p) => p.Length > prefix.Length ? p.Substring(prefix.Length) : p;
 
-        private static bool IsLocalDrivePath(string p) =>
-            p.Length >= 3 && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':' && (p[2] == '\\' || p[2] == '/');
+        /// <summary>"X:\..." or "X:/..." (null is not). The one copy of this check (AssetImportCore uses it too).</summary>
+        internal static bool IsLocalDrivePath(string p) =>
+            p != null && p.Length >= 3 &&((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':' && (p[2] == '\\' || p[2] == '/');
 
         private static string PathText(string p)
         {

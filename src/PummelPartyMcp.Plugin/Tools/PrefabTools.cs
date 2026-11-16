@@ -67,19 +67,6 @@ namespace PummelPartyMcp.Tools
 
         private static string Rel(Ready r, ModAssetExternal a) => AssetAccess.RelativePath(r.AssetsFull, a.filePath);
 
-        private static int CountNodes(JToken node)
-        {
-            int n = 1;
-            if (node is JObject o && o["children"] is JArray kids)
-            {
-                foreach (JToken k in kids)
-                {
-                    n += CountNodes(k);
-                }
-            }
-            return n;
-        }
-
         // ------------------------------------------------------------------ create_prefab
 
         private static void Create(WriteInvocation inv, EditServices services)

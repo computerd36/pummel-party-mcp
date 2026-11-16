@@ -282,6 +282,8 @@ namespace PummelPartyMcp.Game
                 }
                 plan.Final[f.Name] = target;
                 PropertyInfo wrapper = Wrapper(owner.GetType(), rule);
+                // resolved now, so a renamed member fails before anything is written (Core/RequiredMembers.cs)
+                PropertyInfo assetProperty = wrapper == null ? GameReflection.RequireProperty(t, "Asset") : null;
                 plan.Writes.Add(new ParamWrite
                 {
                     Name = f.Name,
@@ -299,7 +301,7 @@ namespace PummelPartyMcp.Game
                         }
                         else
                         {
-                            t.GetProperty("Asset").SetValue(reference, target, null); // what the inspectors do (m_clip.Asset = ...)
+                            assetProperty.SetValue(reference, target, null); // what the inspectors do (m_clip.Asset = ...)
                         }
                     },
                 });

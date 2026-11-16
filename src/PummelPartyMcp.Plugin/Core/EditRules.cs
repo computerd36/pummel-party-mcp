@@ -428,4 +428,80 @@ namespace PummelPartyMcp.Core
             return null;
         }
     }
+
+    /// <summary>Where create_object builds the new object before it ends up under the requested parent.</summary>
+    public enum CreatePlacement
+    {
+        /// <summary>Created directly under the requested parent (EditorSystem.AddGameObject(type, parent)): the normal case.</summary>
+        Direct,
+
+        /// <summary>
+        /// Created under the (active) creation root, then moved under the requested parent in the same frame. Used only when the
+        /// requested parent is inactive in the hierarchy: AddGameObject parents the new object first and then sets component fields
+        /// that are only initialised in Awake, which Unity does not run below an inactive parent, so it throws after the object exists.
+        /// Moving an object into an inactive parent is what the user does by hand (hierarchy drag, reparent_object).
+        /// </summary>
+        ViaCreationRoot,
+    }
+
+    /// <summary>create_object placement and the editor's default name for empty objects (Unity-free, unit tested).</summary>
+    public static class CreationRules
+    {
+        public const string EmptyBaseName = "GameObject";
+
+        /// <summary>
+        /// Null and the placement when the object can be created; otherwise the refusal (INVALID_STATE, nothing is created).
+        /// The creation root itself must be active: there is no active place to build the object.
+        /// </summary>
+        public static string Decide(bool parentIsCreationRoot, bool creationRootActive, bool parentActiveInHierarchy, string creationRootName, out CreatePlacement placement)
+        {
+            placement = CreatePlacement.Direct;
+            if (!creationRootActive)
+            {
+                return $"'{creationRootName}' (where new objects are created) is inactive, so the editor cannot set up a new object; " +
+                       "switch it on first (set_object active: true, or the checkbox in the editor), then create the object. Nothing was created";
+            }
+            if (!parentIsCreationRoot && !parentActiveInHierarchy)
+            {
+                placement = CreatePlacement.ViaCreationRoot;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The name EditorSystem.AddGameObject gives a new empty object: it counts the parent's children named "GameObject" or
+        /// "GameObject (...)" (the new object included) and names it "GameObject (count - 1)" when there is more than one.
+        /// </summary>
+        public static string EmptyObjectName(IEnumerable<string> childNamesIncludingNew)
+        {
+            int n = 0;
+            foreach (string name in childNamesIncludingNew)
+            {
+                if (name == null)
+                {
+                    continue;
+                }
+                if (name == EmptyBaseName || (name.StartsWith(EmptyBaseName + " (", StringComparison.Ordinal) && name.EndsWith(")", StringComparison.Ordinal)))
+                {
+                    n++;
+                }
+            }
+            return n > 1 ? $"{EmptyBaseName} ({n - 1})" : EmptyBaseName;
+        }
+
+        /// <summary>Items of <paramref name="after"/> not in <paramref name="before"/> (the objects a failed creation left behind).</summary>
+        public static List<T> NewItems<T>(IEnumerable<T> before, IEnumerable<T> after) where T : class
+        {
+            HashSet<T> old = new HashSet<T>(before ?? Enumerable.Empty<T>());
+            List<T> result = new List<T>();
+            foreach (T item in after ?? Enumerable.Empty<T>())
+            {
+                if (item != null && !old.Contains(item) && !result.Contains(item))
+                {
+                    result.Add(item);
+                }
+            }
+            return result;
+        }
+    }
 }

@@ -80,6 +80,21 @@ namespace PummelPartyMcp.Game
             return f;
         }
 
+        /// <summary>Public or non-public instance property declared on <paramref name="type"/> or a base type; INTERNAL error naming it if missing.</summary>
+        public static PropertyInfo RequireProperty(Type type, string name)
+        {
+            for (Type t = type; t != null; t = t.BaseType)
+            {
+                PropertyInfo p = t.GetProperty(name, AnyInstance | BindingFlags.DeclaredOnly);
+                if (p != null)
+                {
+                    return p;
+                }
+            }
+            WarnOnce(type?.FullName + "::" + name, MissingMessage(type, name));
+            throw RpcException.Internal(MissingMessage(type, name));
+        }
+
         public static object GetField(object instance, string name)
         {
             if (instance == null)

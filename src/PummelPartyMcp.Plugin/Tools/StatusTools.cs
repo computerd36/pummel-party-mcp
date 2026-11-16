@@ -48,6 +48,12 @@ namespace PummelPartyMcp.Tools
                     ["patchedCount"] = block.PatchedCount,
                     ["missing"] = new JArray(block.Missing.ToArray()),
                 };
+                // the write tool currently holding the write queue (main thread, like the queue itself), or null
+                string activeName = registry.WriteQueue.ActiveName;
+                TimeSpan? activeAge = registry.WriteQueue.ActiveAge;
+                status["activeWrite"] = activeName == null || !activeAge.HasValue
+                    ? JValue.CreateNull()
+                    : new JObject { ["tool"] = activeName, ["seconds"] = Math.Round(activeAge.Value.TotalSeconds, 1) };
                 return status;
             })));
             registry.Register(ToolDefinition.Read("get_open_mod", ctx => ctx.OnMainThread(GetOpenMod)));

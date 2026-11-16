@@ -47,6 +47,15 @@ namespace PummelPartyMcp.Core
         /// <summary>Name of the active write tool (diagnostics), or null.</summary>
         public string ActiveName => m_active?.Name;
 
+        /// <summary>How long the active write tool has been running (diagnostics, get_status activeWrite), or null.</summary>
+        public TimeSpan? ActiveAge => m_active == null ? (TimeSpan?)null : m_clock() - m_active.StartedAt;
+
+        /// <summary>
+        /// An active entry whose caller's deadline passed longer ago than this has outlived the dispatcher's commit grace and the
+        /// stuck grace: one error is logged (visibility only; a committed body is never force-released).
+        /// </summary>
+        public static TimeSpan OverdueAfterDeadline => MainThreadDispatcher.DefaultCommitGrace + StuckGrace;
+
         /// <summary>
         /// Queues a write body. <paramref name="start"/> receives a completion that forwards to <paramref name="completion"/>
         /// and releases the queue when completed. Starts immediately when idle.
@@ -80,6 +89,12 @@ namespace PummelPartyMcp.Core
                     m_log.Warning($"write tool '{m_active.Name}' did not finish after its caller timed out; releasing the write queue");
                     m_active.Release();
                 }
+                if (m_active != null && !m_active.OverdueLogged && m_active.Inner.Remaining < -OverdueAfterDeadline)
+                {
+                    m_active.OverdueLogged = true;
+                    m_log.Error($"write tool '{m_active.Name}' is still running {(m_clock() - m_active.StartedAt).TotalSeconds:0} s after it started, " +
+                                $"more than {OverdueAfterDeadline.TotalSeconds:0} s past its caller's deadline; later write calls wait behind it (get_status activeWrite)");
+                }
                 while (m_active == null && m_pending.Count > 0)
                 {
                     Entry next = m_pending.Dequeue();
@@ -97,6 +112,7 @@ namespace PummelPartyMcp.Core
                         continue;
                     }
                     m_active = next;
+                    next.StartedAt = m_clock();
                     try
                     {
                         next.Start(next);
@@ -131,6 +147,8 @@ namespace PummelPartyMcp.Core
             public readonly string Name;
             public readonly IWorkCompletion Inner;
             public readonly Action<IWorkCompletion> Start;
+            public TimeSpan StartedAt;
+            public bool OverdueLogged;
 
             public Entry(WriteQueue queue, string name, IWorkCompletion inner, Action<IWorkCompletion> start)
             {

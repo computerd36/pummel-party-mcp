@@ -143,6 +143,7 @@ namespace PummelPartyMcp
                 m_poller = new FramePoller(log);
                 m_edit = new EditServices(m_poller, log);
                 InstallSaveWatch(log);
+                InstallModSwitchGuard(log);
                 InstallPlaytestHooks();
                 PluginConfig config = m_config;
                 // Config values are re-read from the file on every guarded call (BepInEx 5.4 has no file watcher): see PluginConfig.RefreshIfChanged.
@@ -161,7 +162,7 @@ namespace PummelPartyMcp
                 AssetImportTools.Register(registry, m_edit, () => { config.RefreshIfChanged(); return config.AssetLimits; });
                 PrefabTools.Register(registry, m_edit);
                 LogTools.Register(registry, m_logRing, info);
-                ScreenshotTool.Register(registry, this);
+                ScreenshotTool.Register(registry, this, m_poller, log);
                 ModTools.Register(registry, m_poller, log, m_edit);
                 ObjectEditTools.Register(registry, m_edit);
                 ComponentTools.Register(registry, m_edit);
@@ -249,6 +250,42 @@ namespace PummelPartyMcp
             catch (Exception e)
             {
                 Logger.LogWarning($"Save watch not installed ({e.GetType().Name}: {e.Message}); unsaved-edit tracking falls back to the editor's dirty flag.");
+            }
+        }
+
+        /// <summary>
+        /// Harmony prefixes that refuse opening, creating, closing and deleting a mod only while capture_preview_image waits for the
+        /// editor's screenshot (bounded; targets and reasons in ModSwitchGuard). Separate Harmony id; not part of the publish block. If
+        /// any target is missing or cannot be patched, only capture_preview_image refuses to run (fail closed for that tool);
+        /// everything else keeps working.
+        /// </summary>
+        private void InstallModSwitchGuard(IPluginLog log)
+        {
+            try
+            {
+                const System.Reflection.BindingFlags pub = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public;
+                const System.Reflection.BindingFlags priv = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly;
+                System.Reflection.MethodBase open = typeof(EditorSystem).GetMethod("OpenMod", pub, null, new[] { typeof(string) }, null);
+                System.Reflection.MethodBase create = typeof(EditorSystem).GetMethod("CreateNewMod", pub, null, new[] { typeof(string), typeof(PummelModType), typeof(string) }, null);
+                // the New Mod dialog's action: EditorSystem.CreateNewMod, then always a mod-list entry (NewOption is a private nested struct)
+                System.Reflection.MethodBase newModDialog = typeof(NewModPopup).GetMethods(priv)
+                    .FirstOrDefault(m => m.Name == "CreateNewMod" && m.GetParameters().Length == 1);
+                System.Reflection.MethodBase deleteFromMenu = typeof(MainMenuWidget).GetMethod("DeleteModResult", priv, null, new[] { typeof(int) }, null);
+                System.Reflection.MethodBase deleteFromDialog = typeof(LoadModPopup).GetMethod("DeleteModResult", priv, null, new[] { typeof(int) }, null);
+                System.Reflection.MethodBase close = typeof(EditorSystem).GetMethod("SetCurrentMod", pub, null, new[] { typeof(PummelMod) }, null);
+                System.Reflection.MethodBase shutdown = typeof(EditorSystem).GetMethod("OnDisable", pub, null, Type.EmptyTypes, null);
+                ModSwitchGuard.Log = log;
+                ModSwitchGuard.ExtraSink = message => Debug.LogWarning(message);
+                string error = ModSwitchGuard.Install(new Harmony(ModSwitchGuard.HarmonyId),
+                    new[] { open, newModDialog, create, deleteFromMenu, deleteFromDialog }, close, shutdown);
+                if (error != null)
+                {
+                    Logger.LogWarning($"Mod-switch guard not installed ({error}); capture_preview_image is disabled.");
+                }
+            }
+            catch (Exception e)
+            {
+                Logger.LogWarning($"Mod-switch guard not installed ({e.GetType().Name}: {e.Message}); capture_preview_image is disabled.");
             }
         }
 

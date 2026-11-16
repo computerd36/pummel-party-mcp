@@ -117,6 +117,11 @@ namespace PummelPartyMcp.Core
             M("ModSystem.Logic.TargetAction", "GetAcceptedTargetType", "ActionModel");
             F("ModSystem.Logic.SetPlayerVisualAction", "m_verticalLookTargetChildIndex", "System.Int32", "ActionParams");
             F("ModSystem.Logic.SetPlayerVisualAction", "m_movementRotationTargetChildIndex", "System.Int32", "ActionParams");
+            // ModAssetReference<T>: read by the converter (get_object, get_action_graph, reference scans of remove_asset), written by set_action
+            F("ModSystem.Logic.ModAssetReference`1", "m_asset", null, "ValueConverter (references; remove_asset reference scan)");
+            F("ModSystem.Logic.ModAssetReference`1", "m_assetGUID", "SerializableGuid", "ValueConverter (references; remove_asset reference scan)");
+            F("ModSystem.Logic.ModAssetReference`1", "m_curAssetGUID", "SerializableGuid", "ValueConverter (references; remove_asset reference scan)");
+            P("ModSystem.Logic.ModAssetReference`1", "Asset", "ActionParams (set_action / set_trigger reference parameters)");
             foreach (string trigger in new[] { "weaponHitTrigger", "tickTrigger", "onDeathTrigger", "onRespawnTrigger", "onFirstSpawnTrigger", "onRoundEndTrigger" })
             {
                 F("SimpleModPlayerSettings", trigger, null, "ActionModel (player-settings triggers)");
@@ -194,6 +199,13 @@ namespace PummelPartyMcp.Core
             F("EditorSystem", "m_willTakePlaymodeScreenshot", "System.Boolean", "capture_preview_image");
             F("EditorSystem", "m_isTakingScreenShot", "System.Boolean", "capture_preview_image");
             M("EditorSystem", "TakeScreenGrab", "capture_preview_image", null);
+            M("EditorSystem", "OpenMod", "capture_preview_image (mod-switch guard prefix)", null, "System.String");
+            M("EditorSystem", "CreateNewMod", "capture_preview_image (mod-switch guard prefix)", null, "System.String", "PummelModType", "System.String");
+            M("NewModPopup", "CreateNewMod", "capture_preview_image (mod-switch guard prefix: the New Mod dialog's action)", null, "System.Collections.Generic.List`1[NewModPopup+NewModOption]");
+            M("MainMenuWidget", "DeleteModResult", "capture_preview_image (mod-switch guard prefix: Delete Mod)", null, "System.Int32");
+            M("LoadModPopup", "DeleteModResult", "capture_preview_image (mod-switch guard prefix: Delete Mod in the Open dialog)", null, "System.Int32");
+            M("EditorSystem", "SetCurrentMod", "capture_preview_image (mod-switch guard prefix: Close Mod = SetCurrentMod(null))", null, "PummelMod");
+            M("EditorSystem", "OnDisable", "capture_preview_image (mod-switch guard: editor shutdown ends the hold)", null);
             P("MinigameMod", "MinigameSettings", use1);
             M("MinigameMod", "GetMinigameDefinition", use1, null);
             M("BoardMod", "GetMapDetails", use1, null);

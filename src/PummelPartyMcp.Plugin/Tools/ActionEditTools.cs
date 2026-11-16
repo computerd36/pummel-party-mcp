@@ -254,6 +254,56 @@ namespace PummelPartyMcp.Tools
             });
         }
 
+        /// <summary>
+        /// Writes planned parameters into the live model (set_action, set_trigger), then <paramref name="then"/>. When a write throws,
+        /// the earlier ones stay applied (as with set_property): the edit is marked and the error names what was already applied.
+        /// </summary>
+        private static void ApplyInModel(ParamPlan plan, EditServices services, Ctx c, string what, System.Action then)
+        {
+            List<string> done = new List<string>();
+            bool thenStarted = false;
+            try
+            {
+                foreach (ParamWrite w in plan.Writes)
+                {
+                    w.Apply();
+                    done.Add(w.Name);
+                }
+                if (then != null)
+                {
+                    thenStarted = true; // from here on part of the targets may be written even if it throws
+                    then();
+                }
+            }
+            catch (Exception raw)
+            {
+                Exception e = raw;
+                while (e is System.Reflection.TargetInvocationException && e.InnerException != null)
+                {
+                    e = e.InnerException;
+                }
+                bool mayHaveChanged = done.Count > 0 || thenStarted;
+                services.MarkEditIfChanged(c.Mod, what, mayHaveChanged); // earlier writes of this call (or part of the targets) took effect
+                string message = e is RpcException re ? re.Message : $"{e.GetType().Name}: {e.Message}";
+                string code = e is RpcException rc ? rc.Code : ErrorCodes.Internal;
+                if (!mayHaveChanged)
+                {
+                    throw new RpcException(code, message);
+                }
+                string undo = c.First.Address.IsPlayerSettings ? "player-settings triggers have no undo" : "one undo reverts them";
+                List<string> parts = new List<string>();
+                if (done.Count > 0)
+                {
+                    parts.Add("already applied in this call: " + string.Join(", ", done.ToArray()));
+                }
+                if (thenStarted)
+                {
+                    parts.Add("the targets may be partly applied");
+                }
+                throw new RpcException(code, $"{message}; {string.Join("; ", parts.ToArray())} ({undo})");
+            }
+        }
+
         private static JObject AddressJson(ResolvedTrigger r)
         {
             JObject j = new JObject();
@@ -502,8 +552,7 @@ namespace PummelPartyMcp.Tools
             Run(inv, services, c, "set_action", r =>
             {
                 RequireSameAction(r, index, action);
-                plan.ApplyAll();
-                ApplyTargets(action, targets);
+                ApplyInModel(plan, services, c, "set_action", () => ApplyTargets(action, targets));
                 return () =>
                 {
                     JObject res = AddressJson(r);
@@ -722,7 +771,7 @@ namespace PummelPartyMcp.Tools
                 }
                 else
                 {
-                    plan.ApplyAll();
+                    ApplyInModel(plan, services, c, "set_trigger", null);
                 }
                 return () =>
                 {

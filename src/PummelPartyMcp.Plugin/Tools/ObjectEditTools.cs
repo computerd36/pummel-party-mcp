@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using PummelPartyMcp.Core;
 using PummelPartyMcp.Game;
@@ -124,8 +125,9 @@ namespace PummelPartyMcp.Tools
             PummelMod mod = ed.CurrentMod;
             bool editingPrefab = ed.CurrentPrefab != null;
 
-            Transform parent = a.ParentGuid == null ? EditContext.CreationRoot(ed) : EditContext.RequireEditable(ed, a.ParentGuid, "parent object").transform;
-            if (parent == null)
+            Transform creationRoot = EditContext.CreationRoot(ed);
+            Transform parent = a.ParentGuid == null ? creationRoot : EditContext.RequireEditable(ed, a.ParentGuid, "parent object").transform;
+            if (parent == null || creationRoot == null)
             {
                 throw new RpcException(ErrorCodes.InvalidState, "the editor has no creation root (prefab object missing?)");
             }
@@ -134,6 +136,28 @@ namespace PummelPartyMcp.Tools
             {
                 throw RpcException.InvalidParams(why);
             }
+            // Below an inactive parent the editor's AddGameObject throws after the object exists (Awake has not run); build it
+            // under the active creation root and move it, as a user would. Decided here (refuse early) and again in the edit frame.
+            CreatePlacement Placement()
+            {
+                if (parent == null || creationRoot == null || creationRoot != EditContext.CreationRoot(ed))
+                {
+                    // destroyed meanwhile: AddGameObject would silently fall back to the scene root
+                    throw RpcException.NotFound("the parent object (or the prefab's root object) was destroyed meanwhile; nothing was created");
+                }
+                if (a.ParentGuid != null && !EditContext.IsEditable(ed, parent))
+                {
+                    throw RpcException.NotFound("the parent object was deleted or moved out of the editing context meanwhile; nothing was created");
+                }
+                string inactive = CreationRules.Decide(parent == creationRoot, creationRoot.gameObject.activeInHierarchy, parent.gameObject.activeInHierarchy,
+                    creationRoot.name, out CreatePlacement p);
+                if (inactive != null)
+                {
+                    throw new RpcException(ErrorCodes.InvalidState, inactive);
+                }
+                return p;
+            }
+            Placement();
             ModAsset dropAsset = null;
             if (a.PropGuid != null)
             {
@@ -148,33 +172,57 @@ namespace PummelPartyMcp.Tools
             EditHost host = new EditHost(ed, null);
             EditCommon.Run(services, inv, host, selectFirst: false, apply: () =>
             {
+                CreatePlacement placement = Placement(); // re-checked in the edit frame (throws before anything is created)
+                Transform buildUnder = placement == CreatePlacement.ViaCreationRoot ? creationRoot : parent;
                 services.MarkEdit(mod, "create_object");
+                // Backstop: whatever this frame adds below the two possible parents and then fails is removed again (no stray object).
+                List<Transform> childrenBefore = ChildList(creationRoot);
+                childrenBefore.AddRange(ChildList(parent));
                 GameObject go;
-                if (dropAsset != null)
+                ModTransform mt;
+                try
                 {
-                    // What dropping the asset on a hierarchy item does: AddGameObject(Prop/NewPrefabInstance) + assign the
-                    // asset + name, then the drop end resets the preview layer.
-                    go = dropAsset.OnSceneDragDropStart(parent);
-                    if (go != null)
+                    if (dropAsset != null)
                     {
-                        dropAsset.OnSceneDragDropEnd(go, delivered: true);
+                        // What dropping the asset on a hierarchy item does: AddGameObject(Prop/NewPrefabInstance) + assign the
+                        // asset + name, then the drop end resets the preview layer.
+                        go = dropAsset.OnSceneDragDropStart(buildUnder);
+                        if (go != null)
+                        {
+                            dropAsset.OnSceneDragDropEnd(go, delivered: true);
+                        }
                     }
+                    else
+                    {
+                        go = ed.AddGameObject(objectType, buildUnder); // creates, parents (local values kept) and selects it
+                    }
+                    if (go == null)
+                    {
+                        throw RpcException.Internal("the editor did not create an object");
+                    }
+                    mt = go.GetComponent<ModTransform>();
+                    if (placement == CreatePlacement.ViaCreationRoot)
+                    {
+                        // The same call AddGameObject parents with (local values kept), only after the components were set up.
+                        mt.SetParent(parent, worldPositionStays: false);
+                        if (a.Name == null && objectType == ObjectType.Empty)
+                        {
+                            go.name = CreationRules.EmptyObjectName(ChildList(parent).Select(c => c.name)); // the name AddGameObject gives there
+                        }
+                    }
+                    host.Target = go;
+                    if (a.Name != null)
+                    {
+                        go.name = a.Name;
+                    }
+                    ApplyTransform(mt, new[] { a.Position, a.Rotation, a.Scale });
                 }
-                else
+                catch (Exception e)
                 {
-                    go = ed.AddGameObject(objectType, parent); // creates, parents (local values kept) and selects it
+                    List<Transform> after = ChildList(creationRoot);
+                    after.AddRange(ChildList(parent));
+                    throw CreationFailed(ed, e, CreationRules.NewItems(childrenBefore, after));
                 }
-                if (go == null)
-                {
-                    throw RpcException.Internal("the editor did not create an object");
-                }
-                host.Target = go;
-                ModTransform mt = go.GetComponent<ModTransform>();
-                if (a.Name != null)
-                {
-                    go.name = a.Name;
-                }
-                ApplyTransform(mt, new[] { a.Position, a.Rotation, a.Scale });
                 return new EditOutcome
                 {
                     Changed = true,
@@ -194,6 +242,53 @@ namespace PummelPartyMcp.Tools
                     },
                 };
             });
+        }
+
+        /// <summary>Direct children of <paramref name="t"/> (empty for null).</summary>
+        private static List<Transform> ChildList(Transform t)
+        {
+            List<Transform> list = new List<Transform>();
+            for (int i = 0; t != null && i < t.childCount; i++)
+            {
+                list.Add(t.GetChild(i));
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// create_object failed after the editor may already have built the object: deselect, destroy every mod object this call
+        /// added (what the editor's own cancelled drag-and-drop does: DeselectAllObjectsAndGizmos + Destroy) and report.
+        /// </summary>
+        private static RpcException CreationFailed(EditorSystem ed, Exception error, List<Transform> added)
+        {
+            Exception inner = error;
+            while (inner is System.Reflection.TargetInvocationException && inner.InnerException != null)
+            {
+                inner = inner.InnerException;
+            }
+            string what = inner is RpcException re0 ? re0.Message : $"{inner.GetType().Name}: {inner.Message}";
+            string code = inner is RpcException re1 ? re1.Code : ErrorCodes.Internal;
+            List<GameObject> stray = added.Where(t => t != null && t.GetComponent<ModTransform>() != null).Select(t => t.gameObject).ToList();
+            if (stray.Count == 0)
+            {
+                return new RpcException(code, what);
+            }
+            string names = string.Join(", ", stray.Select(g => "'" + g.name + "'").ToArray());
+            string cleanup;
+            try
+            {
+                ed.GetSelectionManager().DeselectAllObjectsAndGizmos();
+                foreach (GameObject g in stray)
+                {
+                    UnityEngine.Object.Destroy(g);
+                }
+                cleanup = $"the partly created object ({names}) was removed again; nothing was created";
+            }
+            catch (Exception ce)
+            {
+                cleanup = $"removing the partly created object failed ({ce.GetType().Name}: {ce.Message}); check get_hierarchy and delete it with delete_object";
+            }
+            return new RpcException(code, $"creating the object failed ({what}); {cleanup}");
         }
 
         private static ModAsset RequireAsset(EditorSystem ed, string guid, ModReflectionType type, string param, string expected)

@@ -79,6 +79,56 @@ namespace PummelPartyMcp.PatchTests
         }
     }
 
+    /// <summary>Like EditorSystem.OpenMod(string) / CreateNewMod(string, PummelModType, string): record their runs.</summary>
+    public sealed class FakeModEditor
+    {
+        public int Opens;
+        public int Creates;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void OpenMod(string path) { Opens++; }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void CreateNewMod(string path, int modType, string templatePath = null) { Creates++; }
+
+        public object CurrentMod = "MCP_Mod";
+        public int SetCalls;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void Spare() { }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void SetCurrentMod(object newMod) { SetCalls++; CurrentMod = newMod; }
+
+        /// <summary>Like EditorSystem.OnDisable: closes the mod as the editor shuts down.</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void OnDisable() { SetCurrentMod(null); }
+    }
+
+    /// <summary>Like NewModPopup.CreateNewMod(List): creates through the editor, then ALWAYS adds a mod-list entry.</summary>
+    public sealed class FakeNewModPopup
+    {
+        public readonly List<string> ModList = new List<string>();
+        public FakeModEditor Editor;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void CreateNewMod(List<int> options) { Editor.CreateNewMod("p", 1); ModList.Add("new"); }
+
+        public void ClickOk() => CreateNewMod(new List<int>());
+    }
+
+    /// <summary>Like MainMenuWidget/LoadModPopup.DeleteModResult(int): closes the open mod, then deletes its folder.</summary>
+    public sealed class FakeDeleteDialog
+    {
+        public FakeModEditor Editor;
+        public int Deleted;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void DeleteModResult(int result) { Editor.SetCurrentMod(null); Deleted++; }
+
+        public void Confirm() => DeleteModResult(0);
+    }
+
     /// <summary>Stand-ins for the live publish-block check (patched, then unpatched by "another plugin").</summary>
     public static class MonitoredTargets
     {
@@ -221,6 +271,8 @@ namespace PummelPartyMcp.PatchTests
             Check("failed save: exception propagates unchanged, postfix not run", threw && observed == 1 && SaveWatch.SaveCount == before + 2);
             SaveWatch.OnSaved = null;
 
+            ModSwitchGuardTests();
+
             Console.WriteLine();
             Console.WriteLine($"RESULT: {s_passed} passed, {s_failed} failed");
             foreach (string f in s_failures)
@@ -272,6 +324,98 @@ namespace PummelPartyMcp.PatchTests
             PublishBlockMonitor startupFailed = new PublishBlockMonitor(failed, targets, id, log);
             Check("monitor: an incomplete install stays incomplete with its own missing list",
                 !startupFailed.IsComplete() && startupFailed.Current().Missing[0].StartsWith("Game.Gone()"));
+        }
+
+        /// <summary>Review G: the prefix that refuses opening/creating a mod only while capture_preview_image waits for the editor's screenshot.</summary>
+        private static void ModSwitchGuardTests()
+        {
+            Console.WriteLine("-- mod-switch guard (capture_preview_image)");
+            ListLog log = new ListLog();
+            List<string> sink = new List<string>();
+            long now = 1000;
+            ModSwitchGuard.ClockMs = () => now;
+            ModSwitchGuard.Log = log;
+            ModSwitchGuard.ExtraSink = sink.Add;
+            const BindingFlags priv = BindingFlags.Instance | BindingFlags.NonPublic;
+            MethodInfo open = typeof(FakeModEditor).GetMethod("OpenMod");
+            MethodInfo create = typeof(FakeModEditor).GetMethod("CreateNewMod");
+            MethodInfo setMod = typeof(FakeModEditor).GetMethod("SetCurrentMod");
+            MethodInfo onDisable = typeof(FakeModEditor).GetMethod("OnDisable");
+            MethodInfo newModDialog = typeof(FakeNewModPopup).GetMethod("CreateNewMod", priv);
+            MethodInfo deleteDialog = typeof(FakeDeleteDialog).GetMethod("DeleteModResult", priv);
+
+            Check("guard: no targets -> not installed", ModSwitchGuard.Install(new Harmony("pummelpartymcp.patchtests.msg0"), new MethodBase[0], setMod, onDisable) != null && !ModSwitchGuard.Installed);
+            Check("guard: a missing refuse target -> not installed (capture_preview_image then refuses)",
+                ModSwitchGuard.Install(new Harmony("pummelpartymcp.patchtests.msg1"), new MethodBase[] { null }, null, null) != null && !ModSwitchGuard.Installed);
+            Check("guard: a missing close or shutdown target -> not installed",
+                ModSwitchGuard.Install(new Harmony("pummelpartymcp.patchtests.msg2"), new MethodBase[] { typeof(FakeModEditor).GetMethod("Spare") }, null, onDisable) != null && !ModSwitchGuard.Installed);
+            Check("guard: installs on every target", ModSwitchGuard.Install(new Harmony("pummelpartymcp.patchtests.msg"),
+                new MethodBase[] { open, newModDialog, create, deleteDialog }, setMod, onDisable) == null && ModSwitchGuard.Installed);
+
+            FakeModEditor ed = new FakeModEditor();
+            ed.OpenMod("a");
+            ed.CreateNewMod("b", 1);
+            Check("guard: pure pass-through while not armed", ed.Opens == 1 && ed.Creates == 1 && !ModSwitchGuard.IsHolding && log.Warnings.Count == 0);
+
+            ModSwitchGuard.Arm();
+            int refusedBefore = ModSwitchGuard.RefusedCount;
+            ed.OpenMod("c");
+            ed.CreateNewMod("d", 1, "template");
+            ed.OpenMod("e");
+            Check("guard: armed -> opening and creating a mod are refused (originals not run)", ed.Opens == 1 && ed.Creates == 1 && ModSwitchGuard.RefusedCount == refusedBefore + 3);
+            Check("guard: one warning per hold (not per refused call), also to the extra sink",
+                log.Warnings.Count == 1 && log.Warnings[0] == ModSwitchGuard.RefusalMessage && sink.Count == 1 && sink[0].Contains(ModSwitchGuard.RefusalMessage));
+
+            ModSwitchGuard.Disarm();
+            ed.OpenMod("f");
+            Check("guard: disarmed -> pass-through again", ed.Opens == 2 && !ModSwitchGuard.IsHolding);
+
+            ModSwitchGuard.Arm();
+            now += (long)ModSwitchGuard.MaxHold.TotalMilliseconds - 1;
+            ed.OpenMod("g");
+            Check("guard: still refused just before the hard bound", ed.Opens == 2 && ModSwitchGuard.IsHolding);
+            now += 1;
+            ed.OpenMod("h");
+            ed.CreateNewMod("i", 0);
+            Check("guard: the hold ends by itself after MaxHold even without Disarm (the editor never gets stuck)", ed.Opens == 3 && ed.Creates == 2 && !ModSwitchGuard.IsHolding);
+            Check("guard: the hold is bounded by a few seconds", ModSwitchGuard.MaxHold > TimeSpan.Zero && ModSwitchGuard.MaxHold <= TimeSpan.FromSeconds(10));
+
+            int warningsBefore = log.Warnings.Count;
+            ModSwitchGuard.Arm();
+            ed.OpenMod("j");
+            ed.OpenMod("j2");
+            Check("guard: a new hold warns again (once)", ed.Opens == 3 && log.Warnings.Count == warningsBefore + 1);
+            ModSwitchGuard.ExtraSink = s => throw new Exception("sink bug");
+            ModSwitchGuard.Arm();
+            bool threw = false;
+            try { ed.OpenMod("k"); } catch (Exception) { threw = true; }
+            Check("guard: a throwing sink never propagates into the game (call still refused)", !threw && ed.Opens == 3);
+            ModSwitchGuard.ExtraSink = null;
+
+            // review follow-up 1: the New Mod dialog's action is refused as a whole (no mod-list entry without a mod)
+            FakeNewModPopup dialog = new FakeNewModPopup { Editor = ed };
+            int createsBefore = ed.Creates;
+            dialog.ClickOk();
+            Check("guard: New Mod dialog refused as a whole while holding: no mod created and no mod-list entry", ed.Creates == createsBefore && dialog.ModList.Count == 0);
+            // review follow-up 2: Close Mod (SetCurrentMod(null)) and Delete Mod (close, then delete the folder) are refused while holding
+            ed.SetCurrentMod(null);
+            Check("guard: closing the mod (SetCurrentMod(null)) is refused while holding: the mod stays open, nothing in SetCurrentMod ran",
+                Equals(ed.CurrentMod, "MCP_Mod") && ed.SetCalls == 0);
+            ed.SetCurrentMod("Other");
+            Check("guard: SetCurrentMod with a mod always passes (the load already changed state when it gets there)", Equals(ed.CurrentMod, "Other") && ed.SetCalls == 1);
+            ed.CurrentMod = "MCP_Mod";
+            FakeDeleteDialog delete = new FakeDeleteDialog { Editor = ed };
+            delete.Confirm();
+            Check("guard: Delete Mod refused as a whole while holding (the open mod is not closed, no folder deleted)", delete.Deleted == 0 && Equals(ed.CurrentMod, "MCP_Mod"));
+            ed.OnDisable();
+            Check("guard: the editor shutting down (OnDisable) ends the hold, so its SetCurrentMod(null) runs", ed.CurrentMod == null && !ModSwitchGuard.IsHolding);
+            ed.CurrentMod = "MCP_Mod";
+            dialog.ClickOk();
+            delete.Confirm();
+            ed.SetCurrentMod(null);
+            Check("guard: not holding -> New Mod, Delete Mod and Close Mod run unchanged", dialog.ModList.Count == 1 && ed.Creates == createsBefore + 1 && delete.Deleted == 1 && ed.CurrentMod == null);
+            ModSwitchGuard.Disarm();
+            ModSwitchGuard.Log = NullPluginLog.Instance;
         }
 
         private static BlockTarget T(MethodBase m, bool required) =>

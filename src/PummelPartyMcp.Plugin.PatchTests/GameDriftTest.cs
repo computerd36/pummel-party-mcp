@@ -413,6 +413,7 @@ namespace PummelPartyMcp.PatchTests
             MethodBase shot = ed == null ? null : ed.GetMethods(all).Cast<MethodBase>().Concat(ed.GetNestedTypes(all).SelectMany(n => n.GetMethods(all)).Cast<MethodBase>())
                 .FirstOrDefault(m => m.GetMethodBody() != null && LdStrs(m).Any(x => x.StartsWith("Screenshot", StringComparison.Ordinal) && x.EndsWith(".jpg", StringComparison.Ordinal)));
             check("the play-mode screenshot is written as Textures/Screenshot<N>.jpg (capture_preview_image pre-checks that name)", shot != null && Calls(shot).Contains("PummelMod.get_FullTexturesFolder"));
+            ModSwitchGuardDrift(game, ed, check);
             MethodInfo tryMeta = game.GetType("PummelAssetImporter", false)?.GetMethod("TryCreateOrLoadMetaAsset", all);
             check("the importer writes a missing .pmeta (SaveMetaFile) before the decoder runs (open pre-check, import rollback)", tryMeta != null && Calls(tryMeta).Contains("ModAssetExternal.SaveMetaFile"));
             MethodInfo saveMeta = game.GetType("ModAssetExternal", false)?.GetMethod("SaveMetaFile", all);
@@ -420,6 +421,114 @@ namespace PummelPartyMcp.PatchTests
             MethodInfo rename = game.GetType("ModAssetExternal", false)?.GetMethod("Rename", all);
             check("ModAssetExternal.Rename moves the file, then the .pmeta, and raises a popup on failure (L8 partial-rename detection)",
                 rename != null && Calls(rename).Contains("File.Move") && Calls(rename).Contains("EditorPopupManager.AddPopup"));
+        }
+
+        /// <summary>
+        /// Review G: the mod-switch guard prefixes EditorSystem.OpenMod(string) and CreateNewMod(string, PummelModType, string). That covers
+        /// every way the game loads a mod into the editor only if those two are the only callers of LoadModIntoEditor in the whole
+        /// assembly, and the Open Mod dialog's OpenModWithPopupPrompt ends in OpenMod. Read from the IL (nothing runs).
+        /// </summary>
+        private static void ModSwitchGuardDrift(Assembly game, Type ed, Action<string, bool> check)
+        {
+            const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+            Type modType = game.GetType("PummelModType", false);
+            MethodInfo open = ed?.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
+                .FirstOrDefault(m => m.Name == "OpenMod" && m.GetParameters().Select(p => p.ParameterType).SequenceEqual(new[] { typeof(string) }));
+            MethodInfo create = ed?.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
+                .FirstOrDefault(m => m.Name == "CreateNewMod" && m.GetParameters().Select(p => p.ParameterType).SequenceEqual(new[] { typeof(string), modType, typeof(string) }));
+            check("mod-switch guard targets exist: EditorSystem.OpenMod(String) and CreateNewMod(String, PummelModType, String)", open != null && create != null && modType != null);
+            Type popup = game.GetType("NewModPopup", false);
+            MethodInfo dialogCreate = popup?.GetMethods(all).FirstOrDefault(m => m.Name == "CreateNewMod" && m.GetParameters().Length == 1);
+            HashSet<string> dialogCalls = dialogCreate == null ? new HashSet<string>() : Calls(dialogCreate);
+            check("NewModPopup.CreateNewMod(List) calls EditorSystem.CreateNewMod and then EditorAvailableModManager.AddAvailableMod (why the dialog's action is guarded as a whole)",
+                dialogCalls.Contains("EditorSystem.CreateNewMod") && dialogCalls.Contains("EditorAvailableModManager.AddAvailableMod"));
+            Type pummelMod = game.GetType("PummelMod", false);
+            check("close/delete guard targets exist: EditorSystem.SetCurrentMod(PummelMod), EditorSystem.OnDisable(), MainMenuWidget/LoadModPopup.DeleteModResult(Int32)",
+                ed?.GetMethod("SetCurrentMod", BindingFlags.Instance | BindingFlags.Public, null, new[] { pummelMod }, null) != null
+                && ed.GetMethod("OnDisable", BindingFlags.Instance | BindingFlags.Public, null, Type.EmptyTypes, null) != null
+                && game.GetType("MainMenuWidget", false)?.GetMethod("DeleteModResult", all, null, new[] { typeof(int) }, null) != null
+                && game.GetType("LoadModPopup", false)?.GetMethod("DeleteModResult", all, null, new[] { typeof(int) }, null) != null);
+
+            // Who calls what (whole assembly; a compiler-generated lambda/iterator is reported as Outer/<nested>.Method). Pinned: a game
+            // update that adds a path into these methods must be reviewed (does it do something after the call that a refusal would break?).
+            Dictionary<string, List<string>> callers = CallersOf(game, "EditorSystem.LoadModIntoEditor", "EditorSystem.OpenMod", "EditorSystem.CreateNewMod",
+                "EditorSystem.OpenModWithPopupPrompt", "EditorSystem.SetCurrentMod");
+            void Pin(string callee, params string[] expected)
+            {
+                List<string> found = callers[callee];
+                check($"{callee} is called only by {string.Join(", ", expected)} (found: {string.Join(", ", found)})", found.SequenceEqual(expected.OrderBy(n => n, StringComparer.Ordinal)));
+            }
+            Pin("EditorSystem.LoadModIntoEditor", "EditorSystem.CreateNewMod", "EditorSystem.OpenMod");
+            // OpenMod: the automated test, OpenModWithPopupPrompt and its unsaved-changes lambda (nothing runs after the call in any of them)
+            Pin("EditorSystem.OpenMod", "AT_OpenMod/<generated>", "EditorSystem.OpenModWithPopupPrompt", "EditorSystem/<generated>");
+            // OpenModWithPopupPrompt: Open dialog, Recent Mods (File menu), Published Mods: each closes its popups first, nothing after the call
+            Pin("EditorSystem.OpenModWithPopupPrompt", "LoadModPopup.LoadModIntoEditor", "MainMenuWidget.Draw", "PublishedModsPopup.LoadModIntoEditor");
+            // CreateNewMod: the automated test and the New Mod dialog's action (guarded as a whole: it adds a list entry afterwards)
+            Pin("EditorSystem.CreateNewMod", "AT_NewMod/<generated>", "NewModPopup.CreateNewMod");
+            // SetCurrentMod: LoadModIntoEditor (non-null, passes), editor shutdown (OnDisable ends the hold; OnDestroy runs after it), the two
+            // Delete Mod results (guarded as a whole), Close Mod in the File menu and its unsaved-changes lambda (refused: nothing after the
+            // call), a failed editor load (PostLoadCleanup; no load can run during a capture: it needs a loaded mod and opens are refused)
+            Pin("EditorSystem.SetCurrentMod", "EditorSystem.LoadModIntoEditor", "EditorSystem.OnDestroy", "EditorSystem.OnDisable", "LoadModPopup.DeleteModResult",
+                "MainMenuWidget.DeleteModResult", "MainMenuWidget.Draw", "MainMenuWidget/<generated>", "PummelMod.PostLoadCleanup");
+            MethodBase prompt = ed == null ? null : ed.GetMethods(all).Cast<MethodBase>().Concat(ed.GetNestedTypes(all).SelectMany(n => n.GetMethods(all)).Cast<MethodBase>())
+                .FirstOrDefault(m => m.Name == "OpenModWithPopupPrompt");
+            HashSet<string> promptCalls = new HashSet<string>(StringComparer.Ordinal);
+            if (ed != null)
+            {
+                foreach (MethodBase m in ed.GetMethods(all).Cast<MethodBase>().Concat(ed.GetNestedTypes(all).SelectMany(n => n.GetMethods(all)).Cast<MethodBase>())
+                    .Where(m => m.Name.Contains("OpenModWithPopupPrompt") && m.GetMethodBody() != null))
+                {
+                    promptCalls.UnionWith(Calls(m));
+                }
+            }
+            check("OpenModWithPopupPrompt (the Open Mod dialog) ends in OpenMod", prompt != null && promptCalls.Contains("EditorSystem.OpenMod"));
+        }
+
+        /// <summary>Callers ("Type.Method", nested compiler-generated types as "Outer/Nested.Method") of each callee, sorted, whole assembly.</summary>
+        private static Dictionary<string, List<string>> CallersOf(Assembly game, params string[] callees)
+        {
+            const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+            Dictionary<string, HashSet<string>> found = callees.ToDictionary(c => c, c => new HashSet<string>(StringComparer.Ordinal));
+            foreach (Type t in SafeTypes(game))
+            {
+                List<MethodBase> methods;
+                string typeName;
+                try
+                {
+                    methods = t.GetMethods(all).Cast<MethodBase>().Concat(t.GetConstructors(all)).ToList();
+                    // compiler-generated lambda/iterator classes: "Outer/<generated>" (their numbered names change with any rebuild)
+                    typeName = t.DeclaringType == null ? t.Name : t.DeclaringType.Name + "/" + (t.Name.StartsWith("<", StringComparison.Ordinal) ? "<generated>" : t.Name);
+                }
+                catch (Exception)
+                {
+                    // a type that cannot be loaded for reflection (e.g. it needs a framework type this runtime lacks): its callers are not seen
+                    Console.WriteLine("    caller scan: type skipped (cannot be loaded for reflection): " + t.FullName);
+                    continue;
+                }
+                foreach (MethodBase m in methods)
+                {
+                    try
+                    {
+                        if (m.GetMethodBody() == null)
+                        {
+                            continue;
+                        }
+                        HashSet<string> calls = Calls(m);
+                        foreach (string c in callees)
+                        {
+                            if (calls.Contains(c))
+                            {
+                                found[c].Add(typeName.EndsWith("<generated>", StringComparison.Ordinal) ? typeName : typeName + "." + m.Name);
+                            }
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // a method whose body cannot be read is not a caller we can see
+                    }
+                }
+            }
+            return found.ToDictionary(kv => kv.Key, kv => kv.Value.OrderBy(n => n, StringComparer.Ordinal).ToList());
         }
 
         private static void SettingsDrift(Assembly game, Action<string, bool> check)

@@ -179,13 +179,9 @@ namespace PummelPartyMcp.Core
             {
                 File.Replace(temp, path, null);
             }
-            catch (PlatformNotSupportedException)
+            catch (Exception e) when (e is PlatformNotSupportedException || e is NotImplementedException)
             {
                 File.Copy(temp, path, true); // runtime without File.Replace: not atomic, but still a complete file
-            }
-            catch (NotImplementedException)
-            {
-                File.Copy(temp, path, true);
             }
         }
 

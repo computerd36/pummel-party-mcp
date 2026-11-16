@@ -19,6 +19,12 @@ namespace PummelPartyMcp.Core
         public int MaxBodyBytes = 1024 * 1024;
         public int MaxHeaderBytes = 16 * 1024;
         public int MaxConcurrentRequests = 16;
+
+        /// <summary>
+        /// Connections that found no free request slot and are answered with 503 at the same time. Beyond this the accept thread closes
+        /// the connection at once, so a flood of local connections cannot occupy the thread pool (each 503 write and drain can take ~3 s).
+        /// </summary>
+        public int MaxBusyResponses = 4;
         /// <summary>
         /// Absolute limit for receiving the complete request (headers and body) after the connection was accepted. Not a
         /// per-read timeout: a client that sends one byte every few seconds is cut off at this deadline, so slow
@@ -43,6 +49,7 @@ namespace PummelPartyMcp.Core
         private readonly Func<string, RpcResponse> m_handler;
         private readonly IPluginLog m_log;
         private readonly SemaphoreSlim m_slots;
+        private readonly SemaphoreSlim m_busySlots;
         private TcpListener m_listener;
         private Thread m_acceptThread;
         private volatile bool m_stopping;
@@ -59,6 +66,7 @@ namespace PummelPartyMcp.Core
                 throw new ArgumentException("token is missing or malformed", nameof(options));
             }
             m_slots = new SemaphoreSlim(Math.Max(1, options.MaxConcurrentRequests));
+            m_busySlots = new SemaphoreSlim(Math.Max(0, options.MaxBusyResponses));
         }
 
         public void Start()
@@ -122,6 +130,13 @@ namespace PummelPartyMcp.Core
                 }
 
                 bool gotSlot = m_slots.Wait(0);
+                bool gotBusySlot = !gotSlot && m_busySlots.Wait(0);
+                if (!gotSlot && !gotBusySlot)
+                {
+                    // Neither a request slot nor a 503 slot: close on the accept thread, no thread-pool work for this connection.
+                    try { client.Close(); } catch { /* ignore */ }
+                    continue;
+                }
                 ThreadPool.QueueUserWorkItem(_ =>
                 {
                     try
@@ -147,6 +162,10 @@ namespace PummelPartyMcp.Core
                             m_slots.Release();
                         }
                         GracefulClose(client);
+                        if (gotBusySlot)
+                        {
+                            m_busySlots.Release(); // after the drain: bounds the thread-pool time spent on busy connections
+                        }
                     }
                 });
             }

@@ -6,6 +6,7 @@ using System.Linq;
 using Newtonsoft.Json.Linq;
 using PummelPartyMcp.Core;
 using PummelPartyMcp.Game;
+using PummelPartyMcp.Hooks;
 using UnityEngine;
 
 namespace PummelPartyMcp.Tools
@@ -376,12 +377,31 @@ namespace PummelPartyMcp.Tools
                 }
             }
 
+            if (!ModSwitchGuard.Installed)
+            {
+                // fail closed for this tool only: without the guard a mod opened by hand during the capture could receive the file
+                throw RpcException.Internal("capture_preview_image is disabled because the plugin's mod-switch guard could not be installed " +
+                                            "(it keeps the editor's screenshot from landing in another mod; see the BepInEx log); nothing was changed");
+            }
+
             inv.Commit(CommitBudgets.Capture); // L7: the poll below may wait CaptureWait after the commit
             Stopwatch sw = Stopwatch.StartNew();
             int frames = 0;
-            ed.TakeScreenGrab(); // the toolbar camera button / F10: renders the scene view at the end of the next frame
+            // Review G: until the editor has written the file, opening, creating, closing and deleting a mod are refused (bounded:
+            // ModSwitchGuard.MaxHold; the editor shutting down ends the hold)
+            ModSwitchGuard.Arm();
+            try
+            {
+                ed.TakeScreenGrab(); // the toolbar camera button / F10: renders the scene view at the end of the next frame
+            }
+            catch
+            {
+                ModSwitchGuard.Disarm();
+                throw;
+            }
             services.Poller.Add(() =>
             {
+                bool finished = true;
                 try
                 {
                     frames++;
@@ -408,12 +428,20 @@ namespace PummelPartyMcp.Tools
                                 : "the screenshot is still being written; it was not assigned (check list_assets for the Screenshot<N> texture)"));
                         return true;
                     }
+                    finished = false;
                     return false;
                 }
                 catch (Exception e)
                 {
                     inv.Fail(e);
                     return true;
+                }
+                finally
+                {
+                    if (finished)
+                    {
+                        ModSwitchGuard.Disarm();
+                    }
                 }
             });
         }

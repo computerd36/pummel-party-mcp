@@ -466,6 +466,13 @@ namespace PummelPartyMcp.Game
             bool effects = section.Name == "screenEffects";
             bool touchedLighting = false;
             HashSet<string> touchedEffects = new HashSet<string>(StringComparer.Ordinal);
+            if (effects)
+            {
+                // effect parameters are written through ParameterOverride<T>.value / overrideState (Core/RequiredMembers.cs): a renamed
+                // member fails here, before the first field is written
+                GameReflection.RequireField(typeof(ParameterOverride<>), "value");
+                GameReflection.RequireField(typeof(ParameterOverride<>), "overrideState");
+            }
 
             foreach (SettingsAssignment a in plan.Assignments)
             {
@@ -580,7 +587,7 @@ namespace PummelPartyMcp.Game
             object current = GetMember(target, f.Member);
             if (current != null && IsParameter(current))
             {
-                Type valueType = ParameterBase(current.GetType()).GetField("value").FieldType;
+                Type valueType = GameReflection.RequireField(ParameterBase(current.GetType()), "value").FieldType;
                 if (f.IsParam)
                 {
                     ParamValue pv = (ParamValue)value;
@@ -703,7 +710,7 @@ namespace PummelPartyMcp.Game
                     continue;
                 }
                 object parameter = GetMember(effect, forced[1]);
-                Type valueType = ParameterBase(parameter.GetType()).GetField("value").FieldType;
+                Type valueType = GameReflection.RequireField(ParameterBase(parameter.GetType()), "value").FieldType;
                 if (valueType.IsEnum)
                 {
                     SetParamField(parameter, "value", Enum.Parse(valueType, forced[3]));

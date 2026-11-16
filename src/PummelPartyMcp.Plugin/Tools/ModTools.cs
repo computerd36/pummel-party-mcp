@@ -257,14 +257,16 @@ namespace PummelPartyMcp.Tools
             RefuseIfBrokenModList(ed.GetAvailableModManager());
             CheckCanSwitchAway(ed, args.DiscardUnsaved);
             SandboxPath.RequireOpenable(folder); // C1: loading writes missing .pmeta files; never through a link
-            foreach (string line in ImportJournal.Recover(folder)) // M1: an import interrupted by a crash is not decoded again
-            {
-                log.Warning("open_test_mod: import recovery: " + line);
-            }
 
             // Same call the Open Mod dialog ends in (OpenModWithPopupPrompt -> OpenMod) without its unsaved-changes
             // popup, which CheckCanSwitchAway replaces.
             TimeSpan loadLimit = CommitLifecycle(inv);
+            // M1: an import interrupted by a crash is not decoded again. After the commit point: it may rename files, and a call that
+            // fails before the commit reports "nothing was changed". Never throws; only OpenMod below depends on it.
+            foreach (string line in ImportJournal.Recover(folder))
+            {
+                log.Warning("open_test_mod: import recovery: " + line);
+            }
             ed.OpenMod(folder);
             PummelMod pm = ed.CurrentMod;
             if (pm == null)

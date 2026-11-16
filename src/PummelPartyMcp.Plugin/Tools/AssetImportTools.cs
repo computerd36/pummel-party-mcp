@@ -929,7 +929,6 @@ namespace PummelPartyMcp.Tools
                 FileCreated = !File.Exists(uniqueFile), // checked free above; recorded again right before the editor writes it
             };
             PummelMaterial pm = null;
-            List<string> notes = new List<string>();
             try
             {
                 created.BeforeMetaStep();
@@ -1005,10 +1004,6 @@ namespace PummelPartyMcp.Tools
             {
                 // The name you pass is matched against the built-in asset's name first; "shader" is the Unity shader's own name.
                 result["shaderNote"] = $"the built-in shader asset '{shaderAsset.name}' uses the Unity shader '{shader.name}'; 'shader' shows the Unity shader's name";
-            }
-            if (notes.Count > 0)
-            {
-                result["warnings"] = new JArray(notes.ToArray());
             }
             if (rule == null)
             {

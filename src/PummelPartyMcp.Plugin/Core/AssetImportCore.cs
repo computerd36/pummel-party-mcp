@@ -99,8 +99,10 @@ namespace PummelPartyMcp.Core
 
         private static readonly string[] s_reserved =
         {
-            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "CONIN$", "CONOUT$", "CLOCK$",
+            "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "CONIN$", "CONOUT$", "CLOCK$",
+            // Windows also reserves COM and LPT with a superscript digit (¹ ² ³)
+            "COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³",
         };
 
         public static string ExtensionsText => string.Join(", ", AllowedExtensions);
@@ -262,9 +264,6 @@ namespace PummelPartyMcp.Core
             }
         }
 
-        private static bool IsLocalDrivePath(string full) =>
-            full != null && full.Length >= 3 && ((full[0] >= 'A' && full[0] <= 'Z') || (full[0] >= 'a' && full[0] <= 'z')) && full[1] == ':' && (full[2] == '\\' || full[2] == '/');
-
         /// <summary>
         /// Takes the open mod's root folder and its Assets folder (both from the game object) and re-checks them: local drive path,
         /// root folder name passes the sandbox rule, Assets folder is exactly root\Assets and not a link. Returns the full Assets folder.
@@ -275,7 +274,7 @@ namespace PummelPartyMcp.Core
             {
                 throw RpcException.Internal("the open mod's folder is not known");
             }
-            if (!IsLocalDrivePath(modRoot) || !IsLocalDrivePath(assetsFolder))
+            if (!SandboxPath.IsLocalDrivePath(modRoot) || !SandboxPath.IsLocalDrivePath(assetsFolder))
             {
                 throw new RpcException(ErrorCodes.InvalidState, "the open mod's folder is not an absolute local drive path; assets are not imported there");
             }
@@ -289,7 +288,7 @@ namespace PummelPartyMcp.Core
             {
                 throw RpcException.Internal("the open mod's folder path is invalid: " + e.Message);
             }
-            if (!IsLocalDrivePath(rootFull + "\\"))
+            if (!SandboxPath.IsLocalDrivePath(rootFull + "\\"))
             {
                 throw new RpcException(ErrorCodes.InvalidState, "the open mod's folder is not on a local drive; assets are not imported there");
             }
@@ -408,7 +407,7 @@ namespace PummelPartyMcp.Core
             {
                 return "network (UNC) and device paths (\\\\server\\share, \\\\.\\, \\\\?\\) are not supported in this version: copy the file to a local drive first";
             }
-            if (!IsLocalDrivePath(raw))
+            if (!SandboxPath.IsLocalDrivePath(raw))
             {
                 return "the path must be an absolute local path such as C:\\folder\\file.png";
             }
@@ -449,7 +448,7 @@ namespace PummelPartyMcp.Core
             {
                 throw Refuse("the path is invalid: " + e.Message);
             }
-            if (!IsLocalDrivePath(full) || full.StartsWith("\\\\", StringComparison.Ordinal))
+            if (!SandboxPath.IsLocalDrivePath(full) || full.StartsWith("\\\\", StringComparison.Ordinal))
             {
                 throw Refuse("the path does not resolve to a local drive path");
             }

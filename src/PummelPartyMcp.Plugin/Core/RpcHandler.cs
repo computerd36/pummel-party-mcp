@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -91,7 +92,7 @@ namespace PummelPartyMcp.Core
 
             if (!m_registry.TryGet(method, out RegisteredTool tool))
             {
-                return Ok(Error(ErrorCodes.UnknownMethod, $"unknown method '{Truncate(method, 100)}'"));
+                return Ok(Error(ErrorCodes.UnknownMethod, $"unknown method '{SafeText.Name(method)}'"));
             }
 
             m_log.Debug($"rpc call: {method}");
@@ -107,17 +108,18 @@ namespace PummelPartyMcp.Core
                 Exception e = Unwrap(raw);
                 if (e is RpcException rpc)
                 {
+                    // messages can echo caller input: control characters are escaped in the log line (the reply is unchanged)
                     if (rpc.Code == ErrorCodes.Internal || rpc.Code == ErrorCodes.Timeout)
                     {
-                        m_log.Error($"rpc {method} failed: {rpc.Code}: {rpc.Message}");
+                        m_log.Error($"rpc {method} failed: {rpc.Code}: {SafeText.Escape(rpc.Message)}");
                     }
                     else if (rpc.Code == ErrorCodes.GuardNotTestMod || rpc.Code == ErrorCodes.WritesDisabled || rpc.Code == ErrorCodes.PublishBlockIncomplete)
                     {
-                        m_log.Info($"rpc {method} refused: {rpc.Code}: {rpc.Message}");
+                        m_log.Info($"rpc {method} refused: {rpc.Code}: {SafeText.Escape(rpc.Message)}");
                     }
                     else
                     {
-                        m_log.Debug($"rpc {method}: {rpc.Code}: {rpc.Message}");
+                        m_log.Debug($"rpc {method}: {rpc.Code}: {SafeText.Escape(rpc.Message)}");
                     }
                     envelope = Error(rpc.Code, rpc.Message);
                     if (rpc.ErrorData != null)
@@ -172,7 +174,59 @@ namespace PummelPartyMcp.Core
             }
             return e;
         }
+    }
 
-        private static string Truncate(string s, int max) => s.Length <= max ? s : s.Substring(0, max) + "...";
+    /// <summary>
+    /// Caller-supplied text in log lines and error messages: control characters (below 0x20, and DEL) are escaped as \uXXXX so a
+    /// caller cannot forge or split log lines, and names are capped so a caller cannot bloat the log.
+    /// </summary>
+    public static class SafeText
+    {
+        public const int MaxNameLength = 80;
+
+        /// <summary>A caller-supplied name: escaped and cut to <paramref name="max"/> characters (then "...").</summary>
+        public static string Name(string s, int max = MaxNameLength)
+        {
+            if (s == null)
+            {
+                return "null";
+            }
+            return Escape(s.Length <= max ? s : s.Substring(0, max) + "...");
+        }
+
+        /// <summary>Escapes control characters only (no length cap).</summary>
+        public static string Escape(string s)
+        {
+            if (s == null)
+            {
+                return null;
+            }
+            bool clean = true;
+            foreach (char c in s)
+            {
+                if (c < 0x20 || c == 0x7F)
+                {
+                    clean = false;
+                    break;
+                }
+            }
+            if (clean)
+            {
+                return s;
+            }
+            StringBuilder sb = new StringBuilder(s.Length + 16);
+            foreach (char c in s)
+            {
+                if (c < 0x20 || c == 0x7F)
+                {
+                    sb.Append("\\u").Append(((int)c).ToString("x4", System.Globalization.CultureInfo.InvariantCulture));
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+            return sb.ToString();
+        }
     }
 }

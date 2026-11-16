@@ -44,6 +44,7 @@ namespace PummelPartyMcp.Tests
             PrefabTests.Run((name, ok) => Check(name, ok));
             ReviewFixTests.Run((name, ok) => Check(name, ok));
             CameraTests.Run((name, ok) => Check(name, ok));
+            PrereleaseFixTests.Run((name, ok) => Check(name, ok));
             AssetListingTests();
             ServerTests();
             Console.WriteLine();
@@ -357,6 +358,7 @@ namespace PummelPartyMcp.Tests
 
             server.Stop();
             SlowConnectionTests(handler);
+            FloodTests(handler);
             bool refusedAfterStop;
             try
             {
@@ -432,6 +434,95 @@ namespace PummelPartyMcp.Tests
                 s_port = savedPort;
                 slow.Stop();
             }
+        }
+
+        /// <summary>
+        /// Review H2: connections beyond the request slots get a 503 only up to MaxBusyResponses at a time; the rest are closed on the
+        /// accept thread, so a local flood cannot tie up the thread pool and delay the next legitimate request.
+        /// </summary>
+        private static void FloodTests(RpcHandler handler)
+        {
+            Console.WriteLine("-- connection flood (1 request slot, 2 busy-response slots)");
+            RpcHttpServer srv = new RpcHttpServer(new RpcHttpServerOptions
+            {
+                Port = 0, Token = s_token, MaxConcurrentRequests = 1, MaxBusyResponses = 2, IoTimeout = TimeSpan.FromSeconds(3),
+            }, handler.Handle, NullPluginLog.Instance);
+            srv.Start();
+            int savedPort = s_port;
+            s_port = srv.Port;
+            List<TcpClient> flood = new List<TcpClient>();
+            TcpClient holder = new TcpClient();
+            try
+            {
+                holder.Connect("127.0.0.1", s_port); // takes the only request slot and sends nothing
+                Thread.Sleep(200);
+                const int excess = 100;
+                for (int i = 0; i < excess; i++)
+                {
+                    TcpClient c = new TcpClient();
+                    c.Connect("127.0.0.1", s_port); // stays open and never sends: a 503 handler would drain it for ~1 s
+                    flood.Add(c);
+                }
+                int busy = 0, closed = 0;
+                foreach (TcpClient c in flood)
+                {
+                    string text = ReadToEnd(c, 3000, out bool ended);
+                    if (text.StartsWith("HTTP/1.1 503", StringComparison.Ordinal))
+                    {
+                        busy++;
+                    }
+                    else if (ended && text.Length == 0)
+                    {
+                        closed++;
+                    }
+                }
+                Check($"every excess connection gets a 503 or is closed at once ({busy} x 503, {closed} closed)", busy + closed == excess);
+                Check($"only a few excess connections are answered with 503 at a time ({busy})", busy >= 1 && busy <= 10);
+                holder.Close();
+                Thread.Sleep(100);
+                Stopwatch sw = Stopwatch.StartNew();
+                Resp legit = Send("POST", "/rpc", "{\"method\":\"ping\",\"params\":{}}", readTimeoutMs: 10000);
+                long ms = sw.ElapsedMilliseconds;
+                Check($"a legitimate request right after the flood is served without delay ({ms} ms)", legit.Status == 200 && legit.Ok == true && ms < 1500, legit);
+            }
+            finally
+            {
+                foreach (TcpClient c in flood)
+                {
+                    try { c.Close(); } catch { /* ignore */ }
+                }
+                try { holder.Close(); } catch { /* ignore */ }
+                s_port = savedPort;
+                srv.Stop();
+            }
+        }
+
+        /// <summary>Reads until the peer closes or the timeout; <paramref name="ended"/> is true when the peer closed (EOF or reset).</summary>
+        private static string ReadToEnd(TcpClient c, int timeoutMs, out bool ended)
+        {
+            ended = false;
+            MemoryStream ms = new MemoryStream();
+            try
+            {
+                c.ReceiveTimeout = timeoutMs;
+                NetworkStream s = c.GetStream();
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = s.Read(buf, 0, buf.Length)) > 0)
+                {
+                    ms.Write(buf, 0, n);
+                }
+                ended = true;
+            }
+            catch (IOException e)
+            {
+                ended = e.InnerException is SocketException se && se.SocketErrorCode != SocketError.TimedOut;
+            }
+            catch (SocketException se)
+            {
+                ended = se.SocketErrorCode != SocketError.TimedOut;
+            }
+            return Encoding.ASCII.GetString(ms.ToArray());
         }
 
         /// <summary>Sends the head, then one body byte per 200 ms until the server closes the connection; returns seconds until closed.</summary>

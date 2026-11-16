@@ -167,7 +167,7 @@ body changes nothing, or the body commits and the caller no longer times out.
 Works with the editor closed. No params.
 
 ```json
-{"pong": true, "pluginVersion": "0.7.0", "gameVersion": "1.14.1k", "unityVersion": "2021.3.45f2",
+{"pong": true, "pluginVersion": "0.8.0", "gameVersion": "1.14.1k", "unityVersion": "2021.3.45f2",
  "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings", "assets", "prefabs"],
  "gameVersionCheck": {"running": "1.14.1k", "tested": ["1.14.1k"], "accepted": false, "writesAllowed": true}}
 ```
@@ -196,7 +196,8 @@ No params. Never fails because of editor state.
               "aiOnly": false, "eventCount": 0, "lastEventId": 0, "alivePlayers": null},
  "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings", "assets", "prefabs"], "writesEnabled": true,
  "gameVersionCheck": {"running": "1.14.1k", "tested": ["1.14.1k"], "accepted": false, "writesAllowed": true},
- "publishBlock": {"active": true, "complete": true, "patchedCount": 59, "missing": []}}
+ "publishBlock": {"active": true, "complete": true, "patchedCount": 59, "missing": []},
+ "activeWrite": null}
 ```
 
 - `writesEnabled`: current value of `[Safety] EnableWrites`.
@@ -233,6 +234,10 @@ No params. Never fails because of editor state.
   already open with a long undo history when the plugin first saw it, or the save watch could not be installed);
   `null` when no mod is open.
 - `prefabContext`: `{"name": "Coin", "guid": "..."}` while a prefab asset is being edited, else null.
+- `activeWrite`: the write tool that currently holds the plugin's write queue, `{"tool": "set_property", "seconds": 1.2}`
+  (`seconds` since it started), or `null` when no write call is running. Visibility only: later write calls wait behind it.
+  A write call that is still running more than 14 s (dispatcher commit grace 4 s + stuck grace 10 s) after its caller's
+  deadline is logged once as an error in the BepInEx log; it is not released.
 
 ### `get_open_mod`
 
@@ -277,6 +282,9 @@ lists the edit-time scene and adds `"playMode": true` and `playModeNote` to the 
 
 Without `rootGuid` the result is a synthetic node for the current context root (scene hierarchy, or the prefab
 root while a prefab is edited). Its direct children are level 0. With `rootGuid` the given object is level 0.
+While a prefab is edited, the synthetic node has exactly one child: the open prefab's root object (`childCount` 1, or
+0 when `includeInactive` is false and that object is inactive). The other prefabs' objects, which the editor keeps under
+the same internal root, are not listed (the editor's hierarchy does not show them either); `rootGuid` still reaches them.
 
 ```json
 {
@@ -510,6 +518,11 @@ rebuilds its rotation from its own pitch/yaw every frame and smooths its positio
 sets both the public setters (`SetRotation`, `SetTargetPosition`, `Focus`) and the transform, and zeroes the private
 velocity. It then waits two rendered frames and the end of the frame before capturing.
 
+Concurrent `screenshot` calls are captured one at a time in arrival order: a call's `camera` is applied only when its
+turn comes (after the previous capture finished), so a second call can never move the camera between another call's
+move and its capture. A call whose caller already timed out is skipped without moving the camera. A capture that does
+not finish within 5 s (frames stalled) gives up its turn and answers `TIMEOUT`.
+
 Captured on the main thread after `WaitForEndOfFrame` with `ScreenCapture.CaptureScreenshotAsTexture()`, downscaled
 (keeping aspect ratio) when wider than `maxWidth`, PNG-encoded; all temporary textures are destroyed. The capture
 is not written to disk.
@@ -535,7 +548,7 @@ No params. Errors: `EDITOR_NOT_OPEN`. Read-only.
 |---|---|---|---|
 | `name` | string, required | - | must pass the test-mod rule; becomes folder name and Meta name |
 | `type` | `"Minigame"` or `"Board"` | `"Minigame"` | exact spelling |
-| `discardUnsaved` | bool | false | additive extra (the MCP server does not send it): allow dropping unsaved changes of the open test mod |
+| `discardUnsaved` | bool | false | additive extra (the MCP server passes it through when the agent gives it): allow dropping unsaved changes of the open test mod |
 
 Creates a blank mod the way File > New Mod > "Empty" does (`EditorSystem.CreateNewMod(path, type)` with no
 template, plus `AddAvailableMod`) and opens it. Besides the guard it checks: the game's filename rule
@@ -787,6 +800,17 @@ Also refused with `INVALID_PARAMS`, as the editor's menus are disabled there: a 
 (prefab instance, board space, item, text), and Item/BoardSpace mods without an open prefab (they have no scene
 hierarchy). The `ObjectType` members `NewPrefab`, `NewPlayer`, `Camera` have no menu entry and no implementation in
 `AddGameObject`; they are not exposed.
+
+Inactive parents: `AddGameObject` parents the new object first and then sets component fields that Unity only
+initialises in `Awake`, which does not run below an inactive parent, so in the editor it throws after the object exists.
+When `parentGuid` names an object that is inactive in the hierarchy (switched off itself or below a switched-off
+object), the plugin therefore builds the object under the context root (top level of the scene, or the open prefab's
+root object) and moves it under the requested parent in the same frame, keeping the local values (what a user does
+by dragging it there); an unnamed `empty` object gets the default name it would have got under that parent. The reply
+is the same as for an active parent. When the context root itself is inactive (the open prefab's root object switched
+off), the call is refused with `INVALID_STATE` before anything is created (switch it on first). If creating the object
+fails anyway after the editor built it, the plugin deselects and destroys the partly created object and the error says
+so (`creating the object failed (...); the partly created object ('Prop') was removed again; nothing was created`).
 
 Errors: guard codes, `INVALID_PARAMS`, `NOT_FOUND` (parent), `INVALID_STATE`, `BUSY_LOADING`, `TIMEOUT`, `INTERNAL`.
 
@@ -1735,6 +1759,11 @@ the call are one undo step. Values equal to the current ones give `changed: fals
  "clamped": ["m_seconds.min", "m_seconds.max"], "changed": true, "undoable": true, "undoStackLength": 8}
 ```
 
+All values are validated before anything is written. If the game throws while the parameters (or then the targets) are
+written, the ones written before stay applied (as with `set_property`): the call fails, the edit counts as an unsaved
+change, and the message ends with `; already applied in this call: m_a, m_b (one undo reverts them)` (player-settings
+triggers: `(player-settings triggers have no undo)`). The same holds for `set_trigger` parameters.
+
 ### `add_trigger` (write)
 
 | Param | Type | Default | |
@@ -1937,6 +1966,29 @@ Exactly what happens:
    changed.
 3. The plugin waits (up to 12 s) for the new asset, assigns its texture as the preview image (same fields as the
    picker, plus the guid the editor keeps for it) and marks the mod as having unsaved edits.
+
+The editor writes the file into whatever mod is open when its screenshot coroutine finishes (a few frames after step 2).
+So that a mod opened by hand in that moment (possibly a real one) can never receive it, and so that closing the mod
+cannot break the editor's screenshot code (it would throw on the missing mod and leave the editor "taking a screenshot",
+with gizmo icons and grid hidden, for the rest of the session), the plugin refuses these editor actions from step 2 until
+the file is written, for at most 8 s even if the capture never finishes (Harmony prefixes; the original is skipped as a
+whole, so a refused action changes nothing):
+
+| Refused action (editor UI) | Patched method | What the user sees |
+|---|---|---|
+| Open a mod: File > Open Mod dialog, File > Recent Mods, Published Mods > Open in mod editor | `EditorSystem.OpenMod` | the dialog closes (the game closes it before opening), the current mod stays open; with unsaved changes the Save / Don't Save prompt appears first and its Save still saves |
+| New Mod dialog > OK | `NewModPopup.CreateNewMod` (the dialog's action: creates the mod, then always adds a mod-list entry) | the dialog closes, no folder and no list entry are created |
+| (any other caller of mod creation) | `EditorSystem.CreateNewMod` | backstop; the only other caller is the game's automated test |
+| File > Close Mod | `EditorSystem.SetCurrentMod` with null only (switching to a mod always passes) | the mod stays open; with unsaved changes the prompt appears first and its Save still saves |
+| Delete Mod (File menu list and Open Mod dialog), confirmed | `MainMenuWidget.DeleteModResult`, `LoadModPopup.DeleteModResult` (close the open mod, then delete the folder) | the confirmation closes, nothing is closed or deleted |
+
+One warning is logged per capture (BepInEx log and game console): `Opening, creating, closing or deleting a mod was
+refused for a moment ...`; try again a second later. At all other times the prefixes do nothing. Leaving the editor
+(exit to the main menu) is never refused: `EditorSystem.OnDisable` ends the hold, and the screenshot coroutine runs on the
+editor object, so it stops when the editor is destroyed (or it writes into the still-open sandbox mod before that). If
+any of these methods is missing or cannot be patched at startup (game update), `capture_preview_image` refuses with
+`INTERNAL` (`capture_preview_image is disabled because the plugin's mod-switch guard could not be installed ...; nothing
+was changed`); every other tool keeps working. The prefixes are not part of the Workshop publish block.
 
 Reply: `{asset: {guid, name, assetType, location, relativePath, fileExists, sizeBytes, width, height}, assignedTo:
 "details.previewImage", undoable: false, note}`. The **file exists on disk immediately** (also if you never save and
@@ -2573,7 +2625,7 @@ L3). Every path the removal deletes passes the link check (`LINK_REFUSED` otherw
 `PummelMod.RemoveAsset` is then called, which destroys the Unity object, deletes `<file>` and `<file>.pmeta` and unlists
 the asset; a selected (non-dirty) asset is deselected first. Before that the references are scanned (see `get_asset`): any
 reference, or an incomplete scan, refuses the call with `ASSET_IN_USE` (`error.data` = the references) unless
-`force: true`; with `force` the reply lists `referencesNulled`. What the game does (code): `PummelPrefab.OnDestroy` sets `PrefabReference = null` on every Prefab Instance found by `GetComponentsInChildren` under the scene hierarchy root at once (they show "Missing Prefab"); instances inside other prefabs are not on that walk, and inactive objects probably are not either (`includeInactive` is not passed). Other references may still point at the destroyed asset in memory until the mod is reopened, so read tools (`get_object`, `get_action_graph`) can show its name and `location: external` (seen for a Spawn Prefab action parameter) or already show `{guid, missing: true}` (seen for a Spawner component's `Prefabs`, whose `PrefabGUIDs` keeps the guid). Seen in the game for an action parameter (Spawn Prefab `m_prefabs[0]`, plus `m_assetGUID` entries of `MainScene.scene`): the removed guid stays in the saved scene file and the reference reads as `{guid, missing: true}` after a reopen (the game copes: "prefab is null. Not spawning mod prefab."); other kinds of references were not checked in the game. `ModAssetReference.OnBeforeSerialize` re-derives the guid from the held object, so why the guid stays is not established from the code; on load `GetAsset` sets the asset to null when the guid is not in the list. "Saved as none" is therefore not what was seen. Also seen: after a forced material removal a material list read `[null]` rather than an empty list, and an `undo` logged "Couldn't find object with guid: <removed>" once in the game log. That the undo restores nothing for that reference is inferred from the code (`Extensions.ReadObject` returns null for an unknown guid), not observed. The plugin changes none of this. For a prefab the scan covers Prefab Instance objects in the scene, Spawner prefab
+`force: true`; with `force` the reply lists `referencesNulled`. What the game does (code): `PummelPrefab.OnDestroy` sets `PrefabReference = null` on every Prefab Instance found by `GetComponentsInChildren` under the scene hierarchy root at once (they show "Missing Prefab"); instances inside other prefabs are not on that walk, and inactive objects probably are not either (`includeInactive` is not passed). Other references may still point at the destroyed asset in memory until the mod is reopened; read tools (`get_object`, `get_action_graph`) show such a reference from its stored guid (`{guid, missing: true}`, or `null` when none is stored), not as the removed asset, because an asset value is shown as an asset only while it is the registered asset (see [References](#references); earlier builds showed the removed asset's name and `location: external`, seen for a Spawn Prefab action parameter; `{guid, missing: true}` was seen for a Spawner component's `Prefabs`, whose `PrefabGUIDs` keeps the guid). Seen in the game for an action parameter (Spawn Prefab `m_prefabs[0]`, plus `m_assetGUID` entries of `MainScene.scene`): the removed guid stays in the saved scene file and the reference reads as `{guid, missing: true}` after a reopen (the game copes: "prefab is null. Not spawning mod prefab."); other kinds of references were not checked in the game. `ModAssetReference.OnBeforeSerialize` re-derives the guid from the held object, so why the guid stays is not established from the code; on load `GetAsset` sets the asset to null when the guid is not in the list. "Saved as none" is therefore not what was seen. Also seen: after a forced material removal a material list read `[null]` rather than an empty list, and an `undo` logged "Couldn't find object with guid: <removed>" once in the game log. That the undo restores nothing for that reference is inferred from the code (`Extensions.ReadObject` returns null for an unknown guid), not observed. The plugin changes none of this. For a prefab the scan covers Prefab Instance objects in the scene, Spawner prefab
 lists, item prefabs, Spawn Prefab / Give Minigame Item / Set Player Visual action parameters (also inside the player-settings
 triggers and nested popup choices), an Item mod's use/receive/held prefabs and settings; for a texture also materials'
 texture slots, the preview image and the Workshop item's thumbnail and preview files (`kind: "workshop"`: refused without
@@ -3529,6 +3581,14 @@ Asset/object references (property values, action targets, settings) use one shap
 | `objectGuid`, `objectName` | for scene objects: `ModTransform` guid and name of the GameObject (use with `get_object`) |
 | `registered: false` | object not found in the asset registry (the scene file would store it as null) |
 | `missing: true` | only a guid is stored and no asset with that guid exists |
+
+A mod-asset value (a prefab, prop, ... held by a component or an action parameter) is shown as that asset only while
+it is the very asset object the game has registered under its guid. Otherwise the stored guid decides: the registered
+asset with that guid, `{guid, missing: true}`, or `null` when no guid is stored. Unity's serializer (undo snapshots,
+scene files) cannot store "none" for such a field and can leave a default placeholder object (`"DefaultObject"`, an
+unregistered guid) there; that reads as `null` ("no asset"), not as an asset. A reference that cannot be read at all
+(e.g. a renamed game member after a game update) shows `{"error": ...}` in `get_object`, and `remove_asset` then counts
+its reference scan as incomplete.
 
 ## Not in this build
 

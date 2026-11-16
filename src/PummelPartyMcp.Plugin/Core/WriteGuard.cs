@@ -167,7 +167,8 @@ namespace PummelPartyMcp.Core
                     string why = TestModName.Validate(target);
                     if (why != null)
                     {
-                        return new RpcException(ErrorCodes.GuardNotTestMod, $"'{target}' is not a test-mod name: it {why}");
+                        // the caller's raw name: escaped and capped (it reaches the log through RpcHandler's refusal line)
+                        return new RpcException(ErrorCodes.GuardNotTestMod, $"'{SafeText.Name(target)}' is not a test-mod name: it {why}");
                     }
                     if (snap.ModOpen && !snap.OpenModIsTestMod)
                     {

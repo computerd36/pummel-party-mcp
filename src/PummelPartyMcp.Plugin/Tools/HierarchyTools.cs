@@ -62,7 +62,31 @@ namespace PummelPartyMcp.Tools
                 throw RpcException.Internal("editor hierarchy root is missing");
             }
             PummelPrefab prefab = ed.CurrentPrefab;
-            JArray children = Children(root, 0, state, out int count);
+            JArray children;
+            int count;
+            if (prefab == null)
+            {
+                children = Children(root, 0, state, out count);
+            }
+            else
+            {
+                // m_prefabsRoot holds the objects of every prefab of the mod; the editor's hierarchy shows only the open prefab's
+                // object (HierarchyWidget draws CurrentPrefab.PrefabObject), so only that one is listed.
+                GameObject po = prefab.PrefabObject;
+                if (po == null)
+                {
+                    throw RpcException.Internal($"the open prefab '{prefab.name}' has no object");
+                }
+                Transform pt = po.transform;
+                ModTransform pmt = pt.GetComponent<ModTransform>();
+                children = new JArray();
+                count = 0;
+                if (pmt != null && (state.IncludeInactive || po.activeSelf))
+                {
+                    count = 1;
+                    children.Add(Node(pt, pmt, 0, state));
+                }
+            }
             JObject result = new JObject
             {
                 ["guid"] = null,

@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using ModSystem.Logic;
 using Newtonsoft.Json.Linq;
+using PummelPartyMcp.Core;
 using UnityEngine;
 
 namespace PummelPartyMcp.Game
@@ -88,7 +89,7 @@ namespace PummelPartyMcp.Game
                         ["repeatInterval"] = Number(burst.repeatInterval),
                         ["probability"] = Number(burst.probability),
                     };
-                case ModAsset asset: return AssetRef(asset);
+                case ModAsset asset: return AssetOrGuid(asset, hasGuidFields: false);
                 case ModLogicTrigger trigger: return Trigger(trigger, depth);
                 case ModAction action: return Action(action, -1, depth);
                 case Delegate _: return Unsupported(value.GetType());
@@ -266,7 +267,11 @@ namespace PummelPartyMcp.Game
             {
                 return JValue.CreateNull();
             }
-            string key = guid.ToString();
+            return GuidKeyRef(guid.ToString());
+        }
+
+        private JToken GuidKeyRef(string key)
+        {
             if (LookupAsset(key, out ModAsset asset))
             {
                 return AssetRef(asset);
@@ -274,23 +279,49 @@ namespace PummelPartyMcp.Game
             return new JObject { ["guid"] = key, ["missing"] = true };
         }
 
+        /// <summary>
+        /// A ModAsset value with the guid fields that belong to it (Core/ReferenceRules.cs AssetRefRules): rendered as that asset only
+        /// when the asset registry holds this very instance; otherwise from the guid fields (registered asset, {guid, missing} or
+        /// null). A default ModAsset that Unity's serializer put where "no asset" was stored ("DefaultObject", unregistered guid)
+        /// therefore reads as null (or {guid, missing} for a bare field), never as an asset.
+        /// </summary>
+        public JToken AssetOrGuid(ModAsset asset, bool hasGuidFields, params SerializableGuid[] guidFields)
+        {
+            string own = asset == null || asset.guid.Equals(SerializableGuid.Empty) ? null : asset.guid.ToString();
+            ModAsset registered = null;
+            bool known = own != null && LookupAsset(own, out registered);
+            string[] fields = new string[guidFields?.Length ?? 0];
+            for (int i = 0; i < fields.Length; i++)
+            {
+                fields[i] = guidFields[i].Equals(SerializableGuid.Empty) ? null : guidFields[i].ToString();
+            }
+            AssetRefDecision d = AssetRefRules.Decide(asset != null, own, known && ReferenceEquals(registered, asset), known, hasGuidFields, fields);
+            switch (d.Shape)
+            {
+                case AssetRefShape.Asset:
+                    return AssetRef(asset);
+                case AssetRefShape.ByGuid:
+                    return GuidKeyRef(d.Guid);
+                default:
+                    return JValue.CreateNull();
+            }
+        }
+
         private JToken AssetReferenceJson(object reference)
         {
+            // Required members (Core/RequiredMembers.cs): a renamed field is a clear INTERNAL error, never a silent null (a reference
+            // scan then reports itself incomplete instead of missing a reference).
             Type t = reference.GetType();
-            object asset = GameReflection.FindField(t, "m_asset")?.GetValue(reference);
+            object asset = GameReflection.RequireField(t, "m_asset").GetValue(reference);
             if (asset is UnityEngine.Object uo && uo != null)
             {
                 return UnityObjectRef(uo);
             }
-            if (asset is ModAsset ma)
-            {
-                return AssetRef(ma);
-            }
-            object cur = GameReflection.FindField(t, "m_curAssetGUID")?.GetValue(reference);
-            object stored = GameReflection.FindField(t, "m_assetGUID")?.GetValue(reference);
-            SerializableGuid g = cur is SerializableGuid c && !c.Equals(SerializableGuid.Empty) ? c
-                : stored is SerializableGuid s ? s : SerializableGuid.Empty;
-            return GuidRef(g);
+            object cur = GameReflection.RequireField(t, "m_curAssetGUID").GetValue(reference);
+            object stored = GameReflection.RequireField(t, "m_assetGUID").GetValue(reference);
+            return AssetOrGuid(asset as ModAsset, hasGuidFields: true,
+                cur is SerializableGuid c ? c : SerializableGuid.Empty,
+                stored is SerializableGuid s ? s : SerializableGuid.Empty);
         }
 
         private bool LookupAsset(string guid, out ModAsset asset)

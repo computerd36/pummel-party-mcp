@@ -93,4 +93,63 @@ namespace PummelPartyMcp.Core
                 $"'{path}': object '{foundObjectName}' has {hits.Count} components of type {expectedName} ({matching}); pass the guid of the component you mean");
         }
     }
+
+    /// <summary>How a mod-asset value is rendered: as that asset, by a guid (registered asset or {guid, missing}), or as null.</summary>
+    public enum AssetRefShape
+    {
+        Null,
+
+        /// <summary>The instance itself is the registered asset: rendered as that asset.</summary>
+        Asset,
+
+        /// <summary>Rendered from <see cref="AssetRefDecision.Guid"/>: the registered asset with that guid, or {guid, missing: true}.</summary>
+        ByGuid,
+    }
+
+    public struct AssetRefDecision
+    {
+        public AssetRefShape Shape;
+        public string Guid;
+    }
+
+    /// <summary>
+    /// Review C: a ModAsset is a [Serializable] class (default name "DefaultObject", a random guid), and Unity's JsonUtility (the game's
+    /// undo snapshots and scene files) cannot store null for such a field, so "no asset" can come back as a default instance that is
+    /// not any registered asset. An instance is therefore rendered as an asset only when the asset registry returns that same
+    /// instance for its guid; otherwise the guid fields decide. Unity-free (unit tested); guids are strings, null = empty guid.
+    /// </summary>
+    public static class AssetRefRules
+    {
+        /// <param name="hasInstance">A ModAsset instance is present (field / m_asset not null).</param>
+        /// <param name="instanceGuid">Its own guid (null when empty).</param>
+        /// <param name="instanceIsRegistered">The registry returns this very instance for <paramref name="instanceGuid"/>.</param>
+        /// <param name="guidIsRegistered">The registry knows some asset with <paramref name="instanceGuid"/> (maybe another instance).</param>
+        /// <param name="hasGuidFields">The value has its own guid fields (ModAssetReference m_curAssetGUID/m_assetGUID, a component's
+        /// backing guid field); false for a bare ModAsset field, whose only guid is the instance's.</param>
+        /// <param name="fieldGuids">Those guid fields in priority order (null entries = empty).</param>
+        public static AssetRefDecision Decide(bool hasInstance, string instanceGuid, bool instanceIsRegistered, bool guidIsRegistered,
+            bool hasGuidFields, params string[] fieldGuids)
+        {
+            if (hasInstance && instanceIsRegistered)
+            {
+                return new AssetRefDecision { Shape = AssetRefShape.Asset };
+            }
+            if (hasGuidFields && fieldGuids != null)
+            {
+                foreach (string g in fieldGuids)
+                {
+                    if (!string.IsNullOrEmpty(g))
+                    {
+                        return new AssetRefDecision { Shape = AssetRefShape.ByGuid, Guid = g };
+                    }
+                }
+            }
+            if (hasInstance && !string.IsNullOrEmpty(instanceGuid) && (guidIsRegistered || !hasGuidFields))
+            {
+                // a copy of a registered asset (reference scans must never miss it), or a bare asset field whose guid is all there is
+                return new AssetRefDecision { Shape = AssetRefShape.ByGuid, Guid = instanceGuid };
+            }
+            return new AssetRefDecision { Shape = AssetRefShape.Null };
+        }
+    }
 }

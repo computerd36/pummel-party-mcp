@@ -7,35 +7,42 @@ using UnityEngine;
 
 namespace PummelPartyMcp.Tools
 {
-    /// <summary>screenshot: optionally moves the editor camera first (camera parameter, view only); captures the back buffer at end of frame (after the editor's ImGui pass), PNG, base64.</summary>
+    /// <summary>
+    /// screenshot: optionally moves the editor camera first (camera parameter, view only); captures the back buffer at end of frame
+    /// (after the editor's ImGui pass), PNG, base64. Captures run one at a time (<see cref="CaptureQueue"/>): a call's camera is
+    /// applied only when its turn comes, so a concurrent call can never move the camera between another call's move and capture.
+    /// </summary>
     internal static class ScreenshotTool
     {
-        public static void Register(ToolRegistry registry, MonoBehaviour host)
+        private sealed class ShotRequest
         {
+            public int MaxWidth;
+            public CameraRequest Camera;
+            public volatile bool Moved;
+        }
+
+        private static bool s_watching;
+
+        public static void Register(ToolRegistry registry, MonoBehaviour host, FramePoller poller, IPluginLog log)
+        {
+            CaptureQueue queue = null;
+            queue = new CaptureQueue(e => StartCapture(host, queue, e), log);
             registry.Register(ToolDefinition.Read("screenshot", ctx =>
             {
-                int maxWidth = ctx.GetInt("maxWidth", 1280, 64, 7680);
-                CameraRequest camera = CameraRules.Parse(ctx.Params["camera"]);
-                bool moved = false;
+                ShotRequest req = new ShotRequest
+                {
+                    MaxWidth = ctx.GetInt("maxWidth", 1280, 64, 7680),
+                    Camera = CameraRules.Parse(ctx.Params["camera"]),
+                };
                 try
                 {
-                return ctx.OnMainThreadDeferred(completion =>
-                {
-                    JObject applied = null;
-                    if (camera != null)
+                    return ctx.OnMainThreadDeferred(completion =>
                     {
-                        // view change only (not a write tool): validated first, then applied once the caller can no longer cancel
-                        applied = EditorCameraAccess.Apply(camera, completion.TryCommit);
-                        if (applied == null)
-                        {
-                            return; // the caller gave up before anything changed
-                        }
-                        moved = true;
-                    }
-                    host.StartCoroutine(Capture(maxWidth, completion, applied));
-                });
+                        queue.Enqueue(new CaptureQueue.Entry(completion, req));
+                        Watch(queue, poller);
+                    });
                 }
-                catch (RpcException e) when (moved && e.Code == ErrorCodes.Timeout)
+                catch (RpcException e) when (req.Moved && e.Code == ErrorCodes.Timeout)
                 {
                     // the dispatcher's text is about edits ("check get_object"); this call only moved the view
                     throw new RpcException(ErrorCodes.Timeout, "the camera was moved but the capture did not finish (the game's frames stalled?); call screenshot again");
@@ -43,31 +50,84 @@ namespace PummelPartyMcp.Tools
             }));
         }
 
-        private static IEnumerator Capture(int maxWidth, IWorkCompletion completion, JObject appliedCamera)
+        /// <summary>Per-frame pump while captures are queued or running, so a slot whose coroutine never finishes is taken back in time.</summary>
+        private static void Watch(CaptureQueue queue, FramePoller poller)
         {
-            if (appliedCamera != null)
+            if (s_watching || queue.Idle)
             {
-                // two rendered frames: the editor camera snaps on its next Update and the scene view renders after that
-                yield return null;
-                yield return null;
+                return;
             }
-            yield return new WaitForEndOfFrame();
-            if (completion.IsCancelled)
+            s_watching = true;
+            poller.Add(() =>
             {
-                yield break;
+                bool done = true;
+                try
+                {
+                    queue.FrameTick();
+                    done = queue.Idle;
+                    return done;
+                }
+                finally
+                {
+                    if (done)
+                    {
+                        s_watching = false;
+                    }
+                }
+            });
+        }
+
+        /// <summary>The queue's turn for one call: apply its camera (if any, through the commit point), then start the capture coroutine.</summary>
+        private static bool StartCapture(MonoBehaviour host, CaptureQueue queue, CaptureQueue.Entry entry)
+        {
+            ShotRequest req = (ShotRequest)entry.State;
+            JObject applied = null;
+            if (req.Camera != null)
+            {
+                // view change only (not a write tool): validated first, then applied once the caller can no longer cancel
+                applied = EditorCameraAccess.Apply(req.Camera, entry.Completion.TryCommit);
+                if (applied == null)
+                {
+                    return false; // the caller gave up before anything changed
+                }
+                req.Moved = true;
             }
+            host.StartCoroutine(Capture(req.MaxWidth, entry.Completion, applied, () => queue.Release(entry)));
+            return true;
+        }
+
+        private static IEnumerator Capture(int maxWidth, IWorkCompletion completion, JObject appliedCamera, Action release)
+        {
             try
             {
-                JObject result = CaptureNow(maxWidth);
                 if (appliedCamera != null)
                 {
-                    result["camera"] = appliedCamera;
+                    // two rendered frames: the editor camera snaps on its next Update and the scene view renders after that
+                    yield return null;
+                    yield return null;
                 }
-                completion.SetResult(result);
+                yield return new WaitForEndOfFrame();
+                if (completion.IsCancelled)
+                {
+                    yield break;
+                }
+                try
+                {
+                    JObject result = CaptureNow(maxWidth);
+                    if (appliedCamera != null)
+                    {
+                        result["camera"] = appliedCamera;
+                    }
+                    completion.SetResult(result);
+                }
+                catch (Exception e)
+                {
+                    completion.SetException(e);
+                }
             }
-            catch (Exception e)
+            finally
             {
-                completion.SetException(e);
+                release(); // frees the capture slot and starts the next queued call
             }
         }
 

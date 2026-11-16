@@ -736,8 +736,10 @@ namespace PummelPartyMcp.Core
                 case JTokenType.Object:
                 {
                     JObject o = (JObject)token;
-                    // L1: {"truncatedItems": n} is the converter's marker for array items left out (MaxArrayItems)
-                    if (o["truncated"] != null || o["unsupported"] != null || o["unavailable"] != null || o["truncatedItems"] != null)
+                    // L1: {"truncatedItems": n} is the converter's marker for array items left out (MaxArrayItems).
+                    // {"error": ...} is what the readers put where a value could not be read (e.g. a renamed game member): that value
+                    // may hold the asset, so the scan is incomplete (a reference must never be missed).
+                    if (o["truncated"] != null || o["unsupported"] != null || o["unavailable"] != null || o["truncatedItems"] != null || o["error"] != null)
                     {
                         incomplete = true;
                     }

@@ -169,13 +169,10 @@ namespace PummelPartyMcp.Game
 
         private static JToken AssetFieldOrGuid(ModBehaviour c, ValueConverter conv, string assetField, string guidField)
         {
+            // the cached asset counts only when it is the registered asset (a default instance from the serializer is "none")
             object asset = Field(c, assetField);
-            if (asset is ModAsset a)
-            {
-                return conv.AssetRef(a);
-            }
             object g = Field(c, guidField);
-            return g is SerializableGuid guid ? conv.GuidRef(guid) : JValue.CreateNull();
+            return conv.AssetOrGuid(asset as ModAsset, hasGuidFields: true, g is SerializableGuid guid ? guid : SerializableGuid.Empty);
         }
 
         private static JToken GuidArrayRefs(ModBehaviour c, ValueConverter conv, string guidsField)
