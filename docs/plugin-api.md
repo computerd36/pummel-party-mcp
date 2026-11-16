@@ -1,4 +1,4 @@
-# pummel-party-mcp HTTP API (api v2, plugin 0.8.0)
+# pummel-party-mcp HTTP API (api v2, plugin 1.0.0)
 
 The BepInEx plugin `PummelPartyMcp.Plugin` runs inside Pummel Party and exposes the mod editor's state on a
 local HTTP endpoint. api v2 adds the guard layer, the Workshop publish block and four mod lifecycle
@@ -171,7 +171,7 @@ Answered on the HTTP thread (also while the main thread is busy). No params. Lik
 with it closed nothing listens.
 
 ```json
-{"pong": true, "pluginVersion": "0.8.0", "gameVersion": "1.14.1k", "unityVersion": "2021.3.45f2",
+{"pong": true, "pluginVersion": "1.0.0", "gameVersion": "1.14.1k", "unityVersion": "2021.3.45f2",
  "apiVersion": 2, "sessionId": "3b0f2c...e1", "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings", "assets", "prefabs"],
  "gameVersionCheck": {"running": "1.14.1k", "tested": ["1.14.1k"], "accepted": false, "writesAllowed": true}}
 ```

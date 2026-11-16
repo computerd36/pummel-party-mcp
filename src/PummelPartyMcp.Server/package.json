@@ -1,6 +1,6 @@
 {
   "name": "pummel-party-mcp",
-  "version": "0.8.0",
+  "version": "1.0.0",
   "description": "MCP server for Pummel Party's built-in Mod Editor: connects an AI agent to the pummel-party-mcp BepInEx plugin (loopback only, sandbox mods only). Unofficial.",
   "type": "module",
   "bin": {
@@ -21,8 +21,6 @@
     "node": ">=22"
   },
   "license": "MIT",
-  "private": true,
-  "//": "private stays true until the author decides to publish.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/computerd36/pummel-party-mcp.git",

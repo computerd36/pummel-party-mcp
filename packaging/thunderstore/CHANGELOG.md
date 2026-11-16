@@ -4,7 +4,7 @@ All notable changes to pummel-party-mcp (the BepInEx plugin and the MCP server) 
 
 `packaging/thunderstore/CHANGELOG.md` is a copy of this file. Edit this one; `scripts/package-thunderstore.ps1` copies it into the Thunderstore package and `scripts/prepare-release.ps1` checks that the two files are identical.
 
-## [Unreleased] - 1.0.0
+## [1.0.0] - 2026-11-17
 
 First public release. Everything below was added after 0.7.0 and was developed as the unreleased 0.8.0 line; it ships as 1.0.0.
 
