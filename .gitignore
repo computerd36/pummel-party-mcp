@@ -39,3 +39,14 @@ artifacts/
 
 # npm pack output
 *.tgz
+
+# Secrets and local machine files
+*.token
+.env
+.env.*
+.npmrc
+.vscode/
+*.log
+Thumbs.db
+desktop.ini
+.DS_Store

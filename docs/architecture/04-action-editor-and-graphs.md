@@ -282,7 +282,7 @@ There are **no** methods named AddAction / RemoveAction / MoveAction anywhere; a
   * `EditorSystem.FocusVisualScriptWindow` (focus an ImGui window titled "Visual Scripting", `:1909-1912`) and `CreateNewVisualScript` (`:2445-2456`) have **no callers**. [C] Whether the window exists in a stripped assembly or native code is **[?]**; the decompile contains only `Assembly-CSharp`.
   * `RoslynUtility.CompileScript` has no caller and `PummelMod.CompileResult` (`:151`) has a private setter that is never assigned, so no mod script assembly is ever produced in this build; `ModScriptReference` (`:101-104`) and `WorkshopController.cs:461-463,838` consume that null. [C]
   * `MinigameMod.cs:50-60` renames visual scripts named "ModPlayer"/"ModController" on template creation, suggesting old templates once shipped `.pgf` files [I].
-  * The user wiki in `docs/md` never mentions a graph editor; all user-facing logic goes through Actions.
+  * The official mod wiki never mentions a graph editor; all user-facing logic goes through Actions.
 * Conclusion: (b) is a dormant/dev-leftover subsystem (model, importer, code generator present; editor UI and compile step absent). A plugin cannot create or edit graphs through the shipped UI and should not rely on it. [C/I]
 
 ## 8. Gotchas for external callers

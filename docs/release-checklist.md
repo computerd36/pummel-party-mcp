@@ -10,8 +10,7 @@ Never reuse a version number. A version uploaded to Thunderstore or npm can neve
 
 - [ ] Close the game. Run `scripts\verify-backup.ps1` (see the README, "Safety model") and make sure the backup of your real mods is current and verified.
 - [ ] If you have not already, decide the version (MAJOR.MINOR.PATCH). Below, `<v>` stands for it.
-- [ ] Release gates met: the planned work is closed and reviewed; any outside contact that you wanted to wait for is answered, or you decided to go ahead (record the outcome in your local notes).
-- [ ] The planned normal-play behaviour is implemented and the README section "What is active during normal play" no longer contains the TODO paragraph (replace it with the final text). Do not release with that TODO in the README.
+- [ ] Release gates met: the planned work is closed and reviewed.
 
 ## 1. Public repository
 
@@ -19,7 +18,6 @@ Never reuse a version number. A version uploaded to Thunderstore or npm can neve
 - [ ] `git ls-files` shows no `*.dll`, `*.pdb`, `*.exe`, `*.token`, no `decompiled/`, nothing over 5 MB (CI checks this too).
 - [ ] `CHANGELOG.md`: change the heading `## [Unreleased] - <v>` to `## [<v>] - <date>`, and read the entry once more for accuracy. Copy the file over `packaging\thunderstore\CHANGELOG.md` (they must be identical; `prepare-release.ps1` checks it, and `package-thunderstore.ps1` packages the root file).
 - [ ] `ROADMAP.md` is up to date.
-- [ ] Decide whether `CLAUDE.md` stays tracked or becomes local and untracked (`git rm --cached CLAUDE.md`, add it to `.gitignore`), unless something in the repository still depends on it.
 - [ ] Issue template (`.github/ISSUE_TEMPLATE/`) is present. Optionally enable GitHub's "private vulnerability reporting" in the repository settings.
 - [ ] The repository is made public by the maintainer (GitHub settings). Do this last, together with the GitHub release, when the npm package is published and the Thunderstore package is visible (see the order at the top).
 
@@ -102,9 +100,3 @@ Facts: community `pummel-party` (https://thunderstore.io/c/pummel-party/), team 
 - [ ] CI never publishes (it has no secrets). Keep it that way.
 - [ ] Exit test: a fresh Windows account or a second PC installs everything from the public instructions without the .NET SDK, connects Claude Code, and builds and playtests a sandbox minigame. The publish block is complete, and your real mods still match the backup.
 - [ ] After the release: open `CHANGELOG.md` and add a new `## [Unreleased]` section on top for the next version.
-
-## Open items to settle before the first release
-
-- The final icon.
-- The final text for "What is active during normal play" in the README.
-- The Thunderstore README and the root README both name the tested game version; update both after a game update.

@@ -2670,8 +2670,7 @@ Still not confirmed in the game: the audio and OBJ loaders on non-ASCII mod fold
 malformed text, MP3 and OGG decoding and their duration limits, the shipped shader property ranges, the value of
 `defaultShaderGuid`, the compression refusal for a texture used only by a player-settings trigger, whether the open settings
 window re-clamps values the plugin wrote, and the visual effect of a mesh re-import on placed objects (from the code they keep the previous mesh until the mod is
-reopened; not looked at in the game). The in-game test script is
-`docs/phase4-ingame-tests.local.md` (local).
+reopened; not looked at in the game).
 
 ### Generated asset rules
 
@@ -2884,8 +2883,7 @@ and a retry works.
 
 Not confirmed in the game: the awake side effects of the scene-subtree copy with live components in every case, the exact
 bytes the real serializer writes (the header is read from the game's static constructor), `ForceUpdate`
-on many instances, and the visual result of closing a prefab. The in-game script is `docs/phase4-ingame-tests.local.md`
-(local), section C.
+on many instances, and the visual result of closing a prefab.
 
 ## Validation, playtest and batch
 
