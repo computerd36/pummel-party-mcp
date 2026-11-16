@@ -123,6 +123,14 @@ namespace PummelPartyMcp.Hooks
             return null;
         }
 
+        /// <summary>Ends any hold and removes the prefixes (the Mod Editor closed). Never throws.</summary>
+        public static PatchRemoval.Result Uninstall()
+        {
+            Installed = false;
+            Disarm();
+            return PatchRemoval.Remove(HarmonyId);
+        }
+
         /// <summary>Starts a hold (main thread, right before TakeScreenGrab). Ends at <see cref="Disarm"/> or after <see cref="MaxHold"/>.</summary>
         public static void Arm()
         {

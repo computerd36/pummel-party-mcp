@@ -25,6 +25,13 @@ namespace PummelPartyMcp.Game
         private static ModAction s_lastAction;
         private static ModEvent s_lastEvent;
 
+        /// <summary>The Mod Editor closed: drop the references to the last action and event (their objects are gone).</summary>
+        public static void Reset()
+        {
+            s_lastAction = null;
+            s_lastEvent = null;
+        }
+
         private static Dictionary<int, string> Names(Type enumType)
         {
             Dictionary<int, string> d = new Dictionary<int, string>();

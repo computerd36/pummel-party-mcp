@@ -27,6 +27,7 @@ namespace PummelPartyMcp.Hooks
         /// <summary>Returns null on success, otherwise the error text (the tracker then falls back to the editor's flag).</summary>
         public static string Install(Harmony harmony, MethodBase target)
         {
+            Installed = false;
             if (harmony == null || target == null)
             {
                 return "SaveCurrentMod not found";
@@ -42,6 +43,14 @@ namespace PummelPartyMcp.Hooks
             {
                 return e.GetType().Name + ": " + e.Message;
             }
+        }
+
+        /// <summary>Removes the postfix (the Mod Editor closed) and clears the callback. Never throws.</summary>
+        public static PatchRemoval.Result Uninstall()
+        {
+            Installed = false;
+            OnSaved = null;
+            return PatchRemoval.Remove(HarmonyId);
         }
 
         private static void Postfix()

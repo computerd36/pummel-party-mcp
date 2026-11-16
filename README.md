@@ -28,7 +28,7 @@ Windows and Steam. Read [Use at your own risk](#use-at-your-own-risk) first, and
      claude mcp add pummel-party-mcp --env PUMMEL_PARTY_MCP_GAME_DIR="D:\Games\Pummel Party" -- cmd /c npx -y pummel-party-mcp
      ```
 
-   - **Installed with a mod manager:** the plugin lives in the manager's profile folder, so the token file is there too, and the automatic search through Steam does not find it. Tell the server where it is. Use the manager's "browse profile folder" function to open the profile folder; the token file is `<profile folder>\BepInEx\config\PummelPartyMcp.token` (it exists after the game has been started once with the plugin):
+   - **Installed with a mod manager:** the plugin lives in the manager's profile folder, so the token file is there too, and the automatic search through Steam does not find it. Tell the server where it is. Use the manager's "browse profile folder" function to open the profile folder; the token file is `<profile folder>\BepInEx\config\PummelPartyMcp.token` (it exists after the Mod Editor has been opened once with the plugin installed):
 
      ```powershell
      claude mcp add pummel-party-mcp --env PUMMEL_PARTY_MCP_TOKEN_FILE="<profile folder>\BepInEx\config\PummelPartyMcp.token" -- cmd /c npx -y pummel-party-mcp
@@ -50,12 +50,12 @@ If something does not work, see [Troubleshooting](#troubleshooting).
 
 It is an editor tool, not a cheat tool. An agent can look at the open mod, build objects, components and logic, change mod settings, import textures, meshes and sounds into a sandbox mod, create prefabs, validate the mod, run an AI-only playtest and read back what actually happened (player state, events, screenshots, log). What exists is listed in [Tools](#tools); what is planned is in [ROADMAP.md](ROADMAP.md); what changed is in [CHANGELOG.md](CHANGELOG.md).
 
-**While the plugin is enabled, publishing to the Steam Workshop is blocked** (create, update and delete), on purpose, so that a bug or a bad AI edit cannot reach a live Workshop item. To publish a mod by hand, quit the game, set `[General] PluginEnabled = false` in the plugin config (see [Configuration](#configuration)), start the game, publish as usual, quit, and set it back to `true`.
+**While the Mod Editor is open with the plugin enabled, publishing to the Steam Workshop is blocked** (create, update and delete), on purpose, so that a bug or a bad AI edit cannot reach a live Workshop item. Outside the Mod Editor the plugin blocks nothing. To publish a mod by hand, quit the game, set `[General] PluginEnabled = false` in the plugin config (see [Configuration](#configuration)), start the game, publish as usual, quit, and set it back to `true`.
 
 ## Use at your own risk
 
 - **No endorsement.** This project is not endorsed, supported or approved by Rebuilt Games or by Valve. Pummel Party has no separate developer licence agreement that we could find; the [Steam Subscriber Agreement](https://store.steampowered.com/subscriber_agreement/) applies. Its wording on third-party software and on reverse engineering is broad, and nobody has confirmed that a plugin like this one is permitted. You decide whether to use it; see [docs/legal-notes.md](docs/legal-notes.md) for what was checked. Nothing here is legal advice.
-- **Disable the plugin for normal play.** BepInEx loads the plugin every time the game starts, including for online matches. It does nothing there except keep the Workshop publish block and a few record-only hooks installed, but a third-party plugin loaded during online play is exactly what the agreement's anti-cheat wording describes. When you are not modding, set `[General] PluginEnabled = false` in the plugin config (see [Configuration](#configuration)) and restart the game, or keep a separate game shortcut without BepInEx (a mod-manager profile without the plugin does the same).
+- **Disable the plugin for normal play.** BepInEx loads the plugin file every time the game starts, including for online matches. Outside the Mod Editor the plugin has no open port, no patches and no per-frame code (see [What is active during normal play](#what-is-active-during-normal-play)), but a third-party plugin loaded during online play is still what the agreement's anti-cheat wording describes. When you are not modding, set `[General] PluginEnabled = false` in the plugin config (see [Configuration](#configuration)) and restart the game, or keep a separate game shortcut without BepInEx (a mod-manager profile without the plugin does the same).
 - **You are responsible for what you publish.** The plugin never publishes anything. If you publish a mod that an AI agent helped build, you do it by hand, under the Steam Workshop terms, as its author.
 - **No warranty** (see the [licence](#licence)). Back up your mod projects before you start (see [Safety model](#safety-model)).
 
@@ -67,7 +67,7 @@ What you can check:
 - Real mods cannot be opened, changed, renamed or deleted by the tools. `create_test_mod` and `open_test_mod` refuse while a real mod is open; you close it by hand.
 - No mod deletion, no mod rename, no Workshop tool of any kind. Assets are handled only by the bounded tools below (0.8.0): `import_asset` copies a file you name into the open sandbox mod's `Assets` folder and never touches the source (it is only read; never moved, changed, locked or deleted); it writes only to a fixed sub-folder (`Textures`, `Props`, `Audio`) under a checked, plain name, never overwrites (a taken name becomes `name (1)`), accepts only `.png .jpg .jpeg .obj .wav .mp3 .ogg` whose content matches, refuses local-path tricks (UNC/network/device paths are not supported yet), and is limited by `[Assets] MaxImportFileMB` (50) and `MaxModAssetsMB` (500). If the game cannot import the copy, only what that call created is removed. `remove_asset` deletes only the open sandbox mod's own custom textures, props, audio clips, materials and prefabs (never built-in assets or the open prefab; the path must be strictly inside the mod's `Assets` folder; refused while the asset is still used unless `force`). Imports, material changes and removals write or delete files immediately and are not undoable. The editor's own `AddAsset(copy: true)` is never called (it can delete the source file). Prefabs (0.8.0): `create_prefab` (empty, or a copy of a scene object), `open_prefab` and `close_prefab` enter and leave the prefab edit context like the editor's UI; creating and closing write the `.pfab` immediately. Because a `.pfab` the game fails to write completely makes the whole mod unloadable, every prefab write the plugin triggers (create, close, and each prefab inside `save_mod`) is serialised in memory first (refused if that fails), checked afterwards (header and length) and restored from a copy kept before the write if it is bad; a new prefab's files are removed on failure. Prefab names never overwrite an existing asset or file.
 - Links (junctions, symlinks, mount points, hard links) inside a sandbox mod are never followed for writes or deletes: the tools refuse (`LINK_REFUSED`) and write nothing.
-- Workshop create/update/delete is blocked at two layers: the game's own publish methods and the Steamworks write calls underneath them. It fails closed: if a block target cannot be patched (for example after a game update) or a patch is removed later, every write tool returns `PUBLISH_BLOCK_INCOMPLETE`. `get_status` shows the live state (`publishBlock.complete`).
+- Workshop create/update/delete is blocked at two layers: the game's own publish methods and the Steamworks write calls underneath them. The block is installed when the Mod Editor opens, before the API server starts, and removed when the editor closes (if a removal fails, the BepInEx log says so and the leftover keeps blocking until the next editor visit). It fails closed: if a block target cannot be patched when the editor opens (for example after a game update), only `ping`, `get_status`, `get_log` and `self_test` answer in that editor session and every other tool returns `PUBLISH_BLOCK_INCOMPLETE`. If a patch is removed later, every write tool returns `PUBLISH_BLOCK_INCOMPLETE`. `get_status` shows the live state (`publishBlock.complete`).
 - Loopback only. The server binds `127.0.0.1`, every request needs a per-install random token, and requests with an `Origin` header or a non-local `Host` are rejected.
 - Game-version gate (0.7.0): on a game version the plugin was not tested with, write tools are refused with `GAME_VERSION_UNTESTED` until `[Safety] AcceptedGameVersion` equals the running version exactly (tested version: `1.14.1k`; read tools keep working; the config is re-read on the next call, no restart).
 - Writes can be switched off with `[Safety] EnableWrites = false`.
@@ -94,15 +94,17 @@ The backup copies files only, writes a SHA-256 manifest and never modifies the s
 
 ## What is active during normal play
 
-Today the plugin is loaded every time the game starts, with BepInEx. Outside the Mod Editor it does the following:
+The plugin is active only while the Mod Editor is open.
 
-- It keeps the Workshop publish block installed.
-- It installs a few record-only hooks (they record what happens and change nothing; most return at once outside a playtest).
-- It runs the API server on `127.0.0.1` with its token. Write tools only act on `MCP_` sandbox mods, and need the editor open.
+- When you open the Mod Editor, the plugin first installs the Workshop publish block. Then it starts the API server on `127.0.0.1` and a few record-only hooks (they record what happens in a playtest and change nothing).
+- When you leave the Mod Editor, the plugin stops the server, ends the calls that are still waiting (`EDITOR_NOT_OPEN`: not run) or running (`EDITOR_CLOSED_DURING_CALL`: check before retrying), and removes its patches from the game. If a removal fails, the BepInEx log says so (see below).
+- In the main menu and in matches (local or online) the plugin has no open port, no log listener, no per-frame code and, unless a removal failed, no patches in the game. The only plugin code that runs there is a short check at each scene load that notices the Mod Editor opening.
+- A playtest started from the Mod Editor keeps the editor open, so the plugin stays active during it.
+- In rare cases the game keeps the editor in memory after it goes back to the main menu (for example after a lost network session while no mod was open). The plugin then stays active, on the safe side, until the editor is really gone.
 
-To have nothing of it active, set `[General] PluginEnabled = false` (see [Configuration](#configuration)) or start the game without the plugin.
+Outside the Mod Editor the plugin blocks nothing: the main-menu Workshop window works as in the unmodded game. The patched game methods behave like the originals again after the editor closes. A game method that was patched once keeps a Harmony-generated replacement after the plugin removed its patch: it behaves like the original and carries no patch of the plugin, but its machine code is not the original one. If removing a patch fails, one Error in the BepInEx log names it and it stays in the game until the next time the Mod Editor opens and closes: a leftover playtest hook still runs (and returns at once) in mod minigames, a leftover publish-block prefix still blocks the main-menu Workshop delete. Restart the game to be sure.
 
-**TODO (planned for 1.0.0, not implemented yet; replace this paragraph with the final text once it is):** the plugin is active only while the Mod Editor is open. The server, the hooks and the Workshop publish block start when the editor opens and stop when it closes. In normal play and online matches nothing of the plugin is active.
+BepInEx still loads the plugin file every time the game starts. To have no plugin at all, set `[General] PluginEnabled = false` (see [Configuration](#configuration)) and restart the game, or use a mod-manager profile without the plugin.
 
 ## Supported setup
 
@@ -116,15 +118,15 @@ To have nothing of it active, set `[General] PluginEnabled = false` (see [Config
 
 ## Check that the plugin runs
 
-Start the game and check `BepInEx\LogOutput.log`. The plugin prints lines like these (each prefixed by BepInEx with level and plugin name):
+Start the game, open the Mod Editor, and check `BepInEx\LogOutput.log`. The plugin prints lines like these (each prefixed by BepInEx with level and plugin name). The first line comes at game start, the second when the Mod Editor opens, the last when you leave the editor:
 
 ```text
-PummelPartyMcp <version> (api v2); game version <version>, Unity <version>
-Workshop publish block active: 59 methods patched. Publishing to the Workshop is disabled while this plugin is enabled.
-Listening on http://127.0.0.1:38917/rpc (...); writes enabled, publish block complete
+PummelPartyMcp <version> (api v2); game version <version>, Unity <version>. Dormant: the plugin starts when the Mod Editor opens and stops when it closes.
+Mod Editor opened (scene ModEditorScene): Workshop publish block active (59 methods), playtest hooks <n>, save watch on, mod-switch guard on; listening on http://127.0.0.1:38917/rpc, writes enabled; armed in <n> ms.
+Dormant again (the Mod Editor was closed): server stopped, 0 calls cancelled, <n> patched methods restored (0 left).
 ```
 
-The first run also creates the config file and the token file in `BepInEx\config\`. In Claude Code you can ask the agent to call `get_status` or `self_test` to check the whole chain.
+The first start creates the config file in `BepInEx\config\`; the first time you open the Mod Editor the plugin also creates the token file there. In Claude Code you can ask the agent to call `get_status` or `self_test` to check the whole chain.
 
 ## First use
 
@@ -171,7 +173,7 @@ The server also ships a guide as `usage_guide`; clients that do not show server 
 
 ## Configuration
 
-`BepInEx\config\com.pummelpartymcp.plugin.cfg` (created on first start; read at game start unless noted):
+`BepInEx\config\com.pummelpartymcp.plugin.cfg` (created on first start; `PluginEnabled` is read at game start, the other keys when the Mod Editor opens unless noted):
 
 | Key | Default | Effect |
 |---|---|---|
@@ -182,10 +184,10 @@ The server also ships a guide as `usage_guide`; clients that do not show server 
 | `[Assets] MaxModAssetsMB` | `500` | `import_asset`: largest total size of a sandbox mod's `Assets` folder after an import, in MB (1-8192). Read on every import call. |
 | `[Assets] MaxAudioSeconds` | `600` | `import_asset`: longest audio clip in seconds (1-7200), read from the file header. Read on every import call. |
 | `[Assets] MaxCompressedAudioMB` | `15` | `import_asset`: largest OGG/MP3 whose header gives no duration, in MB (1-1024). Read on every import call. |
-| `[Server] Enabled` | `true` | `false`: no API server; the publish block stays active. |
-| `[Server] Port` | `38917` | Loopback port (1024-65535). If it cannot be bound the plugin stays idle; the publish block stays active. |
+| `[Server] Enabled` | `true` | `false`: no API server; the publish block is still installed while the Mod Editor is open. |
+| `[Server] Port` | `38917` | Loopback port (1024-65535). If it cannot be bound, the tools are off for that editor session (see the log); the publish block stays until the editor closes. |
 
-The token is in `BepInEx\config\PummelPartyMcp.token` (64 hex characters, created on first start). Never post it.
+The token is in `BepInEx\config\PummelPartyMcp.token` (64 hex characters, created the first time the Mod Editor is opened, then kept). Never post it.
 
 ### Environment variables of the MCP server
 
@@ -205,7 +207,7 @@ For users:
 - A new game version is not trusted automatically. Writes are refused with `GAME_VERSION_UNTESTED` until `[Safety] AcceptedGameVersion` is set in the config file. Reading keeps working.
 - The safe choice is to wait for a new release that lists the new game version as tested.
 - If you do not want to wait, you can accept the version at your own risk. Do it only after you have checked the points below: back up your mods, run the read tool `self_test` (it re-resolves every game member the plugin needs, the publish block and the inspector audit; `ok: true` is the evidence to look for), check `get_log` and `BepInEx\LogOutput.log` for errors, and try on a fresh `MCP_` mod. Then set `AcceptedGameVersion` in `BepInEx\config\com.pummelpartymcp.plugin.cfg` to the running game version, exactly as `get_status` shows it (no restart needed; the config is re-read on the next call). A plugin error naming a missing game member (`game version changed?`) means an editor internal moved.
-- If a Workshop block target no longer resolves, the block is incomplete and writes stay off (`PUBLISH_BLOCK_INCOMPLETE`). Reading keeps working. Do not publish through the plugin in that state; it is the plugin that blocks publishing, so there is nothing to bypass.
+- If a Workshop block target no longer resolves, the block is incomplete and the editor and mod tools stay off (`PUBLISH_BLOCK_INCOMPLETE`). `ping`, `get_status`, `get_log` and `self_test` still answer. Do not publish through the plugin in that state; it is the plugin that blocks publishing, so there is nothing to bypass.
 - Report breakage as an issue.
 
 For maintainers, after every game update:
@@ -219,14 +221,14 @@ For maintainers, after every game update:
 ## Troubleshooting
 
 - **No `PummelPartyMcp` lines in `BepInEx\LogOutput.log`.** BepInEx is not installed or did not start (the log file does not exist), the plugin DLL is not in `BepInEx\plugins\`, or `[General] PluginEnabled` is `false`. Check the folder `BepInEx\plugins\PummelPartyMcp\` (a mod manager puts it in its own profile folder).
-- **The agent says it cannot find the token or the game.** The server could not detect your Steam install. Set `PUMMEL_PARTY_MCP_GAME_DIR` (or `PUMMEL_PARTY_MCP_TOKEN_FILE`) in the server's registration, as shown in [Quick install](#quick-install). The game must have been started once with the plugin, so that the token file exists. With a mod manager, the token file is under the manager's profile folder, not the Steam game folder: point `PUMMEL_PARTY_MCP_TOKEN_FILE` at it.
-- **Connection refused or timeout.** The game is not running, the plugin is disabled (`PluginEnabled`, `[Server] Enabled`), the port is taken by another program (the plugin then stays idle; see the log), or `PUMMEL_PARTY_MCP_PORT` does not match `[Server] Port`.
+- **The agent says it cannot find the token or the game.** The server could not detect your Steam install. Set `PUMMEL_PARTY_MCP_GAME_DIR` (or `PUMMEL_PARTY_MCP_TOKEN_FILE`) in the server's registration, as shown in [Quick install](#quick-install). The Mod Editor must have been opened once with the plugin, so that the token file exists. With a mod manager, the token file is under the manager's profile folder, not the Steam game folder: point `PUMMEL_PARTY_MCP_TOKEN_FILE` at it.
+- **Connection refused or timeout.** The Mod Editor is not open (the plugin only listens while it is), the game is not running, the plugin is disabled (`PluginEnabled`, `[Server] Enabled`), the port is taken by another program (the tools are then off for that editor session; see the log), or `PUMMEL_PARTY_MCP_PORT` does not match `[Server] Port`.
 - **`GAME_VERSION_UNTESTED`.** The game was updated. See [After a game update](#after-a-game-update).
-- **`PUBLISH_BLOCK_INCOMPLETE`.** A Workshop block target could not be patched, usually after a game update, and writes stay off on purpose. Read tools still work. Check `get_status` and the log, and report it as an issue.
+- **`PUBLISH_BLOCK_INCOMPLETE`.** A Workshop block target could not be patched, usually after a game update, and the editor and mod tools stay off on purpose for that editor session. `ping`, `get_status`, `get_log` and `self_test` still work. Check `get_status` and the log, and report it as an issue.
 - **`WRITES_DISABLED`.** `[Safety] EnableWrites` is `false`.
 - **`GUARD_NOT_TEST_MOD`.** The open mod is not a sandbox mod. Close it in the editor, then create or open a mod whose name starts with `MCP_`.
 - **`INVALID_STATE`.** The editor is not in the state the tool needs: a dialog is open, a mouse button is held, a playtest is running (call `stop_playtest`), or no mod is open.
-- **Publishing to the Workshop does nothing.** That is the publish block. See [What it does](#what-it-does) for how to publish by hand.
+- **Publishing to the Workshop from the Mod Editor does nothing.** That is the publish block. See [What it does](#what-it-does) for how to publish by hand.
 - **Claude Code does not show the tools.** Run `claude mcp list` to see whether the server is registered and connected, and restart Claude Code. The `cmd /c` in front of `npx` is needed on native Windows; without it Claude Code cannot start `npx`.
 - **Still stuck.** Open an issue with the bug report form. Include the game, plugin and server versions, the `self_test` output and an excerpt of `BepInEx\LogOutput.log`. Do not post the token file or private mod files.
 

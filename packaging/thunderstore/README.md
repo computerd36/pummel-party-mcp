@@ -2,7 +2,7 @@
 
 Lets an AI agent (through the Model Context Protocol) see and edit what is open in Pummel Party's built-in Mod Editor: objects, components, Action Editor logic, the editor's validator and playtests.
 
-Unofficial project, not affiliated with Rebuilt Games. It is an editor tool, not a cheat tool: in normal gameplay it does nothing.
+Unofficial project, not affiliated with Rebuilt Games. It is an editor tool, not a cheat tool. It is active only while the Mod Editor is open: in the main menu and in matches it has no open port, no per-frame code and, unless removing one failed (the BepInEx log then says so), no patches in the game. A game method that was patched once keeps a Harmony-generated replacement after the plugin removed its patch: it behaves like the original and carries no patch of the plugin, but its machine code is not the original one.
 
 ## Safety model
 
@@ -14,7 +14,7 @@ Unofficial project, not affiliated with Rebuilt Games. It is an editor tool, not
 
 ## Workshop publishing is blocked
 
-While this plugin is enabled, publishing to the Steam Workshop (create, update, delete) is blocked on purpose, so a bug or a bad AI edit cannot reach a live Workshop item. To publish a mod by hand: quit the game, set `[General] PluginEnabled = false` in `BepInEx/config/com.pummelpartymcp.plugin.cfg`, start the game, publish as usual, quit, and set it back to `true`. You can also simply remove or disable the plugin folder.
+While the Mod Editor is open with this plugin enabled, publishing to the Steam Workshop (create, update, delete) is blocked on purpose, so a bug or a bad AI edit cannot reach a live Workshop item. Outside the Mod Editor the plugin blocks nothing. To publish a mod by hand: quit the game, set `[General] PluginEnabled = false` in `BepInEx/config/com.pummelpartymcp.plugin.cfg`, start the game, publish as usual, quit, and set it back to `true`. You can also simply remove or disable the plugin folder.
 
 ## The MCP server is installed separately
 

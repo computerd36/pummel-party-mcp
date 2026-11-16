@@ -24,6 +24,14 @@ namespace PummelPartyMcp.Core
             m_active.Add(tick ?? throw new ArgumentNullException(nameof(tick)));
         }
 
+        /// <summary>Drops every callback without running it (end of an editor session). Returns how many were dropped.</summary>
+        public int Clear()
+        {
+            int n = m_active.Count;
+            m_active.Clear();
+            return n;
+        }
+
         /// <summary>Runs every callback once. Never throws.</summary>
         public void Tick()
         {

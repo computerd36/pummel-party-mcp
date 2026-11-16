@@ -87,6 +87,40 @@ namespace PummelPartyMcp.Core
             Pump();
         }
 
+        /// <summary>Fails every waiting capture (they never start); the active one is left alone. Returns the count. Never throws.</summary>
+        public int FailWaiting(Func<Exception> error)
+        {
+            int n = 0;
+            while (m_waiting.Count > 0)
+            {
+                Fail(m_waiting.Dequeue(), error());
+                n++;
+            }
+            return n;
+        }
+
+        /// <summary>
+        /// End of an editor session: fails every waiting capture and drops the active one (a late <see cref="Release"/> of it is
+        /// ignored), without starting anything. Returns how many entries were dropped. Never throws.
+        /// </summary>
+        public int FailAll(Func<Exception> error)
+        {
+            int n = 0;
+            Entry active = m_active;
+            m_active = null;
+            if (active != null)
+            {
+                Fail(active, error());
+                n++;
+            }
+            while (m_waiting.Count > 0)
+            {
+                Fail(m_waiting.Dequeue(), error());
+                n++;
+            }
+            return n;
+        }
+
         /// <summary>Once per rendered frame while captures are queued or running (the frame watchdog): counts the frame and pumps. Never throws.</summary>
         public void FrameTick()
         {

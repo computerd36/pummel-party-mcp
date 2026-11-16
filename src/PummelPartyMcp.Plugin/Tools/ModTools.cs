@@ -434,6 +434,9 @@ namespace PummelPartyMcp.Tools
 
         internal static void RefuseIfLifecyclePendingPublic() => RefuseIfLifecyclePending();
 
+        /// <summary>New editor session: a create/open whose load wait was dropped when the Mod Editor closed is no longer pending.</summary>
+        internal static void ResetSession() => s_lifecyclePending = false;
+
         /// <summary>
         /// Rules for leaving the open mod (create/open). Mirrors the editor's unsaved-changes popup, but uses the plugin's
         /// own unsaved-edits tracking (EditServices.HasUnsavedEdits: undo-stack changes and plugin edits since load/save,

@@ -361,7 +361,7 @@ test("plugin down yields isError result, process survives", async () => {
     await client.connect(transport);
     const r = await client.callTool({ name: "ping", arguments: {} });
     assert.equal(r.isError, true);
-    assert.match(r.content[0].text, /not running or the pummel-party-mcp plugin is not loaded/);
+    assert.match(r.content[0].text, /only listens while the Mod Editor is open/);
     const r2 = await client.callTool({ name: "ping", arguments: {} });
     assert.equal(r2.isError, true);
   } finally {

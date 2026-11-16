@@ -26,6 +26,7 @@ namespace PummelPartyMcp.Tests
         private static string s_token;
         private static int s_port;
         private static volatile bool s_pump = true;
+        private static volatile bool s_pumpParked; // set by the pump thread once it has seen s_pump == false
         private static int s_mainThreadExecutions;
         private static int s_mainThreadId;
 
@@ -45,6 +46,7 @@ namespace PummelPartyMcp.Tests
             ReviewFixTests.Run((name, ok) => Check(name, ok));
             CameraTests.Run((name, ok) => Check(name, ok));
             PrereleaseFixTests.Run((name, ok) => Check(name, ok));
+            LifecycleTests.Run((name, ok) => Check(name, ok));
             AssetListingTests();
             ServerTests();
             Console.WriteLine();
@@ -226,7 +228,12 @@ namespace PummelPartyMcp.Tests
                 {
                     if (s_pump)
                     {
+                        s_pumpParked = false;
                         dispatcher.Drain(16, 8);
+                    }
+                    else
+                    {
+                        s_pumpParked = true;
                     }
                     Thread.Sleep(5);
                 }
@@ -342,6 +349,8 @@ namespace PummelPartyMcp.Tests
 
             // timeout: main thread never services the call
             s_pump = false;
+            // The pump thread may be inside Drain right now: wait until it has stopped, or it could still service the call.
+            SpinWait.SpinUntil(() => s_pumpParked, 5000);
             int before = Volatile.Read(ref s_mainThreadExecutions);
             Stopwatch sw = Stopwatch.StartNew();
             r = Send("POST", "/rpc", "{\"method\":\"echo_main\",\"params\":{\"n\":1}}", readTimeoutMs: 30000);
@@ -359,6 +368,7 @@ namespace PummelPartyMcp.Tests
             server.Stop();
             SlowConnectionTests(handler);
             FloodTests(handler);
+            RestartTests(handler);
             bool refusedAfterStop;
             try
             {
@@ -433,6 +443,70 @@ namespace PummelPartyMcp.Tests
             {
                 s_port = savedPort;
                 slow.Stop();
+            }
+        }
+
+        /// <summary>
+        /// Decision P2: a new server per Mod Editor session on the same port. Served connections are closed by the server first (they
+        /// linger in TIME_WAIT on the server's port); a new listener on that port must still bind (ExclusiveAddressUse stays on).
+        /// </summary>
+        private static void RestartTests(RpcHandler handler)
+        {
+            Console.WriteLine("-- server restart on the same port (one server per editor session)");
+            int savedPort = s_port;
+            RpcHttpServer first = new RpcHttpServer(new RpcHttpServerOptions { Port = 0, Token = s_token }, handler.Handle, NullPluginLog.Instance);
+            first.Start();
+            int port = first.Port;
+            s_port = port;
+            RpcHttpServer second = null;
+            try
+            {
+                bool served = true;
+                for (int i = 0; i < 5; i++)
+                {
+                    served &= Send("POST", "/rpc", "{\"method\":\"ping\",\"params\":{}}").Status == 200;
+                }
+                Check("first session's server answered", served);
+                first.Stop();
+                bool refused = false;
+                try
+                {
+                    using (TcpClient probe = new TcpClient())
+                    {
+                        probe.Connect("127.0.0.1", port);
+                    }
+                }
+                catch (SocketException)
+                {
+                    refused = true;
+                }
+                Check("stopped server: nothing listens (connection refused)", refused);
+                Exception bindError = null;
+                for (int cycle = 0; cycle < 3 && bindError == null; cycle++)
+                {
+                    second = new RpcHttpServer(new RpcHttpServerOptions { Port = port, Token = s_token }, handler.Handle, NullPluginLog.Instance);
+                    try
+                    {
+                        second.Start();
+                    }
+                    catch (Exception e)
+                    {
+                        bindError = e;
+                        break;
+                    }
+                    Resp again = Send("POST", "/rpc", "{\"method\":\"ping\",\"params\":{}}");
+                    bindError = again.Status == 200 ? null : new Exception("no answer after restart: " + again.Status);
+                    second.Stop();
+                    second = null;
+                }
+                Check("a new server binds the same port right after the old one served and stopped (3 cycles)" +
+                      (bindError == null ? "" : ": " + bindError.GetType().Name + ": " + bindError.Message), bindError == null);
+            }
+            finally
+            {
+                try { first.Stop(); } catch { /* ignore */ }
+                try { second?.Stop(); } catch { /* ignore */ }
+                s_port = savedPort;
             }
         }
 

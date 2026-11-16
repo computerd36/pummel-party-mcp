@@ -273,6 +273,8 @@ namespace PummelPartyMcp.PatchTests
 
             ModSwitchGuardTests();
 
+            LifecyclePatchTests.Run(Check);
+
             Console.WriteLine();
             Console.WriteLine($"RESULT: {s_passed} passed, {s_failed} failed");
             foreach (string f in s_failures)
@@ -305,8 +307,8 @@ namespace PummelPartyMcp.PatchTests
             Check("monitor: unpatched original runs again (stand-in sanity)", MonitoredTargets.Delete() == 1);
             PublishBlockStatus lost = monitor.Current();
             string deleteName = PublishBlocker.Describe(delete);
-            Check("monitor: required prefix removed after startup -> incomplete, named in missing",
-                !lost.Complete && lost.Missing.Count == 1 && lost.Missing[0].StartsWith(deleteName) && lost.Missing[0].Contains("removed after startup"));
+            Check("monitor: required prefix removed after the editor opened -> incomplete, named in missing",
+                !lost.Complete && lost.Missing.Count == 1 && lost.Missing[0].StartsWith(deleteName) && lost.Missing[0].Contains("removed after the Mod Editor opened"));
             Check("monitor: Error logged naming the target", log.Errors.Count(e => e.Contains(deleteName)) == 1);
             monitor.Current();
             monitor.IsComplete();

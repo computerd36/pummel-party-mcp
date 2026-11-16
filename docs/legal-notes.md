@@ -22,7 +22,7 @@ Checked 2026-11-12. These are notes by the project, not legal advice.
 | 4.B | No Cheats; no "mods, hacks, or any other unauthorized third-party software" to modify Content and Services; no tampering with their execution. | The clause is aimed at cheating and unfair advantage, but its wording is broad and names mods generally. BepInEx plugins are third-party software loaded into the game. |
 | 4.C | No scripts, bots or other non-human-controlled systems. | The plugin automates the Mod Editor, not gameplay, matchmaking, trading or the Steam client. AI-only playtests use the game's own bots. |
 | 4.D | Valve may restrict or terminate an account or subscription, without notice. | The consequence if Valve or the developer objects. |
-| 6 | Workshop contributions: must be originally created by the contributor; licence granted to Valve; App-Specific Terms may add rules. | The plugin never publishes, and blocks publishing while enabled. Content an agent builds is published, if at all, by the human by hand, who is responsible for it. |
+| 6 | Workshop contributions: must be originally created by the contributor; licence granted to Valve; App-Specific Terms may add rules. | The plugin never publishes, and blocks publishing while the Mod Editor is open with the plugin enabled. Content an agent builds is published, if at all, by the human by hand, who is responsible for it. |
 
 ## Assessment
 
@@ -32,9 +32,12 @@ Checked 2026-11-12. These are notes by the project, not legal advice.
 - **Open risks:**
   1. The SSA wording on third-party software and reverse engineering is broad. There is no developer
      statement permitting BepInEx-style plugins for this game.
-  2. The plugin stays loaded during normal play, including online games, because BepInEx loads it at every
-     start. It does nothing there except keep the publish block and nine record-only hooks installed, but
-     "a third-party plugin was loaded during online play" is the situation clause 4.B is written for.
+  2. The plugin file stays loaded during normal play, including online games, because BepInEx loads it at every
+     start. Since decision P2 it is active only while the Mod Editor is open: outside the editor it has no
+     open port and no per-frame code, only a check at each scene load, and no patches unless a removal failed
+     (logged). A game method that was patched once keeps a Harmony-generated replacement after unpatching (it
+     behaves like the original and carries no patch of the plugin, but its machine code is not the original). Still, "a third-party
+     plugin was loaded during online play" is the situation clause 4.B is written for.
      The game has no known anti-cheat that reacts to BepInEx; this is an observation, not a guarantee.
   3. AI-assisted content published to the Workshop: clause 6.D requires that the contributor created it.
      That is the publishing human's question, not the plugin's, but the README should say so.
@@ -46,8 +49,8 @@ Checked 2026-11-12. These are notes by the project, not legal advice.
 2. **Say it plainly in the README**: use at your own risk; governed by the Steam Subscriber Agreement; not
    endorsed by Rebuilt Games or Valve; the user is responsible for what they publish.
 3. **Recommend disabling the plugin for normal play**, especially online games: set `[General] PluginEnabled
-   = false` (or use a separate BepInEx profile) when not modding. Consider making this easier later (e.g. a
-   launch option or loading only when the Mod Editor is opened).
+   = false` (or use a separate BepInEx profile) when not modding. Done in part: the plugin is now active only
+   while the Mod Editor is open (decision P2); the file itself is still loaded at every start.
 4. Keep the rule that the repo and the packages never contain game DLLs or decompiled code.
 
 ## Sources

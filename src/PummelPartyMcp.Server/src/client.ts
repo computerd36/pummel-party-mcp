@@ -52,11 +52,13 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv = process.env, deps: Resol
 
 const HINTS: Record<string, string> = {
   EDITOR_NOT_OPEN: "Open the Mod Editor from the game's main menu, then retry.",
+  EDITOR_CLOSED_DURING_CALL:
+    "The Mod Editor was closed while this call was running, so a write may have partly applied (a read changed nothing). Do not retry blindly: ask the human to open the Mod Editor, then check get_status / get_object (list_mods after create_test_mod or open_test_mod) before retrying.",
   NO_MOD_OPEN: "The editor is open but no mod is loaded; open a mod in the editor, then retry.",
   BUSY_LOADING: "The game is still loading; retry in a few seconds.",
   WRITES_DISABLED: "Write tools are switched off in the plugin config (Safety.EnableWrites); the human must enable it and restart the game.",
   PUBLISH_BLOCK_INCOMPLETE:
-    "The plugin could not install its Workshop safety patches (probably after a game update), so write tools stay disabled. Tell the human.",
+    "The plugin could not install its Workshop safety patches (probably after a game update), so the editor and mod tools stay off (ping, get_status, get_log and self_test still answer). Tell the human.",
   GAME_VERSION_UNTESTED:
     "The game was updated and this plugin version was not tested with it, so write tools are refused (read tools work). Tell the human; do NOT retry. They can run self_test and, if it is clean, set [Safety] AcceptedGameVersion in the plugin config (no restart).",
   GUARD_NOT_TEST_MOD: "Only mods whose name starts with MCP_ can be modified; do not retry with a different name for a real mod.",
@@ -222,7 +224,7 @@ export class PluginClient {
     if (!t) {
       this.detectedTokenFile = undefined; // detect again next time (the game may have been moved or installed since)
       throw new PluginError(
-        `Token file not found or empty at "${file}". The game must have been started at least once with the pummel-party-mcp plugin installed (the plugin creates this file). ` +
+        `Token file not found or empty at "${file}". The Mod Editor must have been opened at least once with the pummel-party-mcp plugin installed (the plugin creates this file then). ` +
           `With a mod manager (r2modman, Thunderstore Mod Manager, Gale) BepInEx's config folder is inside the manager's profile, not the game folder: ` +
           `set PUMMEL_PARTY_MCP_TOKEN_FILE to <profile>\\BepInEx\\config\\PummelPartyMcp.token.`,
       );
@@ -309,7 +311,7 @@ export class PluginClient {
         }
         if (cause?.code === undefined || NOT_RUNNING_CODES.has(cause.code)) {
           throw new PluginError(
-            `Pummel Party is not running or the pummel-party-mcp plugin is not loaded (no listener on ${HOST}:${this.opts.port}).`,
+            `No answer from the pummel-party-mcp plugin on ${HOST}:${this.opts.port}. Start Pummel Party and open the Mod Editor from the main menu: the plugin only listens while the Mod Editor is open.`,
           );
         }
         throw new PluginError(

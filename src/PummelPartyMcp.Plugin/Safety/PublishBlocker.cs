@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using HarmonyLib;
 using PummelPartyMcp.Core;
+using PummelPartyMcp.Hooks;
 
 namespace PummelPartyMcp.Safety
 {
@@ -26,13 +27,14 @@ namespace PummelPartyMcp.Safety
     /// <summary>
     /// Installs Harmony prefixes that skip the original method and return a safe default. Unity-free and
     /// Steamworks-free (the target list is built elsewhere), so the mechanism can be tested on stand-in methods.
-    /// Patches are never removed by the plugin; <see cref="PublishBlockMonitor"/> notices when someone else removes them.
+    /// Decision P2: applied when the Mod Editor opens and removed (<see cref="Remove"/>) when it closes; within an editor session
+    /// <see cref="PublishBlockMonitor"/> notices when someone else removes a patch.
     /// </summary>
     public static class PublishBlocker
     {
         public const string HarmonyId = "com.pummelpartymcp.plugin.publishblock";
 
-        public const string UserMessage = "Workshop publishing is blocked while the pummel-party-mcp plugin is enabled.";
+        public const string UserMessage = "Workshop publishing is blocked while the Mod Editor is open with the pummel-party-mcp plugin enabled.";
 
         public const string HowToPublish =
             "To publish, set [General] PluginEnabled = false in BepInEx\\config\\com.pummelpartymcp.plugin.cfg and restart the game.";
@@ -133,6 +135,9 @@ namespace PummelPartyMcp.Safety
                 throw new InvalidOperationException("Harmony did not register the prefix");
             }
         }
+
+        /// <summary>Removes every block prefix of <see cref="HarmonyId"/> (the Mod Editor closed) and reports what is left. Never throws.</summary>
+        public static PatchRemoval.Result Remove() => PatchRemoval.Remove(HarmonyId);
 
         /// <summary>The method currently carries one of this blocker's prefixes installed under <paramref name="harmonyId"/> (Harmony patch info).</summary>
         public static bool HasBlockingPrefix(MethodBase method, string harmonyId)

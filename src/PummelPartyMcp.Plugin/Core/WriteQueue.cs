@@ -129,6 +129,47 @@ namespace PummelPartyMcp.Core
             }
         }
 
+        /// <summary>
+        /// Fails every waiting entry with a fresh error from <paramref name="error"/> (they never run); the active entry is left
+        /// alone and completes normally. Returns how many were failed. Used when the Mod Editor closes.
+        /// </summary>
+        public int FailPending(Func<Exception> error)
+        {
+            if (error == null)
+            {
+                throw new ArgumentNullException(nameof(error));
+            }
+            int failed = 0;
+            while (m_pending.Count > 0)
+            {
+                Entry next = m_pending.Dequeue();
+                if (next.Inner.IsCancelled)
+                {
+                    continue;
+                }
+                next.Inner.SetException(error());
+                failed++;
+            }
+            return failed;
+        }
+
+        /// <summary>
+        /// End of an editor session: fails the waiting entries (<paramref name="pendingError"/>) and the active one
+        /// (<paramref name="activeError"/>; a later completion of its body is ignored) and frees the queue. Returns how many were failed.
+        /// </summary>
+        public int Reset(Func<Exception> pendingError, Func<Exception> activeError)
+        {
+            int failed = FailPending(pendingError);
+            Entry active = m_active;
+            if (active != null)
+            {
+                m_active = null;
+                active.FailAndRelease(activeError());
+                failed++;
+            }
+            return failed;
+        }
+
         private void OnEntryDone(Entry e)
         {
             if (ReferenceEquals(m_active, e))
@@ -199,6 +240,17 @@ namespace PummelPartyMcp.Core
             {
                 m_done = true;
                 m_queue.m_active = null;
+            }
+
+            /// <summary>Fails the caller (ignored by the inner completion if it already completed) without pumping the queue.</summary>
+            public void FailAndRelease(Exception error)
+            {
+                if (m_done)
+                {
+                    return;
+                }
+                m_done = true;
+                Inner.SetException(error);
             }
         }
     }

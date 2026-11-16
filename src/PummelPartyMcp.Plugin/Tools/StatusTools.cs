@@ -15,12 +15,13 @@ namespace PummelPartyMcp.Tools
         public static readonly string[] Capabilities = { "read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings", "assets", "prefabs" };
 
         /// <param name="publishBlock">Live publish-block status (re-verifies the required prefixes on every call).</param>
+        /// <param name="lifecycle">The plugin's editor-session state (get_status.lifecycle; main thread).</param>
         public static void Register(ToolRegistry registry, PluginRuntimeInfo info, Func<bool> writesEnabled, Func<PublishBlockStatus> publishBlock,
-            Func<GameVersionStatus> gameVersionPeek, Func<GameVersionStatus> gameVersionMain, EditServices services)
+            Func<GameVersionStatus> gameVersionPeek, Func<GameVersionStatus> gameVersionMain, EditServices services, EditorLifecycle lifecycle)
         {
             s_services = services;
-            // Answered on the HTTP thread from values cached at startup: works with the editor closed and even
-            // while the main thread is busy (e.g. during a scene load).
+            // Answered on the HTTP thread from values cached at startup: works even while the main thread is busy (e.g. during a
+            // scene load). The server only listens while the Mod Editor is open (decision P2).
             registry.Register(ToolDefinition.Read("ping", ctx => new JObject
             {
                 ["pong"] = true,
@@ -54,6 +55,13 @@ namespace PummelPartyMcp.Tools
                 status["activeWrite"] = activeName == null || !activeAge.HasValue
                     ? JValue.CreateNull()
                     : new JObject { ["tool"] = activeName, ["seconds"] = Math.Round(activeAge.Value.TotalSeconds, 1) };
+                DateTime? armed = lifecycle?.ArmedUtc;
+                status["lifecycle"] = new JObject
+                {
+                    ["state"] = lifecycle?.StateName,
+                    ["armedUtc"] = armed.HasValue ? new JValue(armed.Value.ToString("o", System.Globalization.CultureInfo.InvariantCulture)) : JValue.CreateNull(),
+                    ["sessionsThisRun"] = lifecycle?.SessionsThisRun ?? 0,
+                };
                 return status;
             })));
             registry.Register(ToolDefinition.Read("get_open_mod", ctx => ctx.OnMainThread(GetOpenMod)));

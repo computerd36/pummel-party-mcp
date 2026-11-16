@@ -12,7 +12,8 @@ namespace PummelPartyMcp.Hooks
     /// state, return at once unless a playtest is in PlayMode (<see cref="Collecting"/>), and swallow every exception (a postfix
     /// that throws would otherwise propagate into the game's action runner). Each target is patched separately: a target that
     /// cannot be patched only reduces what the feed records; the diff-based events (health, score, deaths, rounds) do not depend
-    /// on these hooks. Own Harmony id; same precedent as <see cref="SaveWatch"/>.
+    /// on these hooks. Own Harmony id; same precedent as <see cref="SaveWatch"/>. Installed when the Mod Editor opens and removed
+    /// when it closes (decision P2), so no postfix runs in matches outside the editor.
     /// </summary>
     internal static class PlaytestHooks
     {
@@ -31,6 +32,8 @@ namespace PummelPartyMcp.Hooks
         public static List<string> Install(Harmony harmony)
         {
             List<string> problems = new List<string>();
+            TriggerHooks = 0; // counted per editor session: a second install must not double them
+            ActionHooks = 0;
             if (harmony == null)
             {
                 problems.Add("no Harmony instance");
@@ -69,6 +72,15 @@ namespace PummelPartyMcp.Hooks
                 problems.Add(e.GetType().Name + ": " + e.Message);
             }
             return problems;
+        }
+
+        /// <summary>Stops collecting and removes the postfixes (the Mod Editor closed). Never throws.</summary>
+        public static PatchRemoval.Result Uninstall()
+        {
+            Collecting = false;
+            TriggerHooks = 0;
+            ActionHooks = 0;
+            return PatchRemoval.Remove(HarmonyId);
         }
 
         /// <summary>ModAction.Execute(ModEvent) and every override declared by a subclass (resolved by reflection; the drift test counts them).</summary>

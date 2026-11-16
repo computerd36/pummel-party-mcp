@@ -66,6 +66,8 @@ namespace PummelPartyMcp.Core
             F("ToolbarWidget", "m_playerCount", "System.String[]", "PlaytestAccess");
             F("ModValidationSystem", "m_validators", "System.Collections.Generic.List`1[ModValidationCallbackReceiver]", "PlaytestAccess (validate_mod)", true);
             M("EditorSystem", "SaveCurrentMod", "Plugin save watch", "System.Boolean");
+            // decision P2: the plugin is armed while this is not null (scene "ModEditorScene" = EditorLifecycle.EditorSceneName arms it)
+            P("EditorSystem", "Instance", "Plugin lifecycle (editor open)", isStatic: true);
             P("WorkshopController", "CurrentBackgroundLoadMod", "PlaytestAccess", true);
             P("WorkshopController", "CurrentActiveMod", "PlaytestAccess", true);
 

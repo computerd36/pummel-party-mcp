@@ -9,8 +9,9 @@ namespace PummelPartyMcp.Safety
     /// <summary>
     /// Live view of the publish block. <see cref="Current"/> re-reads Harmony's patch info of every required target and
     /// reports the block incomplete as soon as one of them no longer carries this plugin's prefix (e.g. another plugin
-    /// called <c>Harmony.UnpatchAll()</c> or unpatched it after startup). Fail closed and sticky: once incomplete, it stays
-    /// incomplete until the game restarts; the plugin does not re-patch (see the decision log). Called before every write
+    /// called <c>Harmony.UnpatchAll()</c> or unpatched it after the Mod Editor opened). Fail closed and sticky: once incomplete,
+    /// it stays incomplete for the rest of the editor session. Decision P2: the block is applied once per editor session with a
+    /// new monitor; the plugin does not re-patch within a session. Called before every write
     /// tool (guard step 2) and by get_status; costs one patch-info lookup per required target (about 14), no per-frame work.
     /// Unity-free so the PatchTests harness covers it.
     /// </summary>
@@ -53,7 +54,7 @@ namespace PummelPartyMcp.Safety
         {
             if (!m_installed.Complete)
             {
-                return m_installed; // already failed closed at startup
+                return m_installed; // already failed closed when the Mod Editor opened
             }
             List<string> lost = null;
             foreach (KeyValuePair<string, MethodBase> kv in m_required)
@@ -79,11 +80,11 @@ namespace PummelPartyMcp.Safety
                     List<string> fresh = lost.Where(n => m_reported.Add(n)).ToList();
                     if (fresh.Count > 0)
                     {
-                        m_log.Error($"Publish block: the blocking prefix was removed after startup from {string.Join(", ", fresh.ToArray())} " +
-                                    "(another plugin unpatched it?). All write tools are disabled until the game is restarted.");
+                        m_log.Error($"Publish block: the blocking prefix was removed after the Mod Editor opened from {string.Join(", ", fresh.ToArray())} " +
+                                    "(another plugin unpatched it?). All write tools are disabled until the Mod Editor is closed and opened again.");
                     }
                     List<string> missing = m_reported.OrderBy(n => n, StringComparer.Ordinal)
-                        .Select(n => $"{n}: blocking prefix removed after startup").ToList();
+                        .Select(n => $"{n}: blocking prefix removed after the Mod Editor opened").ToList();
                     m_lost = new PublishBlockStatus(m_installed.Active, false, m_installed.PatchedCount, missing);
                 }
                 return m_lost ?? m_installed;

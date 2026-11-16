@@ -32,7 +32,7 @@ const PLAYER_TRIGGERS = "weaponHitTrigger, tickTrigger, onDeathTrigger, onRespaw
 const PARAGRAPHS: string[] = [
   "pummel-party-mcp drives the Pummel Party Mod Editor through a plugin inside the running game.",
 
-  "SAFETY: write tools act only on sandbox mods named MCP_ (^MCP_[A-Za-z0-9_ -]+$, max 64 chars, no leading/trailing space); anything else is refused (GUARD_NOT_TEST_MOD). Real mods can never be changed; Workshop publishing is blocked and has no tool. create_test_mod/open_test_mod are refused while a real mod is open (the human closes it). Writes need Safety.EnableWrites and a tested or accepted game version (get_status: writesEnabled, publishBlock, gameVersionCheck). Asset tools only read the source path you give (never change or delete it), only write inside the sandbox mod's Assets folder, and only remove the mod's own custom assets (usage_guide assets). Links inside a sandbox mod (junctions, symlinks, mount points, hard-linked files) are never written or deleted through: LINK_REFUSED, nothing written.",
+  "SAFETY: write tools act only on sandbox mods named MCP_ (^MCP_[A-Za-z0-9_ -]+$, max 64 chars, no leading/trailing space); anything else is refused (GUARD_NOT_TEST_MOD). Real mods can never be changed; Workshop publishing is blocked and has no tool. create_test_mod/open_test_mod are refused while a real mod is open (the human closes it). Writes need Safety.EnableWrites and a tested or accepted game version (get_status: writesEnabled, publishBlock, gameVersionCheck). Asset tools only read the source path you give (never change or delete it), only write inside the sandbox mod's Assets folder, and only remove the mod's own custom assets (usage_guide assets). Links inside a sandbox mod (junctions, symlinks, mount points, hard-linked files) are never written or deleted through: LINK_REFUSED, nothing written. The plugin runs only while the Mod Editor is open: it starts (publish block first) when the editor opens and stops when it closes, so with the editor closed every tool reports that nothing answers (open the Mod Editor). If the publish block cannot be installed completely, only ping, get_status, get_log and self_test answer (PUBLISH_BLOCK_INCOMPLETE) until the editor is closed.",
 
   "WORKFLOW: get_status -> list_mods -> open_test_mod or create_test_mod -> get_hierarchy (guids) -> edits (create_object, set_transform, add_component, set_property, ...; many at once: run_batch) -> get_object to verify -> validate_mod -> save_mod -> start_playtest (aiOnly true runs unattended) -> get_playtest_state / get_playtest_events -> stop_playtest. Edits stay in memory until save_mod.",
   "ACTIONS: create_object kind trigger/logic; for a Trigger component set_property TriggerOnEnter (or TriggerOnExit/TriggerOnStay/TriggerOnHit) true to make its slot editable -> get_action_graph -> list_action_types with that trigger address -> add_action -> get_action_graph to verify -> save_mod. Logic components hold a trigger list (add_trigger, set_trigger, remove_trigger; Triggers[0], ...); other components have fixed slots. set_property cannot set triggers or actions.",
@@ -128,7 +128,7 @@ const TOPIC_NAMES = Object.keys(TOPICS) as [string, ...string[]];
 // Server instructions are counted against the tools/list size limit, so they stay short: the rest is in usage_guide topics.
 const GUIDE =
   "pummel-party-mcp drives the Pummel Party Mod Editor through a plugin inside the running game.\n\n" +
-  "SAFETY: write tools act only on sandbox mods named MCP_ (^MCP_[A-Za-z0-9_ -]+$, max 64 chars); anything else is refused (GUARD_NOT_TEST_MOD). Real mods can never be changed; Workshop publishing is blocked and has no tool. Writes also need Safety.EnableWrites (get_status: writesEnabled).\n\n" +
+  "SAFETY: write tools act only on sandbox mods named MCP_ (^MCP_[A-Za-z0-9_ -]+$, max 64 chars); anything else is refused (GUARD_NOT_TEST_MOD). Real mods can never be changed; Workshop publishing is blocked and has no tool. Writes also need Safety.EnableWrites (get_status: writesEnabled). The plugin only runs while the Mod Editor is open: with it closed nothing answers.\n\n" +
   "WORKFLOW: get_status -> list_mods -> open_test_mod or create_test_mod -> get_hierarchy -> edits (set_property, add_action, set_mod_settings, ...; many at once: run_batch) -> get_object / get_mod_settings to verify -> validate_mod -> save_mod -> start_playtest -> get_playtest_state -> stop_playtest. Edits stay in memory until save_mod. Settings edits are not undoable.\n\n" +
   "DETAILS: call usage_guide (no topic = overview + topic list; topics: " + TOPIC_NAMES.join(", ") + ") before using write tools: it holds the rules, value shapes and limits that tool descriptions only point to.";
 
@@ -440,7 +440,7 @@ function serverInfo(r: unknown): Record<string, unknown> {
 
 register(
   "ping",
-  "Checks that the plugin is reachable: { pong, pluginVersion, gameVersion, apiVersion, sessionId, capabilities } plus serverVersion, requiredApiVersion. Works with the Mod Editor closed; use first.",
+  "Checks that the plugin is reachable: { pong, pluginVersion, gameVersion, apiVersion, sessionId, capabilities } plus serverVersion, requiredApiVersion. Needs the Mod Editor open (the plugin only listens then); use first.",
   {},
   READ_ONLY,
   {
@@ -453,7 +453,7 @@ register(
 );
 register(
   "get_status",
-  "Editor/mod status (plus serverVersion, requiredApiVersion): editorState, modOpen/modName, hasUnsavedEdits, undoStackLength, prefabContext, playtest (running, playSeconds, minigame/board, eventCount, alivePlayers), writesEnabled, publishBlock, gameVersionCheck {writesAllowed,...}. Never fails because of editor state; shows why other tools fail.",
+  "Editor/mod status (plus serverVersion, requiredApiVersion): editorState, modOpen/modName, hasUnsavedEdits, undoStackLength, prefabContext, playtest (running, playSeconds, minigame/board, eventCount, alivePlayers), writesEnabled, publishBlock, gameVersionCheck {writesAllowed,...}, lifecycle. Shows why other tools fail.",
   {},
   READ_ONLY,
   { skipApiCheck: true, format: (r) => textResult(serverInfo(r), NO_FILTER) },
@@ -519,7 +519,7 @@ register(
 );
 register(
   "get_log",
-  "Recent game log entries { entries, nextId, dropped, sessionId }; pass the previous nextId as sinceId to poll. Works with the editor closed and while the game is busy.",
+  "Recent game log entries { entries, nextId, dropped, sessionId }; pass the previous nextId as sinceId to poll. Works while the game is busy.",
   {
     max: z.number().int().min(1).max(2000).optional().describe("1..2000 (default 200)."),
     sinceId: z.number().int().min(0).optional().describe("A previous nextId."),

@@ -1,7 +1,7 @@
 # pummel-party-mcp HTTP API (api v2, plugin 0.8.0)
 
 The BepInEx plugin `PummelPartyMcp.Plugin` runs inside Pummel Party and exposes the mod editor's state on a
-local HTTP endpoint. api v2 adds the guard layer, the always-on Workshop publish block and four mod lifecycle
+local HTTP endpoint. api v2 adds the guard layer, the Workshop publish block and four mod lifecycle
 tools (`list_mods`, `create_test_mod`, `open_test_mod`, `save_mod`). Increment 2 (still api v2, all changes are
 additive) adds object, transform, component and property editing plus `undo`; see [Editing](#editing). Increment 3
 (still api v2, additive) adds editing of the Action Editor model (triggers and their action lists); see
@@ -10,7 +10,8 @@ additive) adds object, transform, component and property editing plus `undo`; se
 [Validation, playtest and batch](#validation-playtest-and-batch). Plugin 0.6.0 (still api v2, additive) adds playtest
 visibility: the read tools `get_playtest_state` and `get_playtest_events`, a small summary in `get_status.playtest`, and the
 capability `"playtestState"`; see [Playtest visibility](#playtest-visibility). Plugin 0.7.0 (still api v2, additive) adds the game-version gate (`GAME_VERSION_UNTESTED`, `[Safety] AcceptedGameVersion`, `gameVersionCheck`), the read tool `self_test`, and enforces the editor inspector's visibility rules in `set_property` / `set_properties`; see [Game-version gate](#game-version-gate), [`self_test`](#self_test-read) and [Inspector visibility rules](#inspector-visibility-rules-plugin-070). Plugin 0.8.0 (still api v2, additive) adds mod settings: `list_mod_settings`, `get_mod_settings`, `set_mod_settings` and `capture_preview_image`, the capability `"settings"`, and the settings rule tables; see [Mod settings](#mod-settings). Plugin 0.8.0 also adds the asset tools (`get_asset`, `list_asset_rules`, `import_asset`, `set_import_settings`, `create_material`, `set_material`, `remove_asset`), the capability `"assets"` and the `[Assets]` config section; see [Assets](#assets-import-import-settings-materials-removal). Plugin 0.8.0 also adds the prefab tools (`create_prefab`, `open_prefab`, `close_prefab`), the capability `"prefabs"` and the write protection around every `.pfab` the editor writes (also in `save_mod`); see [Prefabs](#prefabs-create-open-close-the-pfab-write-protection). Write tools only ever act on `MCP_` mods; see
-[Safety](#safety).
+[Safety](#safety). The plugin is active only while the Mod Editor is open: the endpoint below exists only then; see
+[Lifecycle](#lifecycle-active-only-while-the-mod-editor-is-open).
 
 ## Transport
 
@@ -20,7 +21,8 @@ capability `"playtestState"`; see [Playtest visibility](#playtest-visibility). P
 | Bind address | `127.0.0.1` only (TCP listener on the loopback interface) |
 | Port | BepInEx config `BepInEx\config\com.pummelpartymcp.plugin.cfg`, section `[Server]`, `Port` (default `38917`, range 1024-65535) |
 | Enable/disable | `[General] PluginEnabled` (master switch) and `[Server] Enabled` (server only); see [Safety](#safety) |
-| Token file | `BepInEx\config\PummelPartyMcp.token`: 64 lowercase hex chars (32 CSPRNG bytes), created on first start, reused afterwards, regenerated if malformed; always written via a temp file plus atomic move/replace in the same folder (see [Safety](#token-file)) |
+| Lifetime | listens only while the Mod Editor is open (a new listener per editor session); otherwise the connection is refused. See [Lifecycle](#lifecycle-active-only-while-the-mod-editor-is-open) |
+| Token file | `BepInEx\config\PummelPartyMcp.token`: 64 lowercase hex chars (32 CSPRNG bytes), created the first time the Mod Editor is opened, reused afterwards (also across editor sessions and game restarts), regenerated if malformed; always written via a temp file plus atomic move/replace in the same folder (see [Safety](#token-file)) |
 | Connection | one request per connection; every response has `Connection: close` |
 | Request body | UTF-8 JSON, `Content-Type: application/json` (parameters such as `; charset=utf-8` allowed), `Content-Length` required, max 1 MB (1 048 576 bytes); chunked bodies are refused |
 | Concurrency | up to 16 requests in flight; more get HTTP 503 |
@@ -81,7 +83,8 @@ validator refusal: `{"validation": {...}}`). Clients that ignore `data` still ge
 |---|---|
 | `UNKNOWN_METHOD` | no such method in this build |
 | `INVALID_PARAMS` | a parameter has the wrong type/range, or a GUID is malformed |
-| `EDITOR_NOT_OPEN` | `EditorSystem.Instance` is null (main menu, in a normal game, ...) |
+| `EDITOR_NOT_OPEN` | `EditorSystem.Instance` is null (main menu, in a normal game, ...), or the Mod Editor is opening or closing; the call was not run and nothing was changed |
+| `EDITOR_CLOSED_DURING_CALL` | the Mod Editor was closed while the call was running and its own result never came: a write may have partly applied (a read changed nothing). Do not retry blindly: open the Mod Editor and check `get_status` / `get_object` first. See [Lifecycle](#lifecycle-active-only-while-the-mod-editor-is-open) |
 | `NO_MOD_OPEN` | editor open, no mod loaded |
 | `BUSY_LOADING` | the editor is loading a mod (`IsLoading`) or the mod has not finished loading (`!IsLoaded`) |
 | `NOT_FOUND` | object / component not found |
@@ -164,7 +167,8 @@ body changes nothing, or the body commits and the caller no longer times out.
 
 ### `ping`
 
-Works with the editor closed. No params.
+Answered on the HTTP thread (also while the main thread is busy). No params. Like every tool it needs the Mod Editor open:
+with it closed nothing listens.
 
 ```json
 {"pong": true, "pluginVersion": "0.8.0", "gameVersion": "1.14.1k", "unityVersion": "2021.3.45f2",
@@ -179,11 +183,14 @@ component, property and undo tools of increment 2; `actions` = the action/trigge
 writes are currently allowed is in `get_status`
 (`writesEnabled`, `publishBlock.complete`).
 
-`sessionId` is random per game start; a change means the game restarted (log ids restart at 1).
+`sessionId` is random per game start and stays the same across editor sessions; a change means the game restarted (log ids
+restart at 1).
 
 ### `get_status`
 
-No params. Never fails because of editor state.
+No params. Never fails because of the editor's own state, and answers also when the publish block is incomplete. Exceptions:
+while the Mod Editor is closing it returns `EDITOR_NOT_OPEN`; when the plugin cannot read the editor at all (game update) it
+returns `INTERNAL`.
 
 ```json
 {"editorOpen": true, "editorState": "Editing", "isLoading": false, "modOpen": true,
@@ -197,19 +204,24 @@ No params. Never fails because of editor state.
  "capabilities": ["read", "write", "edit", "actions", "playtest", "batch", "playtestState", "selfTest", "gameVersionGate", "settings", "assets", "prefabs"], "writesEnabled": true,
  "gameVersionCheck": {"running": "1.14.1k", "tested": ["1.14.1k"], "accepted": false, "writesAllowed": true},
  "publishBlock": {"active": true, "complete": true, "patchedCount": 59, "missing": []},
- "activeWrite": null}
+ "activeWrite": null,
+ "lifecycle": {"state": "active", "armedUtc": "2026-11-16T12:00:00.0000000Z", "sessionsThisRun": 1}}
 ```
 
 - `writesEnabled`: current value of `[Safety] EnableWrites`.
 - `gameVersionCheck`: `{running, tested[], accepted, writesAllowed}` (+ `readable: false` when the version string could not be read, `forcedUntested: true` when `ForceGameVersionUntested` is on). `accepted` = `[Safety] AcceptedGameVersion` equals `running` exactly; `writesAllowed` = running is tested or accepted. See [Game-version gate](#game-version-gate).
 - `publishBlock`: `active` = at least one blocking patch installed; `complete` = every required target patched
   and no patch failed (write tools need this); `patchedCount` = methods patched (59 expected for game build
-  2025-10-16: 10 game methods, 25 `SteamUGC`, 24 `SteamRemoteStorage`; the count at startup); `missing` =
+  2025-10-16: 10 game methods, 25 `SteamUGC`, 24 `SteamRemoteStorage`; the count when the Mod Editor opened); `missing` =
   `"<target>: <reason>"` for each target that is missing (required) or whose patch failed. The status is **live**:
   every `get_status` and every write call re-checks (Harmony patch info) that each required target still carries the
-  plugin's prefix; if one was removed after startup (e.g. another plugin unpatched it), `complete` becomes false,
-  `missing` lists it as `"<target>: blocking prefix removed after startup"`, and it stays so until the game is
-  restarted. `readOnlyBuild` was removed in api v2.
+  plugin's prefix; if one was removed after the editor opened (e.g. another plugin unpatched it), `complete` becomes false,
+  `missing` lists it as `"<target>: blocking prefix removed after the Mod Editor opened"`, and it stays so until the Mod Editor is
+  closed and opened again (a new editor session installs the block again). `readOnlyBuild` was removed in api v2.
+- `lifecycle` (additive): `state` `active` (everything started) or `failed` (the publish block, the token or
+  the port failed when the editor opened: only `ping`, `get_status`, `get_log` and `self_test` answer, or nothing does);
+  `armedUtc` = when the current editor session started (UTC); `sessionsThisRun` = editor sessions since the game started.
+  See [Lifecycle](#lifecycle-active-only-while-the-mod-editor-is-open).
 
 - `editorState`: `Editing | EnteringPlayMode | PlayMode | ExitingPlayMode` (null when the editor is closed).
 - `playMode`: `editorState != "Editing"` (a playtest is starting, running or ending).
@@ -464,8 +476,9 @@ Result: an object. `assets` is sorted by `type`, then `name`, then `guid` (ordin
 | `sinceId` | int >= 0 | - | return entries with `id > sinceId`, oldest first |
 | `includeEditor` | bool | false | also return the editor Log window's buffer (needs the main thread) |
 
-Source: a 2000-entry ring buffer fed by `Application.logMessageReceivedThreaded` from plugin start (all Unity log
-output of the game, editor and playtests). Without `sinceId` the newest `max` entries are returned.
+Source: a 2000-entry ring buffer fed by `Application.logMessageReceivedThreaded` while the Mod Editor is open (all Unity
+log output of the game, editor and playtests). It is kept across editor sessions; lines from outside the Mod Editor are
+only in `BepInEx\LogOutput.log`. Without `sinceId` the newest `max` entries are returned.
 
 ```json
 {"entries": [{"id": 41, "time": "2026-11-10T17:05:01.123Z", "level": "error",
@@ -485,8 +498,10 @@ output of the game, editor and playtests). Without `sinceId` the newest `max` en
 
 ### `screenshot`
 
-Params: `maxWidth` (int 64-7680, default 1280), `camera` (optional, see below). Without `camera` it works with the
-editor open or closed and captures whatever the view shows.
+Params: `maxWidth` (int 64-7680, default 1280), `camera` (optional, see below). Without `camera` it works in
+every editor state and captures whatever the view shows (also a playtest). Exceptions: while the Mod Editor is opening or
+closing it returns `EDITOR_NOT_OPEN` (a capture never returns a picture taken after the editor closed); with an incomplete
+publish block it returns `PUBLISH_BLOCK_INCOMPLETE`.
 
 ```json
 {"pngBase64": "iVBORw0KGgoAAAANSUhEUgAA...", "width": 1280, "height": 720}
@@ -666,7 +681,7 @@ Result: an **array** with one entry per registered mod component type, in regist
 
 ### `self_test` (read)
 
-No params; works with the editor closed. Changes nothing. After a game update it re-resolves every game member the plugin looks up by name (fields, properties, methods, the enum values and properties the inspector rules name; one central registry, `Core/RequiredMembers.cs`, the same list the offline drift test checks), re-checks the publish block and compares the custom-inspector components with the audited snapshot.
+No params. Changes nothing. Answers also when the publish block is incomplete. After a game update it re-resolves every game member the plugin looks up by name (fields, properties, methods, the enum values and properties the inspector rules name; one central registry, `Core/RequiredMembers.cs`, the same list the offline drift test checks), re-checks the publish block and compares the custom-inspector components with the audited snapshot.
 
 ```json
 {"ok": true, "gameVersion": "1.14.1k", "gameVersionCheck": {"running": "1.14.1k", "tested": ["1.14.1k"], "accepted": false, "writesAllowed": true},
@@ -753,7 +768,7 @@ a save happened. Consequences:
 - Entering a playtest writes the mod files but does not count as a save (the editor does not clear its flag either).
 - Fallback to the editor's flag (`unsavedEditsSource: "editorFlag"`) when the plugin first saw the mod with more
   than one undo entry on a stack (it was open before the plugin could watch it) until the next save, or when the save
-  postfix could not be installed (a warning is logged at startup).
+  postfix could not be installed (a warning is logged when the Mod Editor opens).
 - An edit followed by an undo within the same frame is not seen (practically impossible by hand).
 
 ### `create_object` (write)
@@ -1986,7 +2001,7 @@ One warning is logged per capture (BepInEx log and game console): `Opening, crea
 refused for a moment ...`; try again a second later. At all other times the prefixes do nothing. Leaving the editor
 (exit to the main menu) is never refused: `EditorSystem.OnDisable` ends the hold, and the screenshot coroutine runs on the
 editor object, so it stops when the editor is destroyed (or it writes into the still-open sandbox mod before that). If
-any of these methods is missing or cannot be patched at startup (game update), `capture_preview_image` refuses with
+any of these methods is missing or cannot be patched when the Mod Editor opens (game update), `capture_preview_image` refuses with
 `INTERNAL` (`capture_preview_image is disabled because the plugin's mod-switch guard could not be installed ...; nothing
 was changed`); every other tool keeps working. The prefixes are not part of the Workshop publish block.
 
@@ -3159,7 +3174,8 @@ happened).
 | `sinceId` | int >= 0 | - | return entries with `id > sinceId`, oldest first (without it: the newest `max`) |
 
 Answered on the HTTP thread like `get_log`; works in every editor state, also after the playtest (stop first, read
-afterwards) and with the editor closed.
+afterwards). Exceptions: while the Mod Editor is opening or closing it returns `EDITOR_NOT_OPEN`, with an incomplete
+publish block `PUBLISH_BLOCK_INCOMPLETE`. Event ids keep counting across editor sessions of one game run.
 
 ```json
 {"entries": [
@@ -3215,7 +3231,7 @@ precedent `Hooks/SaveWatch.cs`) on `ModLogicTrigger.RunActionsLocal(ModEvent)` a
 `ModAction.Execute(ModEvent)` (`ModAction`, `TargetAction`, `WaitAction`, `GiveItemAction`, `MoveSpaceAction`,
 `SetConnectionActiveAction`, `SetGravityAction`, `SpawnPrefabAction`). A postfix returns at once unless a playtest is in
 `PlayMode`, never changes arguments or results, and swallows every exception. If a target cannot be patched, a warning is
-logged at startup and only those two event types are affected (`logicEvents` reports it). The hooks are installed with the RPC server (`[General] PluginEnabled` and `[Server] Enabled` both true), separately from the publish block, and are never removed at runtime (they are inert outside a playtest).
+logged when the Mod Editor opens and only those two event types are affected (`logicEvents` reports it). The hooks are installed when the Mod Editor opens, after the RPC server started (`[General] PluginEnabled` and `[Server] Enabled` both true, publish block complete), separately from the publish block, and removed when the editor closes, so they never run in a match outside the editor.
 
 **Rate limits for `trigger_fired` / `action_executed`** (gameplay events are never limited): at most one record per
 trigger slot / action per second (the skipped ones are counted in `repeats` on the next record of that key), and at most
@@ -3333,7 +3349,7 @@ resolve (they would read as `registered: false`).
 | `ping`, `get_log`, `screenshot` | work unchanged (`get_log` and `screenshot` are the way to observe a playtest from outside; the screenshot shows the editor window with the play view); `screenshot`'s `camera` is edit mode only (`INVALID_STATE`) |
 | `get_status` | works; `playtest` block with `running: true`, times, `paused`, `minigame` / `board` state, `eventCount`, `lastEventId`, `alivePlayers` |
 | `get_playtest_state` | **needs** a running playtest (`PlayMode`): reads the runtime players and minigame/board; `INVALID_STATE` in every other state (the message says what to do) |
-| `get_playtest_events` | works in every state, also with the editor closed and after the playtest (reads the plugin's own buffer; answered on the HTTP thread) |
+| `get_playtest_events` | works in every editor state, also after the playtest (reads the plugin's own buffer; answered on the HTTP thread) |
 | `get_hierarchy` | works; lists the **edit-time** scene and adds `playMode: true` + `playModeNote` (the synthetic root shows `active: false`) |
 | `list_assets`, `list_trigger_types`, `list_action_types` without an address | work; result has `playMode: true` (static or editor-mod data) |
 | `list_mods`, `list_component_types` | work (array results, no marker; `addable` describes edit mode) |
@@ -3452,7 +3468,7 @@ exactly what was applied; revert by hand with `delete_object` or one `undo` per 
 
 | Key | Default | Effect |
 |---|---|---|
-| `[General] PluginEnabled` | `true` | Read at game start. `false`: the plugin does nothing at all (no server, no patches, one log line). Use this to publish by hand. |
+| `[General] PluginEnabled` | `true` | Read at game start. `false`: the plugin does nothing at all (no server, no patches, no scene-load check, one log line). Use this to publish by hand. |
 | `[Safety] EnableWrites` | `true` | Read on every write call (the plugin reloads the file when its modification time changed, see below). `false`: every write tool returns `WRITES_DISABLED`. Does not affect the publish block. |
 | `[Safety] AcceptedGameVersion` | empty | A game version you accept although the plugin was not tested with it. Applies only to that exact string (case-sensitive; surrounding whitespace in the cfg line is ignored); the next game update closes the gate again. Read on every write call. See [Game-version gate](#game-version-gate). |
 | `[Safety] ForceGameVersionUntested` | `false` | Test switch: treats the running version as untested even if it is in the tested list. Can only make the gate stricter; it never accepts a version. |
@@ -3460,10 +3476,10 @@ exactly what was applied; revert by hand with `delete_object` or one `undo` per 
 | `[Assets] MaxModAssetsMB` | `500` | `import_asset`: largest total size of the sandbox mod's `Assets` folder after the import, 1..8192 MB. Read on every import call. |
 | `[Assets] MaxAudioSeconds` | `600` | `import_asset`: longest audio clip, 1..7200 s, read from the WAV/OGG/MP3 header of the copy (the game decodes the whole clip on its main thread). Read on every import call. |
 | `[Assets] MaxCompressedAudioMB` | `15` | `import_asset`: largest OGG/MP3 whose duration its header does not give (e.g. a VBR MP3 without a Xing/VBRI header), 1..1024 MB. Read on every import call. |
-| `[Server] Enabled` | `true` | `false`: no RPC server; the publish block stays active. |
-| `[Server] Port` | `38917` | Read at game start. If the port cannot be bound (already in use), one Error is logged and the plugin stays idle: no dispatcher, frame poller, save watch or undo observer runs and no tool is served. The Workshop publish block stays active. |
+| `[Server] Enabled` | `true` | Read when the Mod Editor opens. `false`: no RPC server and no hooks; the publish block is still installed while the editor is open. |
+| `[Server] Port` | `38917` | Read when the Mod Editor opens. If the port cannot be bound (already in use), one Error is logged (BepInEx and the editor's Log window) and no tool is served in that editor session. The Workshop publish block stays until the editor closes. |
 
-**Config reload.** BepInEx 5.4.23 does not watch the `.cfg` file, so a plain edit would only apply after a game restart. The plugin therefore stats the file on every guarded call (write tools, `get_status`, `self_test`) and calls `ConfigFile.Reload()` when its modification time changed; `EnableWrites`, `AcceptedGameVersion` and `ForceGameVersionUntested` follow edits without a restart (a malformed file keeps the values already loaded). `ping` runs on the HTTP thread and reports the values loaded at the last reload. `PluginEnabled`, `Enabled` and `Port` are still read at game start only.
+**Config reload.** BepInEx 5.4.23 does not watch the `.cfg` file, so a plain edit would only apply after a game restart. The plugin therefore stats the file on every guarded call (write tools, `get_status`, `self_test`) and calls `ConfigFile.Reload()` when its modification time changed; `EnableWrites`, `AcceptedGameVersion` and `ForceGameVersionUntested` follow edits without a restart (a malformed file keeps the values already loaded). `ping` runs on the HTTP thread and reports the values loaded at the last reload. The file is also reloaded when the Mod Editor opens, so `Enabled` and `Port` apply from the next editor session. `PluginEnabled` is read at game start only.
 
 ### Links inside sandbox mods
 
@@ -3471,12 +3487,13 @@ The plugin never writes, creates, moves or deletes a file through a junction, di
 symlink or hard link inside a sandbox mod, nor when the mod folder itself is a link (`LINK_REFUSED`, nothing written). The
 rule is central (`Core/SandboxPath.cs`) and runs before every file operation and every game call that writes or deletes
 files for the plugin; the full list is under [Links inside a sandbox mod](#links-inside-a-sandbox-mod-every-write-and-delete).
-At start (with writes enabled) the plugin also renames a copy left by an import that a crash interrupted during decoding
+When the Mod Editor opens (with writes enabled and a complete publish block) the plugin also renames a copy left by an import that a crash interrupted during decoding
 (`McpRecoveryimport-pending.json`; sandbox mods only, hash-checked, rename only).
 
 ### Token file
 
-`BepInEx\config\PummelPartyMcp.token` is written to a temp file in the same folder and then moved into place (missing
+The token file is read, or created, when the Mod Editor opens (so on a fresh install it appears at the first editor open),
+and kept afterwards: the token stays the same across editor sessions and game restarts. `BepInEx\config\PummelPartyMcp.token` is written to a temp file in the same folder and then moved into place (missing
 target) or swapped in with `File.Replace` (malformed target), so a reader never sees a half-written token. Two
 processes starting at once converge on one token: the loser of the move re-reads the file and uses the winner's token.
 **Limitation:** the file's ACL is not restricted. It inherits the permissions of the game's `BepInEx\config` folder
@@ -3495,7 +3512,7 @@ prefix is hardcoded; there is no configuration, allowlist or bypass.
 
 ### Game-version gate
 
-The plugin replicates editor call sequences and reads private game members, so after a game update it may silently misbehave. `Application.version` (the string logged at startup and returned by `ping` as `gameVersion`) is compared with the list of tested versions compiled into the plugin (`1.14.1k`). The comparison is exact (ordinal, case-sensitive, no trimming). If the running version is not in the list, the plugin logs a Warning at startup, **read tools keep working** and **every write tool is refused with `GAME_VERSION_UNTESTED`** (the message names the running version, the tested versions and how to accept), unless `[Safety] AcceptedGameVersion` equals the running version exactly. If the version cannot be read at all, it counts as untested and cannot be accepted. The check is step 3 of the central guard (after `EnableWrites` and the publish block, before the editor-state checks), so no write tool, lifecycle tool or batch step can skip it; the publish block is not affected by it. Workflow after an update: call `self_test`; if `ok` is true, set `[Safety] AcceptedGameVersion = <version>` in the cfg (no restart, see Config reload) and verify with a small edit on a `MCP_` mod. To test the gate without an update set `[Safety] ForceGameVersionUntested = true` (stricter only), then clear it.
+The plugin replicates editor call sequences and reads private game members, so after a game update it may silently misbehave. `Application.version` (the string logged at startup and returned by `ping` as `gameVersion`) is compared with the list of tested versions compiled into the plugin (`1.14.1k`). The comparison is exact (ordinal, case-sensitive, no trimming). If the running version is not in the list, the plugin logs a Warning when the Mod Editor opens, **read tools keep working** and **every write tool is refused with `GAME_VERSION_UNTESTED`** (the message names the running version, the tested versions and how to accept), unless `[Safety] AcceptedGameVersion` equals the running version exactly. If the version cannot be read at all, it counts as untested and cannot be accepted. The check is step 3 of the central guard (after `EnableWrites` and the publish block, before the editor-state checks), so no write tool, lifecycle tool or batch step can skip it; the publish block is not affected by it. Workflow after an update: call `self_test`; if `ok` is true, set `[Safety] AcceptedGameVersion = <version>` in the cfg (no restart, see Config reload) and verify with a small edit on a `MCP_` mod. To test the gate without an update set `[Safety] ForceGameVersionUntested = true` (stricter only), then clear it.
 
 ### Guard (central, in the tool registry)
 
@@ -3526,7 +3543,7 @@ reset to 256 with a warning in the BepInEx and Unity logs. This is the only work
 
 ### Workshop publish block
 
-While the plugin is enabled, Harmony prefixes installed in `Awake` (before the server starts; never removed by the plugin) skip
+While the Mod Editor is open and the plugin is enabled, Harmony prefixes skip
 every Workshop create/update/delete path and return a safe default: the type's `Invalid` handle where one exists
 (`UGCUpdateHandle_t.Invalid` = `ulong.MaxValue`, `SteamAPICall_t.Invalid` = 0), else `false` / 0 / null.
 
@@ -3536,24 +3553,31 @@ every Workshop create/update/delete path and return a safe default: the type's `
   `WorkshopBrowserItem.Delete`.
 - `Steamworks.SteamUGC`: `CreateItem`, `StartItemUpdate`, `SubmitItemUpdate`, `DeleteItem` (required); every
   public static method whose first parameter is `UGCUpdateHandle_t` except the getter `GetItemUpdateProgress`
-  (enumerated at startup); `AddDependency`, `RemoveDependency`, `AddAppDependency`, `RemoveAppDependency`.
+  (enumerated when the block is installed); `AddDependency`, `RemoveDependency`, `AddAppDependency`, `RemoveAppDependency`.
 - `Steamworks.SteamRemoteStorage`: every method whose name contains `FileWrite` or starts with
   `UpdatePublishedFile`, plus `FileDelete`, `FileForget`, `FileShare`, `SetSyncPlatforms`, `PublishWorkshopFile`,
   `PublishVideo`, `CreatePublishedFileUpdateRequest`, `CommitPublishedFileUpdate`, `DeletePublishedFile`.
 - Not blocked (normal play keeps working): queries, `Get*`, `Release*`, `DownloadItem`, `SubscribeItem`,
   `UnsubscribeItem`, `SetUserItemVote`, favourites, playtime tracking, `UGCDownload`, `UGCRead`, `FileRead`,
   `FileExists`.
-- Fail closed: if a required target is missing or any patch fails, an Error is logged, `publishBlock.complete` is
-  false and every write tool returns `PUBLISH_BLOCK_INCOMPLETE`. Read tools keep working.
+- When: installed when the Mod Editor opens, as the first step (before the server, the hooks and the import recovery;
+  inside the editor scene's load, before the editor's first frame, so before its File menu can open the publish dialog).
+  Removed when the editor closes, as the last step. Outside the Mod Editor the plugin blocks nothing: the main-menu
+  Workshop window (`WorkshopBrowserItem.Delete` included) works as in the unmodded game. No publish or update path
+  exists outside the editor (every one starts in the editor's `WorkshopPopup`).
+- Fail closed: if a required target is missing or any patch fails when the editor opens, an Error is logged (BepInEx and
+  the editor's Log window), `publishBlock.complete` is false and, for that editor session, every tool except `ping`,
+  `get_status`, `get_log` and `self_test` returns `PUBLISH_BLOCK_INCOMPLETE` (nothing runs). The patches that did go in
+  stay until the editor closes.
 - Checked live: before every write tool (guard step 2) and on every `get_status`, the plugin reads Harmony's patch
   info of each required target (about 14 lookups, no per-frame work). If one no longer carries the plugin's prefix
   (another plugin called `Harmony.UnpatchAll()` / `UnpatchID`, or unpatched it), the block is incomplete from then on:
   one Error per lost target in the BepInEx log, `publishBlock.complete: false` with the target in `missing`, every
-  write tool `PUBLISH_BLOCK_INCOMPLETE`. The plugin does **not** re-patch at runtime; restart the game (and remove the
-  plugin that unpatched it). Optional targets are not re-checked.
+  write tool `PUBLISH_BLOCK_INCOMPLETE`. The plugin does **not** re-patch within an editor session; close and reopen
+  the Mod Editor (and remove the plugin that unpatched it). Optional targets are not re-checked.
 - Each blocked call logs a Warning (first call at once, then at most once per method per 10 s with the number of
   calls not logged) to the BepInEx log and to the Unity log, so the editor's Log window shows it:
-  `[PummelPartyMcp] Workshop publishing is blocked while the pummel-party-mcp plugin is enabled. Blocked call: WorkshopPopup.PublishMod(PummelMod). Nothing was sent to Steam. To publish, set [General] PluginEnabled = false in BepInEx\config\com.pummelpartymcp.plugin.cfg and restart the game.`
+  `[PummelPartyMcp] Workshop publishing is blocked while the Mod Editor is open with the pummel-party-mcp plugin enabled. Blocked call: WorkshopPopup.PublishMod(PummelMod). Nothing was sent to Steam. To publish, set [General] PluginEnabled = false in BepInEx\config\com.pummelpartymcp.plugin.cfg and restart the game.`
 
 **What the author sees when clicking Publish with the plugin loaded:** File > Publish Mod to Workshop still opens
 the dialog (its read-only Workshop details query is allowed). Clicking "Publish mod to workshop" / "Publish update
@@ -3565,6 +3589,41 @@ visibility into the in-memory mod; that is game behaviour, unchanged by the plug
 
 **How to publish by hand:** quit the game, set `[General] PluginEnabled = false`, start the game, publish from the
 editor as usual, quit, set it back to `true`.
+
+### Lifecycle (active only while the Mod Editor is open)
+
+The plugin is loaded by BepInEx at game start, but it is active only while the Mod Editor is open (state machine
+`Core/EditorLifecycle.cs`, host `Plugin.cs`).
+
+- **Dormant** (game start, main menu, matches): no Harmony patch of the plugin, no listener, no log listener, no thread
+  of its own (right after a disarm, connection threads of the last session may still finish their reply for a moment),
+  the component is disabled (no `Update`). The only code is one `SceneManager.sceneLoaded` callback: per scene load one
+  scene-name compare and one read of `EditorSystem.Instance`.
+- **Arming** (synchronously in the scene-loaded callback of `ModEditorScene`, or of any scene while
+  `EditorSystem.Instance` exists): the publish block first (also when a later step throws), then the log listener,
+  game-version log, import recovery, token, a new dispatcher and listener, then the save watch, the mod-switch guard and
+  the playtest hooks. One Info line with the time taken.
+- **Active**: as described in this document. Scene loads during an editor playtest change nothing. The plugin stays
+  armed while an editor object exists: `EditorSystem.Instance` is not null, or (when it is null) an active `EditorSystem`
+  object is still found (the game nulls `Instance` in every editor's `OnDestroy`, so after a rare exit that kept an old
+  editor object alive, closing a second editor nulls it while the old one lives). This also covers the rare case where
+  the game keeps the editor object after it goes back to the main menu.
+- **Failed**: the publish block is incomplete (only `ping`, `get_status`, `get_log`, `self_test` answer;
+  `PUBLISH_BLOCK_INCOMPLETE`), `EditorSystem.Instance` cannot be read (game update: the block is installed, only those four
+  answer; `INTERNAL`; the editor is then found by the object search), or the token file or the port failed (nothing
+  answers). Ends like Active when the editor closes.
+- **Disarming** (the editor object was seen and is gone; or it never appeared and a later scene that is not
+  `ModEditorScene` loaded with no editor object: there is no time-out, so an editor that comes up late still finds the
+  block): the listener stops; queued calls, waiting write calls and waiting screenshots fail with `EDITOR_NOT_OPEN` ("not
+  run, nothing changed"); calls already running get up to 2 s (and at least 10 frames) to finish with their own result
+  (a screenshot that would capture after the editor closed fails with `EDITOR_NOT_OPEN`); whatever still runs then fails
+  with `EDITOR_CLOSED_DURING_CALL` ("may have partly applied"). Then the hooks and, last, the publish block are removed
+  and checked (Harmony patch info); one Info line, or one Error if a patch is left. If removing a patch fails, one Error in the BepInEx log names it and it stays in the game until the next time the Mod Editor opens and closes: a leftover playtest hook still runs (and returns at once) in mod minigames, a leftover publish-block prefix still blocks the main-menu Workshop delete. Restart the game to be sure.
+- Quit while the editor is open: the listener stops and queued calls fail; nothing is unpatched (the process ends).
+
+Kept for the whole game run: the log ring, the playtest event feed (ids keep counting), the undo tracker, `sessionId`
+and the token. New per editor session: the patches, the publish-block monitor, the dispatcher and the listener.
+`get_status.lifecycle` shows the state. A game method that was patched once keeps a Harmony-generated replacement after the plugin removed its patch: it behaves like the original and carries no patch of the plugin, but its machine code is not the original one.
 
 ---
 

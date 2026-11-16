@@ -33,13 +33,20 @@ namespace PummelPartyMcp.Core
         private readonly IMainThreadDispatcher m_dispatcher;
         private readonly IPluginLog m_log;
         private readonly TimeSpan m_mainThreadTimeout;
+        private readonly Func<string, RpcException> m_gate;
 
-        public RpcHandler(ToolRegistry registry, IMainThreadDispatcher dispatcher, IPluginLog log, TimeSpan mainThreadTimeout)
+        /// <param name="gate">
+        /// Optional per-call gate (any thread): returns the refusal for a known method, or null to run it. The plugin passes the
+        /// editor session's <see cref="SessionGate"/>.
+        /// </param>
+        public RpcHandler(ToolRegistry registry, IMainThreadDispatcher dispatcher, IPluginLog log, TimeSpan mainThreadTimeout,
+            Func<string, RpcException> gate = null)
         {
             m_registry = registry;
             m_dispatcher = dispatcher;
             m_log = log ?? NullPluginLog.Instance;
             m_mainThreadTimeout = mainThreadTimeout;
+            m_gate = gate;
         }
 
         public RpcResponse Handle(string body)
@@ -99,6 +106,19 @@ namespace PummelPartyMcp.Core
             JObject envelope;
             try
             {
+                RpcException refused;
+                try
+                {
+                    refused = m_gate?.Invoke(method);
+                }
+                catch (Exception e)
+                {
+                    refused = RpcException.Internal("the session gate failed (" + e.GetType().Name + "); the call was not run"); // fail closed
+                }
+                if (refused != null)
+                {
+                    throw refused;
+                }
                 object result = tool.Invoke(new ToolContext(method, parameters, m_dispatcher, m_mainThreadTimeout));
                 JToken resultToken = result as JToken ?? (result == null ? JValue.CreateNull() : JToken.FromObject(result));
                 envelope = new JObject { ["ok"] = true, ["result"] = resultToken };
@@ -109,7 +129,7 @@ namespace PummelPartyMcp.Core
                 if (e is RpcException rpc)
                 {
                     // messages can echo caller input: control characters are escaped in the log line (the reply is unchanged)
-                    if (rpc.Code == ErrorCodes.Internal || rpc.Code == ErrorCodes.Timeout)
+                    if (rpc.Code == ErrorCodes.Internal || rpc.Code == ErrorCodes.Timeout || rpc.Code == ErrorCodes.EditorClosedDuringCall)
                     {
                         m_log.Error($"rpc {method} failed: {rpc.Code}: {SafeText.Escape(rpc.Message)}");
                     }

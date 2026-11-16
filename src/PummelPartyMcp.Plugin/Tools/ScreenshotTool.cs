@@ -22,11 +22,39 @@ namespace PummelPartyMcp.Tools
         }
 
         private static bool s_watching;
+        private static CaptureQueue s_queue;
+
+        /// <summary>The Mod Editor closed: no capture starts or finishes any more (it would show the main menu, not the editor).</summary>
+        private static volatile bool s_stopping;
+
+        /// <summary>A new editor session starts: captures run again.</summary>
+        internal static void StartSession() => s_stopping = false;
+
+        /// <summary>
+        /// The Mod Editor closed (main thread, start of the disarm): waiting captures fail with <paramref name="error"/> and never
+        /// start; a capture already running fails at its capture point. Returns the number of waiting captures failed.
+        /// </summary>
+        internal static int BeginStop(Func<Exception> error)
+        {
+            s_stopping = true;
+            return s_queue?.FailWaiting(error) ?? 0;
+        }
+
+        /// <summary>
+        /// End of an editor session (main thread; the frame poller was cleared): fails the queued and running captures and forgets
+        /// the watchdog, so the next session starts clean. The host stops the capture coroutines afterwards. Returns the count.
+        /// </summary>
+        internal static int ResetSession(Func<Exception> error)
+        {
+            s_watching = false;
+            return s_queue?.FailAll(error) ?? 0;
+        }
 
         public static void Register(ToolRegistry registry, MonoBehaviour host, FramePoller poller, IPluginLog log)
         {
             CaptureQueue queue = null;
             queue = new CaptureQueue(e => StartCapture(host, queue, e), log);
+            s_queue = queue;
             registry.Register(ToolDefinition.Read("screenshot", ctx =>
             {
                 ShotRequest req = new ShotRequest
@@ -81,6 +109,11 @@ namespace PummelPartyMcp.Tools
         private static bool StartCapture(MonoBehaviour host, CaptureQueue queue, CaptureQueue.Entry entry)
         {
             ShotRequest req = (ShotRequest)entry.State;
+            if (s_stopping)
+            {
+                entry.Completion.SetException(SessionGate.EditorClosed()); // never a main-menu picture
+                return false;
+            }
             JObject applied = null;
             if (req.Camera != null)
             {
@@ -109,6 +142,11 @@ namespace PummelPartyMcp.Tools
                 yield return new WaitForEndOfFrame();
                 if (completion.IsCancelled)
                 {
+                    yield break;
+                }
+                if (s_stopping || EditorAccess.EditorOrNull() == null)
+                {
+                    completion.SetException(SessionGate.EditorClosed()); // the editor is gone: the frame would show the main menu
                     yield break;
                 }
                 try

@@ -9,11 +9,11 @@ You drive the Mod Editor of a running Pummel Party through MCP tools. A plugin i
 
 ## First calls
 
-1. `get_status`. Check:
+1. `get_status`. The plugin only answers while the Mod Editor is open; if nothing answers ("No answer from the pummel-party-mcp plugin"), ask the human to open the Mod Editor from the main menu, then retry. Check:
    - `editorOpen` / `editorState` is `Editing` (otherwise tell the human to open the Mod Editor, or wait; `EDITOR_NOT_OPEN`).
    - `modOpen` / `modName`: which mod is open.
    - `writesEnabled` must be true (else `WRITES_DISABLED`: the human must change the plugin config).
-   - `publishBlock.complete` must be true (else every write returns `PUBLISH_BLOCK_INCOMPLETE`).
+   - `publishBlock.complete` must be true. If the block was incomplete when the Mod Editor opened, every tool except `ping`, `get_status`, `get_log` and `self_test` returns `PUBLISH_BLOCK_INCOMPLETE`; if it was lost later in the session, only writes are refused and reads continue.
    - `gameVersionCheck`: if it reports an untested game version, writes are refused with `GAME_VERSION_UNTESTED` (see Errors).
    - `hasUnsavedEdits`, `playtest`.
 2. `list_mods` (isTestMod, isOpen), then `open_test_mod` or `create_test_mod`.
@@ -153,7 +153,8 @@ What to conclude: verify, never assume. A trigger "worked" only if the events or
 - `INVALID_STATE`: read the message: dialog open, mouse held, play mode active (`stop_playtest`), validator errors, unsaved edits (save first), prefab being edited (`close_prefab`), wrong editing context. Fix the state, or ask the human, then retry.
 - `TIMEOUT`: read the message. "nothing was changed" / "safe to retry" means before the commit point: retrying is safe. A message saying the mod was created, is being opened, or that the change was applied means it may already have happened: `get_status`, `list_mods`, `get_object` first, never retry blindly. After a `start_playtest` timeout: `get_status`, then `stop_playtest`. A client-side timeout without a plugin reply is ambiguous: check before retrying a write.
 - `GUARD_NOT_TEST_MOD`: the target or open mod is not a `MCP_` mod. Stop; do not rename or retry.
-- `PUBLISH_BLOCK_INCOMPLETE`: the plugin's Workshop safety patches are not all in place (for example after a game update). Writes stay off; tell the human; read tools still work.
+- `PUBLISH_BLOCK_INCOMPLETE`: the plugin's Workshop safety patches are not all in place (for example after a game update). Incomplete when the Mod Editor opened: every tool except `ping`, `get_status`, `get_log` and `self_test` stays off until the editor is closed. Lost later in the session: writes are refused, reads continue. Tell the human.
+- `EDITOR_CLOSED_DURING_CALL`: the Mod Editor was closed while the call ran; a write may have partly applied. Do not retry blindly: once the editor is open again, check `get_status` / `get_object` first.
 - `GAME_VERSION_UNTESTED`: the game version is not one the plugin was tested with; writes are refused until the human sets `[Safety] AcceptedGameVersion` in the plugin config. Tell the human, do not try to work around it.
 - `set_property` / `set_properties` follow the editor inspector (0.7.0): a property the inspector never draws, one drawn only under a condition (e.g. `spotAngle` only while `type` is Spot; conditions are checked after the call's other values, so `{type: "Spot", spotAngle: 40}` works) or a choice it omits is refused with `INVALID_PARAMS`; `get_object` shows `shown` and `inspector` per property.
 - `INVALID_PARAMS`: a value or rule was refused (non-editable slot, hidden target flag, unknown parameter name, unsettable property). Re-read with `get_object` / `list_action_types` and fix the call. Values are validated first: on failure nothing changed.

@@ -57,6 +57,31 @@ test("ok:false maps to CODE: message plus hint", async () => {
   }
 });
 
+test("a write cut off by the editor closing says to check first, not 'then retry'", async () => {
+  const dir = makeTempDir();
+  const tf = join(dir, "tok");
+  writeToken(tf, "t");
+  const message = "the Mod Editor was closed while the call was running; a write may have partly applied";
+  const fake = await startFake({
+    token: "t",
+    handler: () => ({ ok: false, error: { code: "EDITOR_CLOSED_DURING_CALL", message } }),
+  });
+  try {
+    const c = new PluginClient({ port: fake.port, tokenFile: tf });
+    await assert.rejects(c.call("set_property", { guid: "g" }, 1000, { write: true }), (e) => {
+      assert.equal(e.code, "EDITOR_CLOSED_DURING_CALL");
+      assert.ok(e.message.startsWith(`EDITOR_CLOSED_DURING_CALL: ${message}
+Hint: `), e.message);
+      assert.match(e.message, /Do not retry blindly/);
+      assert.doesNotMatch(e.message, /main menu, then retry/);
+      return true;
+    });
+  } finally {
+    await fake.close();
+    removeDir(dir);
+  }
+});
+
 test("401 re-reads token file and retries once", async () => {
   const dir = makeTempDir();
   const tf = join(dir, "tok");
@@ -108,7 +133,7 @@ test("connection refused message", async () => {
     await assert.rejects(c.call("ping"), (e) => {
       assert.equal(
         e.message,
-        `Pummel Party is not running or the pummel-party-mcp plugin is not loaded (no listener on 127.0.0.1:${port}).`,
+        `No answer from the pummel-party-mcp plugin on 127.0.0.1:${port}. Start Pummel Party and open the Mod Editor from the main menu: the plugin only listens while the Mod Editor is open.`,
       );
       return true;
     });
@@ -124,7 +149,7 @@ test("missing token file message names the path", async () => {
     const c = new PluginClient({ port: 1, tokenFile: tf });
     await assert.rejects(c.call("ping"), (e) => {
       assert.ok(e.message.includes(tf));
-      assert.match(e.message, /started at least once/);
+      assert.match(e.message, /Mod Editor must have been opened at least once/);
       return true;
     });
   } finally {
@@ -166,6 +191,7 @@ test("new error codes map to hints", async () => {
     IMPORT_FAILED: /removed its copy/,
     LINK_REFUSED: /never written through/,
     TIMEOUT: /safe to retry.*check get_status and list_mods, do not retry blindly/s,
+    EDITOR_CLOSED_DURING_CALL: /may have partly applied.*Do not retry blindly.*get_status \/ get_object/s,
   };
   try {
     const c = new PluginClient({ port: fake.port, tokenFile: tf });

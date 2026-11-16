@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Threading;
@@ -62,6 +63,12 @@ namespace PummelPartyMcp.Core
         private readonly TimeSpan m_commitGrace;
         private readonly Func<TimeSpan> m_clock;
         private volatile bool m_shutdown;
+        private volatile Func<Exception> m_shutdownError = DefaultShutdownError;
+
+        /// <summary>Work that started on the main thread and has not completed yet (deferred work: later frames, coroutines).</summary>
+        private readonly List<WorkItem> m_started = new List<WorkItem>();
+
+        private static Exception DefaultShutdownError() => RpcException.Internal("plugin is shutting down");
 
         public MainThreadDispatcher(TimeSpan? commitGrace = null)
         {
@@ -80,10 +87,14 @@ namespace PummelPartyMcp.Core
             }
             if (m_shutdown)
             {
-                throw RpcException.Internal("plugin is shutting down");
+                throw m_shutdownError();
             }
             WorkItem item = new WorkItem(start, m_clock, m_clock() + timeout);
             m_queue.Enqueue(item);
+            if (m_shutdown)
+            {
+                FailQueued(); // Shutdown ran between the check and the enqueue: never leave the item waiting for a Drain
+            }
             if (!item.Done.Wait(timeout))
             {
                 if (item.TryCancel())
@@ -106,9 +117,14 @@ namespace PummelPartyMcp.Core
             return item.Result;
         }
 
-        /// <summary>Runs queued work on the calling (main) thread. Never throws.</summary>
+        /// <summary>Runs queued work on the calling (main) thread. Never throws. After <see cref="Shutdown()"/> it only fails what is queued.</summary>
         public int Drain(int maxItems, double maxMilliseconds)
         {
+            if (m_shutdown)
+            {
+                FailQueued();
+                return 0;
+            }
             int processed = 0;
             Stopwatch sw = Stopwatch.StartNew();
             while (processed < maxItems && sw.Elapsed.TotalMilliseconds < maxMilliseconds && m_queue.TryDequeue(out WorkItem item))
@@ -126,17 +142,74 @@ namespace PummelPartyMcp.Core
                 {
                     item.SetException(e);
                 }
+                if (!item.IsFinished)
+                {
+                    lock (m_started)
+                    {
+                        m_started.RemoveAll(w => w.IsFinished);
+                        m_started.Add(item); // deferred: completes in a later frame
+                    }
+                }
             }
             return processed;
         }
 
-        /// <summary>Rejects new work and fails everything still queued.</summary>
-        public void Shutdown()
+        /// <summary>Work that started and has not completed yet (deferred work waiting for later frames or a coroutine).</summary>
+        public int RunningCount
         {
+            get
+            {
+                lock (m_started)
+                {
+                    m_started.RemoveAll(w => w.IsFinished);
+                    return m_started.Count;
+                }
+            }
+        }
+
+        /// <summary>Rejects new work and fails everything still queued.</summary>
+        public void Shutdown() => Shutdown(DefaultShutdownError);
+
+        /// <summary>
+        /// Rejects new work and fails everything still queued, both with a fresh exception from <paramref name="error"/> (e.g.
+        /// EDITOR_NOT_OPEN when the Mod Editor closed). Work that already started keeps running to its own result.
+        /// </summary>
+        public void Shutdown(Func<Exception> error)
+        {
+            m_shutdownError = error ?? DefaultShutdownError;
             m_shutdown = true;
+            FailQueued();
+        }
+
+        /// <summary>
+        /// Completes every started, unfinished work item with a fresh exception from <paramref name="error"/> (its waiting caller is
+        /// released; a later result of that work is ignored). Main thread, after <see cref="Shutdown(Func{Exception})"/>. Returns the count.
+        /// </summary>
+        public int AbandonRunning(Func<Exception> error)
+        {
+            List<WorkItem> running;
+            lock (m_started)
+            {
+                running = new List<WorkItem>(m_started);
+                m_started.Clear();
+            }
+            int n = 0;
+            foreach (WorkItem item in running)
+            {
+                if (!item.IsFinished)
+                {
+                    item.SetException(error());
+                    n++;
+                }
+            }
+            return n;
+        }
+
+        private void FailQueued()
+        {
             while (m_queue.TryDequeue(out WorkItem item))
             {
-                item.FailAndRelease(RpcException.Internal("plugin is shutting down"));
+                item.FailAndRelease(m_shutdownError());
             }
         }
 
@@ -160,6 +233,16 @@ namespace PummelPartyMcp.Core
             }
 
             public bool IsCancelled => Volatile.Read(ref m_state) == Cancelled;
+
+            /// <summary>Completed or cancelled: nothing waits for this work any more.</summary>
+            public bool IsFinished
+            {
+                get
+                {
+                    int s = Volatile.Read(ref m_state);
+                    return s == Completed || s == Cancelled;
+                }
+            }
 
             public TimeSpan Remaining => m_deadline - m_clock();
 

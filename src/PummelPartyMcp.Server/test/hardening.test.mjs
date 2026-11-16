@@ -133,7 +133,7 @@ test("write tool: connection refused has no ambiguity note", async () => {
   try {
     const c = new PluginClient({ port, tokenFile: tf });
     await assert.rejects(c.call("set_object", { guid: "g" }, 1000, { write: true }), (e) => {
-      assert.match(e.message, /not running/);
+      assert.match(e.message, /No answer from the pummel-party-mcp plugin/);
       assert.doesNotMatch(e.message, NOTE);
       return true;
     });

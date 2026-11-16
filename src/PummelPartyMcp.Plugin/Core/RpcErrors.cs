@@ -8,6 +8,9 @@ namespace PummelPartyMcp.Core
         public const string UnknownMethod = "UNKNOWN_METHOD";
         public const string InvalidParams = "INVALID_PARAMS";
         public const string EditorNotOpen = "EDITOR_NOT_OPEN";
+
+        /// <summary>The Mod Editor closed while the call was running (decision P2): unlike EDITOR_NOT_OPEN a write may have partly applied.</summary>
+        public const string EditorClosedDuringCall = "EDITOR_CLOSED_DURING_CALL";
         public const string NoModOpen = "NO_MOD_OPEN";
         public const string BusyLoading = "BUSY_LOADING";
         public const string NotFound = "NOT_FOUND";

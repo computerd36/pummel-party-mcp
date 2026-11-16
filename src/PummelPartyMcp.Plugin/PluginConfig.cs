@@ -27,11 +27,12 @@ namespace PummelPartyMcp
         {
             m_file = config;
             m_pluginEnabled = config.Bind("General", "PluginEnabled", true,
-                "Master switch, read at game start. false = the plugin does nothing at all: no RPC server and no Workshop " +
-                "publish block. Set false (and restart the game) to publish a mod to the Workshop by hand.");
+                "Master switch, read at game start. true = the plugin starts when the Mod Editor opens and stops when it closes. " +
+                "false = the plugin does nothing at all: no RPC server and no Workshop publish block. Set false (and restart the " +
+                "game) to publish a mod to the Workshop by hand.");
             m_enableWrites = config.Bind("Safety", "EnableWrites", true,
                 "Allow write tools (they still only act on mods named MCP_...). false = every write tool returns " +
-                "WRITES_DISABLED. Does not affect the Workshop publish block, which is always on while the plugin is enabled.");
+                "WRITES_DISABLED. Does not affect the Workshop publish block, which is on while the Mod Editor is open and the plugin is enabled.");
             m_acceptedGameVersion = config.Bind("Safety", "AcceptedGameVersion", "",
                 "Game version you accept although this plugin was not tested with it (the tested versions are listed in the log at " +
                 "startup and by get_status). Empty = none. After a game update write tools return GAME_VERSION_UNTESTED (read tools " +
@@ -43,11 +44,11 @@ namespace PummelPartyMcp
                 "return GAME_VERSION_UNTESTED unless AcceptedGameVersion equals the running version). It can only make the gate " +
                 "stricter; no setting here can accept a version the plugin was not tested with other than AcceptedGameVersion.");
             m_port = config.Bind("Server", "Port", DefaultPort,
-                new ConfigDescription("TCP port of the local RPC server (bound to 127.0.0.1 only).",
+                new ConfigDescription("TCP port of the local RPC server (bound to 127.0.0.1 only, and only while the Mod Editor is open).",
                     new AcceptableValueRange<int>(1024, 65535)));
             m_serverEnabled = config.Bind("Server", "Enabled", true,
-                "Start the local RPC server. false = no server, but the Workshop publish block still applies " +
-                "(as long as [General] PluginEnabled = true).");
+                "Start the local RPC server while the Mod Editor is open. false = no server, but the Workshop publish block still " +
+                "applies while the Mod Editor is open (as long as [General] PluginEnabled = true).");
             m_maxImportFileMB = config.Bind("Assets", "MaxImportFileMB", AssetLimits.DefaultMaxImportFileMB,
                 new ConfigDescription("import_asset: largest source file accepted, in MB. The editor itself has no limit; the game decodes audio on the main thread " +
                     "and waits for it, so keep this moderate. Re-read from this file on every import call, no restart needed.",
