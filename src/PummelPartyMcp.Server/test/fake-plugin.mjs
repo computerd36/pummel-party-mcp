@@ -41,8 +41,10 @@ export const PNG_B64 =
 /**
  * Fake plugin. handler(method, params) may return {ok..} body or a promise.
  * Records requests in `requests`.
+ * The server pings once before its first plugin call (api version check): a custom handler's `ping` is replaced by the
+ * default one (api v2) unless `ownPing` is true, so existing handlers need not answer it.
  */
-export async function startFake({ token, handler, delayMs = 0, raw }) {
+export async function startFake({ token, handler, delayMs = 0, raw, ownPing = false, port = 0 }) {
   const state = { token, requests: [], executions: 0 };
   const server = http.createServer((req, res) => {
     let data = "";
@@ -63,12 +65,13 @@ export async function startFake({ token, handler, delayMs = 0, raw }) {
       if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
       const { method, params } = JSON.parse(data);
       state.executions++;
-      const body = await (handler ?? defaultHandler)(method, params);
+      const h = handler && (ownPing || method !== "ping") ? handler : defaultHandler;
+      const body = await h(method, params);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(body));
     });
   });
-  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  await new Promise((r) => server.listen(port, "127.0.0.1", r));
   state.port = server.address().port;
   state.close = () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); });
   return state;

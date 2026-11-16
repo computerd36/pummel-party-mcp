@@ -29,7 +29,12 @@ export interface ClientOptions {
   /** Used when `tokenFile` is unset: finds the token file lazily (auto-detection); may throw. */
   resolveTokenFile?: () => string;
   timeoutMs?: number;
+  /** Clock in ms (tests inject a fake); default Date.now. */
+  now?: () => number;
 }
+
+/** The api version check is repeated when the last successful plugin reply is older than this (a game restart between calls). */
+export const API_RECHECK_MS = 10_000;
 
 export function optionsFromEnv(env: NodeJS.ProcessEnv = process.env, deps: ResolveDeps = {}): ClientOptions {
   const portRaw = env.PUMMEL_PARTY_MCP_PORT;
@@ -125,13 +130,48 @@ export const TOOL_TIMEOUTS_MS: Record<string, number> = {
   run_batch: 130000,
 };
 
+export interface ApiInfo {
+  apiVersion: number | undefined;
+  pluginVersion: string | undefined;
+  sessionId: string | undefined;
+}
+
+/** The error text for a plugin whose api version differs from the one this server needs; undefined when they match. */
+export function apiMismatchMessage(api: ApiInfo, required: number, serverVersion: string): string | undefined {
+  const v = api.apiVersion;
+  if (v === required) return undefined;
+  const head = `plugin api ${v === undefined ? "unknown (ping gave no apiVersion)" : `v${v}`}, this server (${serverVersion}) needs api v${required}`;
+  return v !== undefined && v > required
+    ? `${head}: update the server (npx -y pummel-party-mcp@latest).`
+    : `${head}: update the plugin (install a pummel-party-mcp plugin release that has api v${required}).`;
+}
+
 /** Same rule the plugin enforces for sandbox mod names. */
 export const TEST_MOD_NAME_RE = /^MCP_[A-Za-z0-9_ -]+$/;
 export function isValidTestModName(name: string): boolean {
   return name.length <= 64 && TEST_MOD_NAME_RE.test(name) && !name.startsWith(" ") && !name.endsWith(" ");
 }
 
-const NOT_RUNNING_CODES = new Set(["ECONNREFUSED", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH", "EADDRNOTAVAIL"]);
+/** What to do when a reply is over the 8 MB limit, per tool. */
+function tooLargeHint(method: string): string {
+  switch (method) {
+    case "screenshot":
+      return "Call screenshot again with a smaller maxWidth (e.g. 1280).";
+    case "run_batch":
+      return "Run fewer steps per batch (the steps may have been applied: check with get_hierarchy / get_object); avoid read steps with large results.";
+    case "get_hierarchy":
+      return "Use maxDepth and/or rootGuid (a subtree).";
+    case "list_assets":
+      return "Use a smaller limit, plus search and/or type.";
+    case "get_log":
+    case "get_playtest_events":
+      return "Use a smaller max, or sinceId.";
+    default:
+      return "Narrow the query (this tool's limit/max/maxDepth/search/section/rootGuid parameters, where it has them).";
+  }
+}
+
+const NOT_RUNNING_CODES =new Set(["ECONNREFUSED", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH", "EADDRNOTAVAIL"]);
 
 interface RawResponse {
   status: number;
@@ -141,8 +181,17 @@ interface RawResponse {
 export class PluginClient {
   private token: string | undefined;
   private reread = false;
+  /** From the last `ping`: reset on a connection failure or 401 (a restarted game may run another plugin), or when a reply shows another sessionId. */
+  private api: ApiInfo | undefined;
+  private apiPending: Promise<ApiInfo> | undefined;
+  /** Time of the last successful plugin reply (any tool). */
+  private lastOkAt = 0;
 
-  constructor(private readonly opts: ClientOptions) {}
+  private readonly now: () => number;
+
+  constructor(private readonly opts: ClientOptions) {
+    this.now = opts.now ?? Date.now;
+  }
 
   private detectedTokenFile: string | undefined;
 
@@ -173,7 +222,9 @@ export class PluginClient {
     if (!t) {
       this.detectedTokenFile = undefined; // detect again next time (the game may have been moved or installed since)
       throw new PluginError(
-        `Token file not found or empty at "${file}". The game must have been started at least once with the pummel-party-mcp plugin installed (the plugin creates this file).`,
+        `Token file not found or empty at "${file}". The game must have been started at least once with the pummel-party-mcp plugin installed (the plugin creates this file). ` +
+          `With a mod manager (r2modman, Thunderstore Mod Manager, Gale) BepInEx's config folder is inside the manager's profile, not the game folder: ` +
+          `set PUMMEL_PARTY_MCP_TOKEN_FILE to <profile>\\BepInEx\\config\\PummelPartyMcp.token.`,
       );
     }
     return t;
@@ -195,10 +246,10 @@ export class PluginClient {
   }
 
   /** Reads the body as a stream, aborting beyond MAX_RESPONSE_BYTES. */
-  private async readBody(res: Response, ac: AbortController): Promise<string> {
+  private async readBody(res: Response, ac: AbortController, method: string): Promise<string> {
     const tooBig = () =>
       new PluginError(
-        `The plugin response is larger than ${MAX_RESPONSE_BYTES / (1024 * 1024)} MB and was discarded. Narrow the query (smaller limit/maxDepth, search, a subtree).`,
+        `The plugin response is larger than ${MAX_RESPONSE_BYTES / (1024 * 1024)} MB and was discarded. ${tooLargeHint(method)}`,
         undefined,
         true,
       );
@@ -248,6 +299,7 @@ export class PluginClient {
         });
       } catch (e) {
         this.reread = true; // game may have restarted with a new token
+        this.api = undefined; // ... or with another plugin version: check the api version again
         if (ac.signal.aborted) throw timedOut();
         const cause = (e as { cause?: { message?: string; code?: string } })?.cause;
         if (/redirect/i.test(String(cause?.message ?? ""))) {
@@ -267,16 +319,60 @@ export class PluginClient {
         );
       }
       try {
-        return { status: res.status, text: await this.readBody(res, ac) };
+        return { status: res.status, text: await this.readBody(res, ac, method) };
       } catch (e) {
         if (e instanceof PluginError) throw e;
         this.reread = true;
+        this.api = undefined;
         if (ac.signal.aborted) throw timedOut();
         throw new PluginError("The connection to the pummel-party-mcp plugin was lost while reading the response.", undefined, true);
       }
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** Reads apiVersion/pluginVersion/sessionId from a `ping` result and caches them. */
+  noteApi(result: unknown): ApiInfo {
+    const r = (result ?? {}) as Record<string, unknown>;
+    const info: ApiInfo = {
+      apiVersion: typeof r.apiVersion === "number" ? r.apiVersion : undefined,
+      pluginVersion: typeof r.pluginVersion === "string" ? r.pluginVersion : undefined,
+      sessionId: typeof r.sessionId === "string" ? r.sessionId : undefined,
+    };
+    this.api = info;
+    return info;
+  }
+
+  /**
+   * Pings (cached) and throws PluginError(API_MISMATCH) when the plugin's api version is not `required`. The check is repeated
+   * after a connection failure, a 401 or another sessionId, and when the last successful plugin reply is more than API_RECHECK_MS
+   * old (the game may have been restarted between calls). Concurrent callers share one ping. A failed ping is not cached; its
+   * error says it was the version check and that the tool call was not sent.
+   */
+  async ensureApi(required: number, serverVersion: string, opts: { write?: boolean } = {}): Promise<void> {
+    let info = this.api;
+    if (info && this.now() - this.lastOkAt > API_RECHECK_MS) info = undefined;
+    if (!info) {
+      this.apiPending ??= this.call("ping", {}, 5000).then(
+        (r) => this.noteApi(r),
+        (e) => {
+          if (!(e instanceof PluginError)) throw e;
+          throw new PluginError(
+            `${e.message}
+This was the plugin version check made before the tool call; the tool call itself was not sent${opts.write ? " (nothing was applied)" : ""}.`,
+            e.code,
+          );
+        },
+      );
+      try {
+        info = await this.apiPending;
+      } finally {
+        this.apiPending = undefined;
+      }
+    }
+    const msg = apiMismatchMessage(info, required, serverVersion);
+    if (msg) throw new PluginError(msg, "API_MISMATCH");
   }
 
   /**
@@ -291,7 +387,12 @@ export class PluginClient {
   ): Promise<unknown> {
     const t = this.opts.timeoutMs ?? timeoutMs ?? 15000;
     try {
-      return await this.callInner(method, params, t);
+      const result = await this.callInner(method, params, t);
+      this.lastOkAt = this.now();
+      // a reply that carries another sessionId (ping, get_log) means the game restarted: check the api version again
+      const sid = (result as { sessionId?: unknown } | null)?.sessionId;
+      if (this.api && typeof sid === "string" && this.api.sessionId !== undefined && sid !== this.api.sessionId) this.api = undefined;
+      return result;
     } catch (e) {
       if (callOpts.write && e instanceof PluginError && e.maybeApplied) {
         throw new PluginError(`${e.message}
@@ -305,6 +406,7 @@ ${WRITE_AMBIGUITY_NOTE}`, e.code, true);
     let res = await this.post(method, params, timeoutMs);
     if (res.status === 401) {
       this.reread = true; // a 401 never executes the call, so one retry with a fresh token is safe
+      this.api = undefined; // a new token means a new game session
       res = await this.post(method, params, timeoutMs);
       if (res.status === 401) {
         throw new PluginError(
@@ -343,8 +445,10 @@ Hint: ${hint}` : ""}`, code);
     }
     if (res.status !== 200) {
       const hint = HTTP_HINTS[res.status];
+      // The statuses with a hint (408/413/431/503) are refusals before execution; any other status without an envelope is ambiguous
+      // (call() adds the "may or may not have been applied" note for write tools only).
       throw new PluginError(`Unexpected response from plugin (HTTP ${res.status}).${hint ? `
-Hint: ${hint}` : ""}`);
+Hint: ${hint}` : ""}`, undefined, hint === undefined);
     }
     if (!parsed) throw new PluginError(`Unexpected response from plugin (HTTP ${res.status}, not valid JSON).`, undefined, true);
     if (body && body.ok === true) return body.result;

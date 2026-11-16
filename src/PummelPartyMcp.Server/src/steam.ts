@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 
 /** Steam app id of Pummel Party. */
 export const PUMMEL_PARTY_APP_ID = "880940";
@@ -105,13 +106,77 @@ export interface FsLike {
 
 const realFs: FsLike = { existsSync, readFileSync };
 
-/** Default Steam install folders on Windows. */
-export function defaultSteamRoots(env: NodeJS.ProcessEnv = process.env): string[] {
+/** Runs `reg query <key> /v <value>` and returns its output, or undefined on any failure. Injectable for tests. */
+export type RegQuery = (key: string, value: string) => string | undefined;
+
+// reg.exe is called by full path so a reg.exe earlier on PATH or in the working directory is never run.
+// Its output is in the console code page: a Steam path with non-ASCII characters may be read wrongly and then missed;
+// detection falls back to the other roots (Program Files, libraryfolders.vdf). PUMMEL_PARTY_MCP_GAME_DIR is the way out.
+const realRegQuery: RegQuery = (key, value) => {
+  try {
+    const regExe = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "reg.exe");
+    return execFileSync(regExe, ["query", key, "/v", value], {
+      encoding: "utf8",
+      timeout: 3000,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return undefined;
+  }
+};
+
+/** The data of one value in `reg query` output (a REG_SZ / REG_EXPAND_SZ line), or undefined. */
+export function parseRegValue(output: string | undefined, value: string): string | undefined {
+  if (!output) return undefined;
+  for (const line of output.split(/\r?\n/)) {
+    const m = /^\s*(\S+)\s+REG_(?:EXPAND_)?SZ\s+(.+?)\s*$/i.exec(line);
+    if (m && m[1]!.toLowerCase() === value.toLowerCase()) return m[2];
+  }
+  return undefined;
+}
+
+/** Steam install folders from the Windows registry (per-user SteamPath, then the machine-wide InstallPath). */
+export function registrySteamRoots(regQuery: RegQuery = realRegQuery): string[] {
+  const out: string[] = [];
+  for (const [key, value] of [
+    ["HKCU\\Software\\Valve\\Steam", "SteamPath"],
+    ["HKLM\\SOFTWARE\\WOW6432Node\\Valve\\Steam", "InstallPath"],
+  ] as const) {
+    try {
+      const v = parseRegValue(regQuery(key, value), value)?.trim();
+      if (v && win32.isAbsolute(v)) out.push(win32.normalize(v)); // SteamPath uses forward slashes
+    } catch {
+      /* ignore */
+    }
+  }
+  return out;
+}
+
+/** Removes duplicate folders (case-insensitive, ignoring a trailing separator), keeping the first. */
+export function dedupePaths(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of paths) {
+    const k = p.replace(/[\\/]+$/, "").toLowerCase();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(p);
+  }
+  return out;
+}
+
+/** Steam install folders on Windows: the registry first (on win32 only), then the default Program Files folders. */
+export function defaultSteamRoots(
+  env: NodeJS.ProcessEnv = process.env,
+  deps: { platform?: NodeJS.Platform; regQuery?: RegQuery } = {},
+): string[] {
   const roots: string[] = [];
+  if ((deps.platform ?? process.platform) === "win32") roots.push(...registrySteamRoots(deps.regQuery));
   for (const base of [env["ProgramFiles(x86)"], env["ProgramFiles"]]) {
     if (base) roots.push(join(base, "Steam"));
   }
-  return roots;
+  return dedupePaths(roots);
 }
 
 /**
@@ -151,12 +216,14 @@ export function findGameDir(steamRoots: string[], fs: FsLike = realFs): string |
 export const NO_GAME_FOUND_MESSAGE =
   "Could not find the Pummel Party install folder, so the plugin token file is unknown. Set PUMMEL_PARTY_MCP_GAME_DIR to the game folder " +
   "(the one that contains BepInEx), or PUMMEL_PARTY_MCP_TOKEN_FILE to the full path of BepInEx\\config\\PummelPartyMcp.token. " +
-  "Automatic detection reads the Steam library list and only works on Windows.";
+  "Automatic detection (Steam path from the registry or Program Files, then its library list) only works on Windows.";
 
 export interface ResolveDeps {
   platform?: NodeJS.Platform;
   steamRoots?: string[];
   fs?: FsLike;
+  /** Registry lookup used when `steamRoots` is not given (tests inject a fake). */
+  regQuery?: RegQuery;
 }
 
 /**
@@ -167,7 +234,7 @@ export function resolveTokenFile(env: NodeJS.ProcessEnv = process.env, deps: Res
   if (env.PUMMEL_PARTY_MCP_TOKEN_FILE) return env.PUMMEL_PARTY_MCP_TOKEN_FILE;
   if (env.PUMMEL_PARTY_MCP_GAME_DIR) return join(env.PUMMEL_PARTY_MCP_GAME_DIR, ...TOKEN_REL_PATH);
   if ((deps.platform ?? process.platform) === "win32") {
-    const game = findGameDir(deps.steamRoots ?? defaultSteamRoots(env), deps.fs);
+    const game = findGameDir(deps.steamRoots ?? defaultSteamRoots(env, deps), deps.fs);
     if (game) return join(game, ...TOKEN_REL_PATH);
   }
   throw new Error(NO_GAME_FOUND_MESSAGE);

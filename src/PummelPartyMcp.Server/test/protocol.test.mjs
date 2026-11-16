@@ -6,7 +6,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { startFake, makeTempDir, removeDir, writeToken } from "./fake-plugin.mjs";
+import { startFake, makeTempDir, removeDir, writeToken, defaultHandler } from "./fake-plugin.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const entry = join(here, "..", "dist", "index.js");
@@ -233,10 +233,12 @@ test("results are compact JSON; huge results are truncated with a narrowing hint
     for (const [name, args, re] of expectations) {
       const r = await s.client.callTool({ name, arguments: args });
       const text = r.content[0].text;
-      assert.ok(text.length <= 100000 + 400, `${name}: ${text.length}`);
+      assert.ok(text.length <= 100000 + 600, `${name}: ${text.length}`);
       assert.ok(text.length > 100000, name);
-      assert.match(text.slice(100000), /truncated/i);
-      assert.match(text.slice(100000), re, name);
+      const note = text.slice(0, text.indexOf("\n"));
+      assert.match(note, /^\[Output truncated/, name); // the note comes first
+      assert.match(note, re, name);
+      assert.doesNotMatch(note, /filter\/limit parameters/, name);
     }
   } finally {
     await s.close();
@@ -320,7 +322,12 @@ test("the token never appears in tool results, error text or stderr", async () =
 });
 
 test("end to end: a short PUMMEL_PARTY_MCP_TIMEOUT_MS is observed and a write is sent once", async () => {
-  const s = await session({ delayMs: 2000, env: { PUMMEL_PARTY_MCP_TIMEOUT_MS: "400" } });
+  // only the write is slow: the api-version ping before it is answered at once
+  const slow = async (m, p) => {
+    await new Promise((r) => setTimeout(r, 2000));
+    return defaultHandler(m, p);
+  };
+  const s = await session({ handler: slow, env: { PUMMEL_PARTY_MCP_TIMEOUT_MS: "400" } });
   try {
     const t0 = Date.now();
     const w = await s.client.callTool({ name: "set_object", arguments: { guid: "g", active: true } });
@@ -329,7 +336,7 @@ test("end to end: a short PUMMEL_PARTY_MCP_TIMEOUT_MS is observed and a write is
     assert.match(w.content[0].text, /timed out after 0\.4s/);
     assert.match(w.content[0].text, /may or may not have been applied/);
     assert.ok(dt < 1800, `returned after ${dt} ms`);
-    assert.equal(s.fake.requests.length, 1, "no retry of a timed-out write");
+    assert.equal(s.fake.requests.length, 2, "the api-version ping, then the write once (no retry of a timed-out write)");
     const r = await s.client.callTool({ name: "get_object", arguments: { guid: "g" } });
     assert.equal(r.isError, true);
     assert.match(r.content[0].text, /timed out/);

@@ -316,6 +316,11 @@ test("get_playtest_state and get_playtest_events: read-only, strict schemas, par
     const editing = (await s.client.callTool({ name: "usage_guide", arguments: { topic: "editing" } })).content[0].text;
     assert.match(editing, /newParentGuid is required/);
     assert.match(guide, /nothing kills a player for falling/);
+    for (const k of [/AI NAVIGATION:/, /FAIR STARTS:/, /PLAYER SIZES/, /CAMERA AND INVISIBLE WALLS:/, /LARGE SCENES AND REPLIES:/]) assert.match(guide, k);
+    assert.match(actions, /SET PLAYER VISUAL:/);
+    assert.match(assets, /PIVOTS:/);
+    assert.match(editing, /BUILD ORDER:/);
+    assert.match(editing, /SCREENSHOT TIPS:/);
     assert.match(guide, /SpawnUsageType includes InitialSpawn/);
     assert.match(guide, /random spawn whose SpawnUsageType includes Respawn/);
     assert.match(guide, /100 x \(player count - players already finished\)/);

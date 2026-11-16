@@ -216,18 +216,18 @@ test("non-string error.message and error.code are stringified", async () => {
   await withFake({ handler: () => ({ ok: false, error: err }) }, async ({ fake, tf }) => {
     const c = new PluginClient({ port: fake.port, tokenFile: tf });
     err = { code: "INVALID_PARAMS", message: { field: "x", n: 2 } };
-    await assert.rejects(c.call("ping"), (e) => {
+    await assert.rejects(c.call("get_object"), (e) => {
       assert.ok(e.message.startsWith('INVALID_PARAMS: {"field":"x","n":2}'), e.message);
       return true;
     });
     err = { code: "INTERNAL" };
-    await assert.rejects(c.call("ping"), (e) => {
+    await assert.rejects(c.call("get_object"), (e) => {
       assert.ok(e.message.startsWith("INTERNAL: "), e.message);
       assert.doesNotMatch(e.message, /undefined|\[object/);
       return true;
     });
     err = { code: 42, message: ["a", "b"] };
-    await assert.rejects(c.call("ping"), (e) => {
+    await assert.rejects(c.call("get_object"), (e) => {
       assert.ok(e.message.startsWith('42: ["a","b"]'), e.message);
       return true;
     });
