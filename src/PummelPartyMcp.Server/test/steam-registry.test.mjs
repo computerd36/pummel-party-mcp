@@ -53,7 +53,10 @@ test("registrySteamRoots: values are trimmed; empty, whitespace-only and relativ
 `), [win("d:", "steam"), win("d:", "steam")]);
 });
 
-test("defaultSteamRoots: registry roots first, then Program Files, de-duplicated case-insensitively; no registry off Windows", () => {
+// Windows path semantics (node:path join/normalize on backslash paths): these two run on Windows only.
+const WINDOWS_ONLY = { skip: process.platform !== "win32" && "Windows paths" };
+
+test("defaultSteamRoots: registry roots first, then Program Files, de-duplicated case-insensitively; no registry off Windows", WINDOWS_ONLY, () => {
   const env = { "ProgramFiles(x86)": win("C:", "Program Files (x86)"), ProgramFiles: win("C:", "Program Files") };
   const reg = fakeReg({
     [`${HKCU} SteamPath`]: "d:/steam",
@@ -73,7 +76,7 @@ test("defaultSteamRoots: registry roots first, then Program Files, de-duplicated
   assert.deepEqual(dedupePaths([win("A", "b"), win("a", "B") + BS, "c"]), [win("A", "b"), "c"]);
 });
 
-test("resolveTokenFile finds a game through a Steam folder that only the registry knows", () => {
+test("resolveTokenFile finds a game through a Steam folder that only the registry knows", WINDOWS_ONLY, () => {
   const dir = makeTempDir();
   try {
     const root = join(dir, "Odd Place", "Steam");
