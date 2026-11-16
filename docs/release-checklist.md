@@ -2,7 +2,7 @@
 
 For the maintainer. Plugin and server are released together, with the same version number. Nothing here is automated: the maintainer does every upload, publish and tag by hand. `scripts\prepare-release.ps1` does everything short of that.
 
-Order of the release: build and verify the packages (section 3), tag the released commit (end of section 3), create the GitHub release (section 5), then upload to Thunderstore (section 4) and publish to npm (section 6). Everything that cannot be undone comes after the tag.
+Order of the release: build and verify the packages (section 3), tag the released commit (end of section 3), publish to npm (section 6), upload to Thunderstore and wait for approval (section 4), and only then make the repository public (section 1) and create the GitHub release (section 5). The public steps come last so that the install instructions in the README work from the moment people can read them. Until then the npm and Thunderstore pages link to a repository that is not visible yet. Everything that cannot be undone comes after the tag.
 
 Never reuse a version number. A version uploaded to Thunderstore or npm can never be uploaded again, even if it is deleted. If something is wrong after an upload, fix it and release the next version.
 
@@ -10,7 +10,7 @@ Never reuse a version number. A version uploaded to Thunderstore or npm can neve
 
 - [ ] Close the game. Run `scripts\verify-backup.ps1` (see the README, "Safety model") and make sure the backup of your real mods is current and verified.
 - [ ] If you have not already, decide the version (MAJOR.MINOR.PATCH). Below, `<v>` stands for it.
-- [ ] Release gates met: the planned work is closed and reviewed; any outside contact that you wanted to wait for is answered, or you decided to go ahead (record the outcome in `docs/legal-notes.md`).
+- [ ] Release gates met: the planned work is closed and reviewed; any outside contact that you wanted to wait for is answered, or you decided to go ahead (record the outcome in your local notes).
 - [ ] The planned normal-play behaviour is implemented and the README section "What is active during normal play" no longer contains the TODO paragraph (replace it with the final text). Do not release with that TODO in the README.
 
 ## 1. Public repository
@@ -21,7 +21,7 @@ Never reuse a version number. A version uploaded to Thunderstore or npm can neve
 - [ ] `ROADMAP.md` is up to date.
 - [ ] Decide whether `CLAUDE.md` stays tracked or becomes local and untracked (`git rm --cached CLAUDE.md`, add it to `.gitignore`), unless something in the repository still depends on it.
 - [ ] Issue template (`.github/ISSUE_TEMPLATE/`) is present. Optionally enable GitHub's "private vulnerability reporting" in the repository settings.
-- [ ] The repository is made public by the maintainer (GitHub settings). Do this when the rest is ready, not earlier than needed.
+- [ ] The repository is made public by the maintainer (GitHub settings). Do this last, together with the GitHub release, when the npm package is published and the Thunderstore package is visible (see the order at the top).
 
 ## 2. Version numbers
 
@@ -65,7 +65,7 @@ The plugin cannot be built in CI, because it needs the game's assemblies. Everyt
   - confirm Workshop publishing is blocked while the plugin is enabled;
   - confirm your real mods still match the backup (`scripts\verify-backup.ps1 -CompareSource`).
 - [ ] The zip contains exactly: `manifest.json`, `README.md`, `CHANGELOG.md`, `icon.png`, `BepInEx/plugins/PummelPartyMcp/PummelPartyMcp.Plugin.dll`. No other DLL (the packaging script refuses extras).
-- [ ] Tag the released commit now that the packages are built and verified: `git tag -a v<v> -m "pummel-party-mcp <v>"`, then `git push origin v<v>` (by hand). The tag must point at the commit the zip and the tarball were built from. Do this once, before the GitHub release; the uploads in sections 4 and 6 come after it.
+- [ ] Tag the released commit now that the packages are built and verified: `git tag -a v<v> -m "pummel-party-mcp <v>"`, then `git push origin v<v>` (by hand). The tag must point at the commit the zip and the tarball were built from. Do this once, before anything is uploaded; the uploads in sections 6 and 4 come after it, and the GitHub release (section 5) comes last.
 
 ## 4. Plugin distribution (Thunderstore)
 
@@ -82,7 +82,7 @@ Facts: community `pummel-party` (https://thunderstore.io/c/pummel-party/), team 
 
 ## 5. GitHub release
 
-- [ ] The tag `v<v>` exists (end of section 3). Create the GitHub release from it by hand.
+- [ ] The tag `v<v>` exists (end of section 3), the npm package is published (section 6), the Thunderstore package is visible (section 4) and the repository is public. Create the GitHub release from the tag by hand.
 - [ ] Attach the same zip, byte for byte (`release-out\PummelPartyMcp-<v>.zip`), and write its SHA-256 into the release notes.
 - [ ] The release notes link to `CHANGELOG.md` and tell manual-install users to copy the zip's `BepInEx` folder into the game folder (see the README, "Quick install").
 - [ ] Optionally attach the npm tarball too, with its SHA-256.
@@ -93,7 +93,7 @@ Facts: community `pummel-party` (https://thunderstore.io/c/pummel-party/), team 
 - [ ] `"private": true` is removed (see section 2). Review `files`, `bin`, `engines`, `repository`, `license` in `package.json`.
 - [ ] Log in to npm with your account. Use two-factor authentication (2FA); publishing asks for a one-time code.
 - [ ] `npm publish --dry-run` in `src\PummelPartyMcp.Server` and review the exact file list: only `dist/**/*.js`, `README.md`, `LICENSE`, `package.json`.
-- [ ] Publish by hand: `npm publish` in `src\PummelPartyMcp.Server`. A published version can never be reused, and unpublishing is restricted by npm.
+- [ ] Publish by hand, in `src\PummelPartyMcp.Server`: `npm publish ..\..\release-out\pummel-party-mcp-<v>.tgz`. This uploads exactly the tarball whose SHA-256 you wrote down; a plain `npm publish` builds a new one. A published version can never be reused, and unpublishing is restricted by npm.
 - [ ] Verify from a clean folder, with no repository checkout (a fresh empty folder and, ideally, a fresh user profile or a second PC): run `cmd /c npx -y pummel-party-mcp` (native Windows needs `cmd /c` for `npx`) and check that it starts and prints the "ready" line on stderr. Then add it with `claude mcp add pummel-party-mcp -- cmd /c npx -y pummel-party-mcp`, start the game, open the Mod Editor, and ask the agent to call `get_status`: the server must find the game through the Steam library and reach the plugin.
 
 ## 7. Release mechanics

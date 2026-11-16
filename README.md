@@ -1,4 +1,24 @@
+<img src="packaging/thunderstore/icon.png" alt="pummel-party-mcp icon" width="128" align="left">
+
 # pummel-party-mcp
+
+**Build, edit and playtest Pummel Party minigames with an AI agent, through the game's own Mod Editor.**
+
+[![CI](https://github.com/computerd36/pummel-party-mcp/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/computerd36/pummel-party-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/computerd36/pummel-party-mcp?label=release)](https://github.com/computerd36/pummel-party-mcp/releases)
+[![npm](https://img.shields.io/npm/v/pummel-party-mcp?label=npm)](https://www.npmjs.com/package/pummel-party-mcp)
+[![Thunderstore](https://img.shields.io/thunderstore/v/computerd36/PummelPartyMcp?label=thunderstore)](https://thunderstore.io/c/pummel-party/p/computerd36/PummelPartyMcp/)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-green)](LICENSE)
+
+<br clear="left">
+
+![56 tools](https://img.shields.io/badge/tools-56-blue)
+![Pummel Party 1.14.1k](https://img.shields.io/badge/Pummel%20Party-1.14.1k-orange)
+![BepInEx 5.4.23.5](https://img.shields.io/badge/BepInEx-5.4.23.5-purple)
+![Node.js 22 or newer](https://img.shields.io/badge/Node.js-%E2%89%A5%2022-brightgreen)
+![Windows and Steam](https://img.shields.io/badge/platform-Windows%20%2B%20Steam-lightgrey)
+
+---
 
 pummel-party-mcp lets an AI agent see and edit what is open in Pummel Party's built-in Mod Editor through the Model Context Protocol (MCP): objects, components and their properties, Action Editor logic (triggers and actions), the editor's validator and playtests. It has two parts: a BepInEx 5 plugin that runs inside the game and serves a token-protected API on `127.0.0.1`, and an MCP server (Node.js, stdio) that exposes one tool per plugin method to an MCP client. Claude Code is the supported client.
 
@@ -54,7 +74,7 @@ It is an editor tool, not a cheat tool. An agent can look at the open mod, build
 
 ## Use at your own risk
 
-- **No endorsement.** This project is not endorsed, supported or approved by Rebuilt Games or by Valve. Pummel Party has no separate developer licence agreement that we could find; the [Steam Subscriber Agreement](https://store.steampowered.com/subscriber_agreement/) applies. Its wording on third-party software and on reverse engineering is broad, and nobody has confirmed that a plugin like this one is permitted. You decide whether to use it; see [docs/legal-notes.md](docs/legal-notes.md) for what was checked. Nothing here is legal advice.
+- **No endorsement.** This project is not endorsed, supported or approved by Rebuilt Games or by Valve. Pummel Party has no separate developer licence agreement that we could find; the [Steam Subscriber Agreement](https://store.steampowered.com/subscriber_agreement/) applies. Its wording on third-party software and on reverse engineering is broad, and nobody has confirmed that a plugin like this one is permitted. You decide whether to use it. Nothing here is legal advice.
 - **Disable the plugin for normal play.** BepInEx loads the plugin file every time the game starts, including for online matches. Outside the Mod Editor the plugin has no open port, no patches and no per-frame code (see [What is active during normal play](#what-is-active-during-normal-play)), but a third-party plugin loaded during online play is still what the agreement's anti-cheat wording describes. When you are not modding, set `[General] PluginEnabled = false` in the plugin config (see [Configuration](#configuration)) and restart the game, or keep a separate game shortcut without BepInEx (a mod-manager profile without the plugin does the same).
 - **You are responsible for what you publish.** The plugin never publishes anything. If you publish a mod that an AI agent helped build, you do it by hand, under the Steam Workshop terms, as its author.
 - **No warranty** (see the [licence](#licence)). Back up your mod projects before you start (see [Safety model](#safety-model)).
@@ -242,7 +262,7 @@ Layout:
 | `src/PummelPartyMcp.Plugin.Tests` | net8.0 console harness for `Core`; needs no game |
 | `src/PummelPartyMcp.Plugin.PatchTests` | net472 Harmony and drift tests; reads the game DLLs for reflection only |
 | `src/PummelPartyMcp.Server` | MCP server (TypeScript) and its tests |
-| `docs/` | `plugin-api.md` (API reference), `editor-architecture.md` and `architecture/` (how the editor works), `mod-format.md`, `legal-notes.md`, `release-checklist.md` |
+| `docs/` | `plugin-api.md` (API reference), `editor-architecture.md` and `architecture/` (how the editor works), `mod-format.md`, `release-checklist.md` |
 | `scripts/` | backup and verify scripts; `package-thunderstore.ps1`; `prepare-release.ps1` |
 | `packaging/thunderstore/` | templates for the Thunderstore package (README, CHANGELOG copy, icon) |
 | `.github/workflows/ci.yml` | CI (see below) |
