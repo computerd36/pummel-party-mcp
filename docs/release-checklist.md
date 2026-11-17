@@ -67,14 +67,14 @@ The plugin cannot be built in CI, because it needs the game's assemblies. Everyt
 
 ## 4. Plugin distribution (Thunderstore)
 
-Facts: community `pummel-party` (https://thunderstore.io/c/pummel-party/), team computerd36, package name `PummelPartyMcp`, category Tools, not NSFW. The package name can never be changed later.
+Facts: community `pummel-party` (https://thunderstore.io/c/pummel-party/), team computerd36, package name `PummelPartyMcp`, categories Tools and AI Generated, not NSFW. Thunderstore's rules ask for the AI Generated category on packages with AI-written code; a listing without it can be rejected. The package name can never be changed later.
 
 - [ ] The manifest depends on `BepInEx-BepInExPack-5.4.2305` (BepInEx 5.4.23.5, Mono; looked up on 2026-11-16, set in `scripts\package-thunderstore.ps1`). Before uploading, open the BepInExPack page in the community and check that this version still exists and still matches the BepInEx version the plugin is built and tested against (5.4.23.5).
 - [ ] The icon `packaging/thunderstore/icon.png` is your final 256x256 PNG.
 - [ ] Manifest check: `name` is `PummelPartyMcp`; `version_number` is `<v>`; `website_url` is the GitHub repository; `description` is at most 250 characters (the script checks).
 - [ ] Open the zip and check its list of entries (the script prints it).
 - [ ] Validate the zip with Thunderstore's manifest validator (on the upload page) and look at the README in the markdown preview.
-- [ ] After the tag (see the order at the top): upload by hand: community Pummel Party, team computerd36, category Tools. A version number can never be uploaded twice, so check the version first.
+- [ ] After the tag (see the order at the top): upload by hand: community Pummel Party, team computerd36, categories Tools and AI Generated. A version number can never be uploaded twice, so check the version first.
 - [ ] A new package may need moderator approval before it is visible. Wait for it; the page is not public until then.
 - [ ] Install it once from Thunderstore with a mod manager on a clean profile and check the log line.
 

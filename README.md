@@ -51,7 +51,7 @@ Windows and Steam. Read [Use at your own risk](#use-at-your-own-risk) first, and
 
    All settings of the server are listed under [Environment variables of the MCP server](#environment-variables-of-the-mcp-server).
 
-3. **Start the game and open the Mod Editor** from the main menu. Then start Claude Code (or restart it, so that it loads the new server) and approve the `pummel-party-mcp` server if asked.
+3. **Start the game and open the Mod Editor** from the main menu, and close the editor's welcome dialog by hand: the plugin cannot close it, and the edit tools refuse to work while an editor dialog is open. Then start Claude Code (or restart it, so that it loads the new server) and approve the `pummel-party-mcp` server if asked.
 
 4. **Try a first prompt:**
 
