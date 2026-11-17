@@ -329,8 +329,10 @@ function register(
     { description, inputSchema: schema as any, annotations },
     async (args: Record<string, unknown>): Promise<ToolResult> => {
       try {
-        if (!extra.skipApiCheck) await client.ensureApi(REQUIRED_API_VERSION, pkg.version, { write });
-        const result = await client.call(name, args ?? {}, TOOL_TIMEOUTS_MS[name], { write });
+        const api = extra.skipApiCheck ? undefined : { required: REQUIRED_API_VERSION, serverVersion: pkg.version };
+        if (api) await client.ensureApi(api.required, api.serverVersion, { write });
+        // `api` repeats the check before the resend after a 401 (the game may now run another install's plugin)
+        const result = await client.call(name, args ?? {}, TOOL_TIMEOUTS_MS[name], { write, api });
         if (extra.format) return extra.format(result);
         return textResult(result, extra.narrow ?? UNEXPECTEDLY_LARGE, extra.shrink);
       } catch (e) {

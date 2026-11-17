@@ -22,6 +22,12 @@ By capability, not by tool name. The full tool list is in the [README](README.md
 
 Roughly in order of how often they came up in test runs. Nothing here is started unless the changelog says so.
 
+Easier first use (from the first installs after 1.0.0):
+
+- The plugin closes the Mod Editor's welcome dialog itself, so an agent can start working without a click from the human. Only this one dialog; every other editor dialog stays the human's.
+- The plugin also writes its token to one fixed place per Windows user, the same for a manual and a mod-manager install, and the server reads that first. Searching the game folder and the mod-manager profiles stays as a fallback.
+- A one-command install: an installer command in the npm package that finds the game, checks BepInEx, copies the plugin and registers the server. It would show exactly what it writes, ask first, never touch mod folders, and have an uninstall.
+
 From two benchmark runs (an agent building whole minigames):
 
 - True paging of the object tree's children (an offset or limit for the direct children of one object) and of run_batch results. list_assets and get_log already page; an over-large tree or batch reply is summarised, not paged (a very wide object still shows only the children that fit).
@@ -34,7 +40,6 @@ From two benchmark runs (an agent building whole minigames):
 
 Other ideas:
 
-- An installer command in the npm package that finds the game, checks BepInEx, copies the plugin and registers the server. It would show exactly what it writes, ask first, never touch mod folders, and have an uninstall.
 - Input injection for playtests (a simulated human player).
 - Richer runtime visibility for board mods (turns, spaces, events, items).
 - Templates ("make a minigame like X" scaffolds).

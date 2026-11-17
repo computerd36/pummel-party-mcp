@@ -1,6 +1,6 @@
 # Release checklist
 
-For the maintainer. Plugin and server are released together, with the same version number. Nothing here is automated: the maintainer does every upload, publish and tag by hand. `scripts\prepare-release.ps1` does everything short of that.
+For the maintainer. Plugin and server share MAJOR.MINOR. The script supports a patch release of the server alone (see "Server-only patch release" below); it does not support a patch release of the plugin alone. A new MINOR or MAJOR ships both. Nothing here is automated: the maintainer does every upload, publish and tag by hand. `scripts\prepare-release.ps1` does everything short of that.
 
 Order of the release: build and verify the packages (section 3), tag the released commit (end of section 3), publish to npm (section 6), upload to Thunderstore and wait for approval (section 4), and only then make the repository public (section 1) and create the GitHub release (section 5). The public steps come last so that the install instructions in the README work from the moment people can read them. Until then the npm and Thunderstore pages link to a repository that is not visible yet. Everything that cannot be undone comes after the tag.
 
@@ -23,7 +23,7 @@ Never reuse a version number. A version uploaded to Thunderstore or npm can neve
 
 ## 2. Version numbers
 
-Set every one of these to `<v>` by hand. `scripts\prepare-release.ps1 -Version <v>` checks the ones it can and reports mismatches; it does not edit files.
+Set every one of these to `<v>` by hand (a server-only patch release changes fewer files: see section 8). `scripts\prepare-release.ps1 -Version <v>` checks the ones it can and reports mismatches; it does not edit files.
 
 | File | What | Checked by prepare-release |
 |---|---|---|
@@ -96,7 +96,20 @@ Facts: community `pummel-party` (https://thunderstore.io/c/pummel-party/), team 
 
 ## 7. Release mechanics
 
-- [ ] The server and the plugin versions match. The server and plugin agree on the plugin API version (`ping.apiVersion`, currently 2).
+- [ ] The server and the plugin share MAJOR.MINOR (after a server-only patch release, the server's patch number is higher than the plugin's). Nothing in the code compares the two versions. The server and plugin agree on the plugin API version (`ping.apiVersion`, currently 2).
 - [ ] CI never publishes (it has no secrets). Keep it that way.
 - [ ] Exit test: a fresh Windows account or a second PC installs everything from the public instructions without the .NET SDK, connects Claude Code, and builds and playtests a sandbox minigame. The publish block is complete, and your real mods still match the backup.
 - [ ] After the release: open `CHANGELOG.md` and add a new `## [Unreleased]` section on top for the next version.
+
+## 8. Server-only patch release
+
+Use this when only the MCP server changed (for example a fix in how it finds the token file). The plugin keeps its current version and is not released again: no Thunderstore package and no Thunderstore upload. The script still builds the plugin and runs all three test suites (including `Plugin.PatchTests`, which needs the game's assemblies), so the release commit is checked as a whole. The plugin and the server must still share MAJOR.MINOR, and the server's patch number must not be lower than the plugin's.
+
+- [ ] Set the version in `src/PummelPartyMcp.Server/package.json`, then run `npm install --package-lock-only --ignore-scripts` in the server folder and check both version fields in `package-lock.json`. Do not touch `PluginInfo.cs`, the plugin csproj or the title of `docs/plugin-api.md`.
+- [ ] `CHANGELOG.md`: change the heading `## [Unreleased]` to `## [<v>] - <date>` and copy the file over `packaging\thunderstore\CHANGELOG.md` (they must be identical).
+- [ ] Commit, so that the working tree is clean. Run `.\scripts\prepare-release.ps1 -Version <v> -ServerOnly`. It checks the server files against `<v>` and the plugin files for the same MAJOR.MINOR and a patch number not above `<v>`'s, builds the plugin, runs all three test suites, skips the Thunderstore package, and runs `npm pack` into `release-out\`. Write the SHA-256 of the tarball down.
+- [ ] CI is green on the release commit. Tag the commit: `git tag -a v<v> -m "pummel-party-mcp server <v>"`, then `git push origin v<v>` (by hand).
+- [ ] Publish the tarball to npm as in section 6 (`npm publish --dry-run`, then `npm publish ..\..\release-out\pummel-party-mcp-<v>.tgz`, then verify with `npx` from a clean folder).
+- [ ] Create the GitHub release from the tag, with the tarball's SHA-256 in the notes. There is no zip.
+- [ ] No Thunderstore upload: the package there stays at the plugin's version.
+- [ ] After the release: add a new `## [Unreleased]` section on top of `CHANGELOG.md` and copy the file over the Thunderstore copy.

@@ -1,14 +1,19 @@
 # Changelog
 
-All notable changes to pummel-party-mcp (the BepInEx plugin and the MCP server) are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The plugin and the server are released together and share one version number.
+All notable changes to pummel-party-mcp (the BepInEx plugin and the MCP server) are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The plugin and the server share MAJOR.MINOR. `scripts/prepare-release.ps1 -ServerOnly` prepares a patch release of the server alone, so the server's patch number can be higher than the plugin's. A patch release of the plugin alone is not supported by the script.
 
 `packaging/thunderstore/CHANGELOG.md` is a copy of this file. Edit this one; `scripts/package-thunderstore.ps1` copies it into the Thunderstore package and `scripts/prepare-release.ps1` checks that the two files are identical.
 
-## [Unreleased]
+## [1.0.1] - 2026-11-17 (server only; the plugin stays 1.0.0)
+
+### Fixed
+
+- Server: a plugin installed with Thunderstore Mod Manager or r2modman is found without any setting. The token file lives in the manager's profile, not in the game folder, and the server reported it as missing. On Windows the server now also looks in the profiles in the default data folders of these two managers. When several token files exist (several profiles, or a manual install as well), the server tries them against the running plugin with a `ping` and uses the one the plugin accepts. Among several files, one that does not hold a well-formed token is skipped and never sent. If the plugin does not answer, is busy or gives another reply, the call fails, the error says that the tool call was not sent, and no file is chosen. If every file is rejected, empty or malformed, the error lists the file paths (never the tokens). After an HTTP 401 the server searches again and checks the plugin's api version again before it sends the call a second time. `PUMMEL_PARTY_MCP_TOKEN_FILE` and `PUMMEL_PARTY_MCP_GAME_DIR` keep their meaning and switch the search off. One change applies with them too: after the plugin refuses a token (HTTP 401), the server checks the plugin's API version again before it resends the call. On Linux and macOS the "not found" error now says that nothing is searched there. The plugin is unchanged.
 
 ### Documentation
 
 - README: the Mod Editor's welcome dialog has to be closed by hand before the edit tools work.
+- README: with only the Claude Code extension for VS Code, add the server from the extension's chat panel with `/mcp` (Claude Code 2.1.261 or newer), because the extension does not install the `claude` command.
 
 ## [1.0.0] - 2026-11-17
 

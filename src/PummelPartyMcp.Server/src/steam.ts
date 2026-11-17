@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join, win32 } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { isAbsolute, join, win32 } from "node:path";
 
 /** Steam app id of Pummel Party. */
 export const PUMMEL_PARTY_APP_ID = "880940";
@@ -214,9 +214,16 @@ export function findGameDir(steamRoots: string[], fs: FsLike = realFs): string |
 }
 
 export const NO_GAME_FOUND_MESSAGE =
-  "Could not find the Pummel Party install folder, so the plugin token file is unknown. Set PUMMEL_PARTY_MCP_GAME_DIR to the game folder " +
-  "(the one that contains BepInEx), or PUMMEL_PARTY_MCP_TOKEN_FILE to the full path of BepInEx\\config\\PummelPartyMcp.token. " +
-  "Automatic detection (Steam path from the registry or Program Files, then its library list) only works on Windows.";
+  "Could not find the plugin token file. Looked in the Pummel Party Steam game folder (BepInEx\\config) and in the profiles in the default " +
+  "data folders of Thunderstore Mod Manager and r2modman. The token file appears after the Mod Editor was opened once with the plugin installed. " +
+  "If it exists somewhere else, set PUMMEL_PARTY_MCP_TOKEN_FILE to its full path (BepInEx\\config\\PummelPartyMcp.token), " +
+  "or PUMMEL_PARTY_MCP_GAME_DIR to the folder that contains BepInEx.";
+
+/** Off Windows nothing is searched. */
+export const NO_SEARCH_MESSAGE =
+  "No plugin token file is configured. The automatic search for it (Steam game folder, mod-manager profiles) only runs on Windows. " +
+  "Set PUMMEL_PARTY_MCP_TOKEN_FILE to the full path of BepInEx/config/PummelPartyMcp.token, " +
+  "or PUMMEL_PARTY_MCP_GAME_DIR to the folder that contains BepInEx.";
 
 export interface ResolveDeps {
   platform?: NodeJS.Platform;
@@ -224,18 +231,96 @@ export interface ResolveDeps {
   fs?: FsLike;
   /** Registry lookup used when `steamRoots` is not given (tests inject a fake). */
   regQuery?: RegQuery;
+  /** Names of the sub-folders of a folder (symlinks included); [] when unreadable. Tests may inject a fake. */
+  listDirs?: (dir: string) => string[];
+}
+
+/** At most this many profile folders are looked at per manager. */
+export const MAX_DIR_ENTRIES = 200;
+
+const realListDirs = (dir: string): string[] => {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() || d.isSymbolicLink())
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * The roaming application data folder: APPDATA when it is an absolute path (a relative one is ignored), else
+ * <USERPROFILE>\AppData\Roaming. Undefined when neither is usable. Both are read from `env`.
+ */
+export function appDataDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const appData = env["APPDATA"];
+  if (appData && isAbsolute(appData)) return appData;
+  const home = env["USERPROFILE"];
+  if (home && isAbsolute(home)) return join(home, "AppData", "Roaming");
+  return undefined;
 }
 
 /**
- * Token file path, in order: PUMMEL_PARTY_MCP_TOKEN_FILE, PUMMEL_PARTY_MCP_GAME_DIR, Steam library discovery (Windows only).
- * Throws an Error with NO_GAME_FOUND_MESSAGE when none applies. The token itself is never read here.
+ * Token files of Pummel Party in the profiles of two Thunderstore mod managers, default data folders only (only files that exist),
+ * Windows only.
+ * Thunderstore Mod Manager: <AppData>\Thunderstore Mod Manager\DataFolder\PummelParty\profiles\<profile>
+ * r2modman:                 <AppData>\r2modmanPlus-local\PummelParty\profiles\<profile>
+ * Two directory listings, no deep walk, never throws. <AppData> comes from appDataDir(env).
  */
-export function resolveTokenFile(env: NodeJS.ProcessEnv = process.env, deps: ResolveDeps = {}): string {
-  if (env.PUMMEL_PARTY_MCP_TOKEN_FILE) return env.PUMMEL_PARTY_MCP_TOKEN_FILE;
-  if (env.PUMMEL_PARTY_MCP_GAME_DIR) return join(env.PUMMEL_PARTY_MCP_GAME_DIR, ...TOKEN_REL_PATH);
-  if ((deps.platform ?? process.platform) === "win32") {
-    const game = findGameDir(deps.steamRoots ?? defaultSteamRoots(env, deps), deps.fs);
-    if (game) return join(game, ...TOKEN_REL_PATH);
+export function modManagerTokenFiles(env: NodeJS.ProcessEnv = process.env, deps: ResolveDeps = {}): string[] {
+  if ((deps.platform ?? process.platform) !== "win32") return [];
+  const appData = appDataDir(env);
+  if (!appData) return [];
+  const fs = deps.fs ?? realFs;
+  const listDirs = deps.listDirs ?? realListDirs;
+  const profileRoots = [
+    join(appData, "Thunderstore Mod Manager", "DataFolder", "PummelParty", "profiles"),
+    join(appData, "r2modmanPlus-local", "PummelParty", "profiles"),
+  ];
+  const out: string[] = [];
+  for (const root of profileRoots) {
+    try {
+      for (const profile of listDirs(root).slice(0, MAX_DIR_ENTRIES)) {
+        const file = join(root, profile, ...TOKEN_REL_PATH);
+        if (fs.existsSync(file)) out.push(file);
+      }
+    } catch {
+      /* skip this manager */
+    }
   }
-  throw new Error(NO_GAME_FOUND_MESSAGE);
+  return dedupePaths(out);
+}
+
+/**
+ * Token file candidates. Explicit settings give exactly one file and no search: PUMMEL_PARTY_MCP_TOKEN_FILE, then
+ * PUMMEL_PARTY_MCP_GAME_DIR. Otherwise (Windows only): the Steam game folder's token if it exists, then the tokens that exist in
+ * mod-manager profiles. When none exists but the Steam game folder was found, that folder's (missing) token path is returned alone,
+ * so the error can name it. Throws an Error with NO_GAME_FOUND_MESSAGE when there is nothing (NO_SEARCH_MESSAGE off Windows,
+ * where nothing is searched). Token contents are never read here.
+ */
+export function resolveTokenCandidates(env: NodeJS.ProcessEnv = process.env, deps: ResolveDeps = {}): string[] {
+  if (env.PUMMEL_PARTY_MCP_TOKEN_FILE) return [env.PUMMEL_PARTY_MCP_TOKEN_FILE];
+  if (env.PUMMEL_PARTY_MCP_GAME_DIR) return [join(env.PUMMEL_PARTY_MCP_GAME_DIR, ...TOKEN_REL_PATH)];
+  if ((deps.platform ?? process.platform) === "win32") {
+    let steamFile: string | undefined;
+    try {
+      const game = findGameDir(deps.steamRoots ?? defaultSteamRoots(env, deps), deps.fs);
+      if (game) steamFile = join(game, ...TOKEN_REL_PATH);
+    } catch {
+      /* ignore */
+    }
+    const files: string[] = [];
+    if (steamFile && (deps.fs ?? realFs).existsSync(steamFile)) files.push(steamFile);
+    files.push(...modManagerTokenFiles(env, deps));
+    const unique = dedupePaths(files);
+    if (unique.length) return unique;
+    if (steamFile) return [steamFile];
+    throw new Error(NO_GAME_FOUND_MESSAGE);
+  }
+  throw new Error(NO_SEARCH_MESSAGE);
+}
+
+/** The first candidate of resolveTokenCandidates (kept for callers that want a single path). */
+export function resolveTokenFile(env: NodeJS.ProcessEnv = process.env, deps: ResolveDeps = {}): string {
+  return resolveTokenCandidates(env, deps)[0]!;
 }

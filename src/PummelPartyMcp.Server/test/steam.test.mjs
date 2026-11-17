@@ -10,6 +10,7 @@ import {
   findGameDir,
   resolveTokenFile,
   NO_GAME_FOUND_MESSAGE,
+  NO_SEARCH_MESSAGE,
 } from "../dist/steam.js";
 import { startFake, makeTempDir, removeDir } from "./fake-plugin.mjs";
 
@@ -120,13 +121,13 @@ test("resolveTokenFile: nothing found, or not Windows, names both environment va
   const dir = makeTempDir();
   try {
     const s = makeSteam(dir);
-    for (const deps of [
-      { platform: "win32", steamRoots: [join(dir, "none")] },
-      { platform: "linux", steamRoots: [s.root] },
-      { platform: "darwin", steamRoots: [s.root] },
+    for (const [deps, message] of [
+      [{ platform: "win32", steamRoots: [join(dir, "none")] }, NO_GAME_FOUND_MESSAGE],
+      [{ platform: "linux", steamRoots: [s.root] }, NO_SEARCH_MESSAGE],
+      [{ platform: "darwin", steamRoots: [s.root] }, NO_SEARCH_MESSAGE],
     ]) {
       assert.throws(() => resolveTokenFile({}, deps), (e) => {
-        assert.equal(e.message, NO_GAME_FOUND_MESSAGE);
+        assert.equal(e.message, message);
         assert.match(e.message, /PUMMEL_PARTY_MCP_GAME_DIR/);
         assert.match(e.message, /PUMMEL_PARTY_MCP_TOKEN_FILE/);
         return true;

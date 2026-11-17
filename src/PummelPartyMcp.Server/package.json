@@ -1,6 +1,6 @@
 {
   "name": "pummel-party-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server for Pummel Party's built-in Mod Editor: connects an AI agent to the pummel-party-mcp BepInEx plugin (loopback only, sandbox mods only). Unofficial.",
   "type": "module",
   "bin": {

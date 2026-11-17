@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { resolveTokenFile, type ResolveDeps } from "./steam.js";
+import { readFileSync, statSync } from "node:fs";
+import { resolveTokenCandidates, type ResolveDeps } from "./steam.js";
 
 export const HOST = "127.0.0.1"; // fixed on purpose; not configurable
 export const DEFAULT_PORT = 38917;
@@ -17,6 +17,31 @@ export class PluginError extends Error {
   }
 }
 
+/** An error of the token file search or of a probe. It is raised before the tool call is sent, so it is never ambiguous. */
+class DetectionError extends PluginError {
+  constructor(message: string, code?: string) {
+    super(`${message}\nThis happened while finding the plugin's token file; the tool call was not sent.`, code, false);
+  }
+}
+
+const NO_TOKEN_FILES_MESSAGE =
+  "No plugin token file was found. The token file appears after the Mod Editor was opened once with the plugin installed. " +
+  "Set PUMMEL_PARTY_MCP_TOKEN_FILE to its full path, or PUMMEL_PARTY_MCP_GAME_DIR to the game folder.";
+const NO_CONFIG_MESSAGE = "No token file configured (set PUMMEL_PARTY_MCP_GAME_DIR or PUMMEL_PARTY_MCP_TOKEN_FILE).";
+const SET_VARIABLES =
+  "Start the game from the install whose plugin you want to use, or set PUMMEL_PARTY_MCP_TOKEN_FILE to its token file " +
+  "(or PUMMEL_PARTY_MCP_GAME_DIR to its game folder).";
+
+/** The plugin's token rule (TokenAuth.IsWellFormed, after trimming): 64 lowercase hex characters. A candidate that breaks it is never sent. */
+const TOKEN_RE = /^[0-9a-f]{64}$/;
+
+/** At most this many paths are listed in an error. */
+const MAX_LISTED_PATHS = 5;
+function listPaths(files: string[]): string {
+  const shown = files.slice(0, MAX_LISTED_PATHS).map((f) => `"${f}"`).join(", ");
+  return files.length > MAX_LISTED_PATHS ? `${shown} and ${files.length - MAX_LISTED_PATHS} more` : shown;
+}
+
 export const MAX_ERROR_DATA_CHARS = 4000;
 export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 export const WRITE_AMBIGUITY_NOTE =
@@ -26,8 +51,11 @@ export interface ClientOptions {
   port: number;
   /** Fixed token file path (tests, or set through the environment). */
   tokenFile?: string;
-  /** Used when `tokenFile` is unset: finds the token file lazily (auto-detection); may throw. */
-  resolveTokenFile?: () => string;
+  /**
+   * Used when `tokenFile` is unset: the search for the token file (auto-detection), run lazily; may throw. Several files mean several
+   * candidates (e.g. one per mod-manager profile): the plugin decides which token it accepts.
+   */
+  resolveTokenFile?: () => string | string[];
   timeoutMs?: number;
   /** Clock in ms (tests inject a fake); default Date.now. */
   now?: () => number;
@@ -39,10 +67,11 @@ export const API_RECHECK_MS = 10_000;
 export function optionsFromEnv(env: NodeJS.ProcessEnv = process.env, deps: ResolveDeps = {}): ClientOptions {
   const portRaw = env.PUMMEL_PARTY_MCP_PORT;
   const port = portRaw && /^\d+$/.test(portRaw) ? Number(portRaw) : DEFAULT_PORT;
-  // Order: TOKEN_FILE, GAME_DIR, then Steam discovery on Windows. Discovery runs lazily on the first call that needs the token.
+  // Order: TOKEN_FILE, GAME_DIR (each alone, no search), then the Steam game folder and the mod-manager profiles on Windows.
+  // Discovery runs lazily on the first call that needs the token.
   const explicit = Boolean(env.PUMMEL_PARTY_MCP_TOKEN_FILE || env.PUMMEL_PARTY_MCP_GAME_DIR);
-  const tokenFile = explicit ? resolveTokenFile(env) : undefined;
-  const resolver = explicit ? undefined : () => resolveTokenFile(env, deps);
+  const tokenFile = explicit ? resolveTokenCandidates(env)[0] : undefined;
+  const resolver = explicit ? undefined : () => resolveTokenCandidates(env, deps);
   // Optional override of every request timeout (ms); mainly for tests.
   const tRaw = env.PUMMEL_PARTY_MCP_TIMEOUT_MS;
   const t = tRaw && /^\d+$/.test(tRaw) ? Number(tRaw) : 0;
@@ -180,8 +209,28 @@ interface RawResponse {
   text: string;
 }
 
+/** The result of a successful `ping` reply, or undefined. */
+function pongOf(res: RawResponse): Record<string, unknown> | undefined {
+  if (res.status !== 200) return undefined;
+  try {
+    const body = JSON.parse(res.text);
+    return body?.ok === true && body.result?.pong === true ? body.result : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface CallOptions {
+  /** A write tool: failures that leave the outcome unknown get an explanatory note. */
+  write?: boolean;
+  /** The api version check (as in ensureApi) that is repeated before the resend after a 401. */
+  api?: { required: number; serverVersion: string };
+}
+
 export class PluginClient {
   private token: string | undefined;
+  /** The file `token` was read from. */
+  private tokenFrom: string | undefined;
   private reread = false;
   /** From the last `ping`: reset on a connection failure or 401 (a restarted game may run another plugin), or when a reply shows another sessionId. */
   private api: ApiInfo | undefined;
@@ -195,26 +244,117 @@ export class PluginClient {
     this.now = opts.now ?? Date.now;
   }
 
+  /*
+   * Auto-detection state (unused when opts.tokenFile is set). `candidates`: the files the last search found; the search runs only
+   * while it is undefined. `detectedTokenFile`: the file in use (the only candidate, or the one the plugin accepted). Both are
+   * dropped after a 401, after a detection that found nothing usable and when the file in use is missing or empty. A connection
+   * failure, a timeout or a busy plugin keeps them.
+   */
+  private candidates: string[] | undefined;
   private detectedTokenFile: string | undefined;
+  private detectPending: Promise<string> | undefined;
 
-  /** Fixed path, else the cached auto-detected path (detected lazily; a failure is not cached). */
-  private tokenFilePath(): string {
-    if (this.opts.tokenFile) return this.opts.tokenFile;
-    if (!this.detectedTokenFile) {
-      if (!this.opts.resolveTokenFile) {
-        throw new PluginError("No token file configured (set PUMMEL_PARTY_MCP_GAME_DIR or PUMMEL_PARTY_MCP_TOKEN_FILE).");
-      }
-      try {
-        this.detectedTokenFile = this.opts.resolveTokenFile();
-      } catch (e) {
-        throw new PluginError(e instanceof Error ? e.message : String(e));
-      }
-    }
-    return this.detectedTokenFile;
+  /** The token file to use: the fixed path, the detected one, or the result of a detection (concurrent callers share one). */
+  private tokenFile(): Promise<string> {
+    const f = this.opts.tokenFile ?? this.detectedTokenFile;
+    if (f) return Promise.resolve(f);
+    this.detectPending ??= this.detect().finally(() => {
+      this.detectPending = undefined;
+    });
+    return this.detectPending;
   }
 
-  private loadToken(): string {
-    const file = this.tokenFilePath();
+  private forgetDetection(): void {
+    this.candidates = undefined;
+    this.detectedTokenFile = undefined;
+  }
+
+  /**
+   * Picks the token file from the remembered candidates, or from a new search. When remembered candidates give nothing usable, the
+   * search runs once more right away (a profile may have been started for the first time since). Every error is a DetectionError.
+   */
+  private async detect(): Promise<string> {
+    try {
+      if (!this.opts.resolveTokenFile) throw new PluginError(NO_CONFIG_MESSAGE);
+      const remembered = this.candidates;
+      let r = await this.tryCandidates(remembered ?? this.search());
+      if (typeof r !== "string" && remembered) r = await this.tryCandidates(this.search());
+      if (typeof r === "string") return r;
+      this.forgetDetection();
+      throw new PluginError(r.error);
+    } catch (e) {
+      throw new DetectionError(e instanceof Error ? e.message : String(e), e instanceof PluginError ? e.code : undefined);
+    }
+  }
+
+  /** Runs the search and remembers its candidates. Throws when there are none. */
+  private search(): string[] {
+    this.forgetDetection();
+    const r = this.opts.resolveTokenFile!();
+    const files = Array.isArray(r) ? r : [r];
+    if (files.length === 0) throw new PluginError(NO_TOKEN_FILES_MESSAGE);
+    this.candidates = files;
+    return files;
+  }
+
+  /**
+   * One candidate is used as it is. Of several, those whose content is not a well-formed token are skipped, and the rest are tried
+   * with `ping` (most recently written first, which only saves probes): a 401 moves on, a successful ping reply chooses the file.
+   * Returns the chosen file, or the error text when none is usable. Throws (choosing nothing) when the plugin does not answer, times
+   * out or gives any other reply.
+   */
+  private async tryCandidates(files: string[]): Promise<string | { error: string }> {
+    if (files.length === 1) {
+      this.detectedTokenFile = files[0]!; // a missing or empty file is reported when the token is read
+      return files[0]!;
+    }
+    const usable: { file: string; token: string; mtime: number }[] = [];
+    for (const file of files) {
+      try {
+        const token = readFileSync(file, "utf8").trim();
+        if (TOKEN_RE.test(token)) usable.push({ file, token, mtime: statSync(file).mtimeMs });
+      } catch {
+        /* unreadable: skipped */
+      }
+    }
+    if (usable.length === 0) {
+      return {
+        error:
+          `None of the ${files.length} token files found holds a well-formed token (64 lowercase hex characters); they are empty, malformed or unreadable: ${listPaths(files)}. ` +
+          `When the Mod Editor is opened with the plugin installed, the plugin replaces an empty or malformed token file of its own install or profile with a new token: ` +
+          `open the Mod Editor from the install or profile you want to use, then retry. Or set PUMMEL_PARTY_MCP_TOKEN_FILE to its token file ` +
+          `(or PUMMEL_PARTY_MCP_GAME_DIR to its game folder).`,
+      };
+    }
+    usable.sort((a, b) => b.mtime - a.mtime); // stable: equal times keep the search order
+    const probeMs = Math.min(this.opts.timeoutMs ?? 5000, 5000);
+    for (const c of usable) {
+      const res = await this.post("ping", {}, probeMs, c.token);
+      if (res.status === 401) continue;
+      const pong = pongOf(res);
+      if (!pong) {
+        throw new PluginError(
+          res.status === 503
+            ? `The plugin answered HTTP 503 while the server checked which token file it accepts. ${HINTS.SERVER_BUSY}`
+            : `Unexpected answer (HTTP ${res.status}) while the server checked which token file the plugin accepts: the plugin is busy or something else is answering on ${HOST}:${this.opts.port}.`,
+        );
+      }
+      this.detectedTokenFile = c.file;
+      this.token = c.token;
+      this.tokenFrom = c.file;
+      this.reread = false;
+      this.noteApi(pong); // a real ping reply of the plugin that accepted the token
+      this.lastOkAt = this.now();
+      return c.file;
+    }
+    return {
+      error:
+        `The running plugin accepted none of the ${files.length} token files found (it rejected them, or they are empty, malformed or unreadable): ${listPaths(files)}. ` +
+        `They probably belong to another game session or install. ${SET_VARIABLES}`,
+    };
+  }
+
+  private loadToken(file: string): string {
     let t = "";
     try {
       t = readFileSync(file, "utf8").trim();
@@ -222,19 +362,21 @@ export class PluginClient {
       /* fall through */
     }
     if (!t) {
-      this.detectedTokenFile = undefined; // detect again next time (the game may have been moved or installed since)
+      this.forgetDetection(); // search again next time (the game may have been moved or installed since)
       throw new PluginError(
         `Token file not found or empty at "${file}". The Mod Editor must have been opened at least once with the pummel-party-mcp plugin installed (the plugin creates this file then). ` +
-          `With a mod manager (r2modman, Thunderstore Mod Manager, Gale) BepInEx's config folder is inside the manager's profile, not the game folder: ` +
-          `set PUMMEL_PARTY_MCP_TOKEN_FILE to <profile>\\BepInEx\\config\\PummelPartyMcp.token.`,
+          `Without PUMMEL_PARTY_MCP_TOKEN_FILE or PUMMEL_PARTY_MCP_GAME_DIR the server also searches the profiles in the default data folders of Thunderstore Mod Manager and r2modman (Windows); ` +
+          `for a moved data folder or another manager, set PUMMEL_PARTY_MCP_TOKEN_FILE to <profile>\\BepInEx\\config\\PummelPartyMcp.token.`,
       );
     }
     return t;
   }
 
-  private getToken(): string {
-    if (this.token === undefined || this.reread) {
-      this.token = this.loadToken();
+  /** The cached token, read again from `file` when it is another file or after a 401 or a connection failure. */
+  private getToken(file: string): string {
+    if (this.token === undefined || this.reread || this.tokenFrom !== file) {
+      this.token = this.loadToken(file);
+      this.tokenFrom = file;
       this.reread = false;
     }
     return this.token;
@@ -279,8 +421,8 @@ export class PluginClient {
   }
 
   /** One HTTP round trip including the full body; the abort timer stays armed until the body is read. */
-  private async post(method: string, params: unknown, timeoutMs: number): Promise<RawResponse> {
-    const token = this.getToken();
+  private async post(method: string, params: unknown, timeoutMs: number, tokenOverride?: string): Promise<RawResponse> {
+    const token = tokenOverride ?? this.getToken(await this.tokenFile());
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
     const timedOut = () =>
@@ -359,7 +501,7 @@ export class PluginClient {
       this.apiPending ??= this.call("ping", {}, 5000).then(
         (r) => this.noteApi(r),
         (e) => {
-          if (!(e instanceof PluginError)) throw e;
+          if (!(e instanceof PluginError) || e instanceof DetectionError) throw e; // a DetectionError already says the call was not sent
           throw new PluginError(
             `${e.message}
 This was the plugin version check made before the tool call; the tool call itself was not sent${opts.write ? " (nothing was applied)" : ""}.`,
@@ -379,17 +521,12 @@ This was the plugin version check made before the tool call; the tool call itsel
 
   /**
    * Calls a plugin method and returns its `result`. Throws PluginError with a user-facing message.
-   * `write` marks write tools: failures that leave the outcome unknown get an explanatory note.
+   * `write` marks write tools: failures that leave the outcome unknown get an explanatory note. `api`: see CallOptions.
    */
-  async call(
-    method: string,
-    params: Record<string, unknown> = {},
-    timeoutMs?: number,
-    callOpts: { write?: boolean } = {},
-  ): Promise<unknown> {
+  async call(method: string, params: Record<string, unknown> = {}, timeoutMs?: number, callOpts: CallOptions = {}): Promise<unknown> {
     const t = this.opts.timeoutMs ?? timeoutMs ?? 15000;
     try {
-      const result = await this.callInner(method, params, t);
+      const result = await this.callInner(method, params, t, callOpts);
       this.lastOkAt = this.now();
       // a reply that carries another sessionId (ping, get_log) means the game restarted: check the api version again
       const sid = (result as { sessionId?: unknown } | null)?.sessionId;
@@ -404,15 +541,23 @@ ${WRITE_AMBIGUITY_NOTE}`, e.code, true);
     }
   }
 
-  private async callInner(method: string, params: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
+  private async callInner(method: string, params: Record<string, unknown>, timeoutMs: number, callOpts: CallOptions): Promise<unknown> {
     let res = await this.post(method, params, timeoutMs);
     if (res.status === 401) {
-      this.reread = true; // a 401 never executes the call, so one retry with a fresh token is safe
-      this.api = undefined; // a new token means a new game session
+      // A 401 never executes the call, so one resend is safe. A new token means a new game session, maybe started from another
+      // install or profile: the token is read again, an auto-detected file is chosen again after a new search (a fixed path stays),
+      // and the api version of the plugin that answers now is checked before the resend.
+      this.reread = true;
+      this.api = undefined;
+      this.forgetDetection();
+      if (callOpts.api) {
+        await this.tokenFile(); // with several candidates, the accepted probe already gives the api version
+        await this.ensureApi(callOpts.api.required, callOpts.api.serverVersion, { write: callOpts.write });
+      }
       res = await this.post(method, params, timeoutMs);
       if (res.status === 401) {
         throw new PluginError(
-          `Token mismatch: the plugin rejected the token read from "${this.detectedTokenFile ?? this.opts.tokenFile ?? "the detected location"}" (HTTP 401). Check PUMMEL_PARTY_MCP_TOKEN_FILE / PUMMEL_PARTY_MCP_GAME_DIR and that the file belongs to the running game.`,
+          `Token mismatch: the plugin rejected the token read from "${this.opts.tokenFile ?? this.tokenFrom ?? "the detected location"}" (HTTP 401). Check PUMMEL_PARTY_MCP_TOKEN_FILE / PUMMEL_PARTY_MCP_GAME_DIR and that the file belongs to the running game.`,
         );
       }
     }
